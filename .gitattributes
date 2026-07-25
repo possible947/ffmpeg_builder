@@ -1,1 +1,6 @@
+thrid_party/sources/*.tar.gz filter=lfs diff=lfs merge=lfs -text
+thrid_party/sources/*.tar.xz filter=lfs diff=lfs merge=lfs -text
+thrid_party/sources/*.tgz filter=lfs diff=lfs merge=lfs -text
+thrid_party/sources/*.tar.bz2 filter=lfs diff=lfs merge=lfs -text
+thrid_party/sources/*.zip filter=lfs diff=lfs merge=lfs -text
 third_party/sources/* filter=lfs diff=lfs merge=lfs -text
