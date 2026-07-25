@@ -27,7 +27,7 @@ class FFmpegBuilderApp:
             workspace: Workspace directory. If None, uses ./workspace.
         """
         self.workspace = workspace or Path("workspace")
-        self.packages = Path("packages")
+        self.packages = self.workspace / "packages"
         self.console = Console()
 
         self.config_manager = ConfigManager(Path("build_config.yaml"))

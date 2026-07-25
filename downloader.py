@@ -15,16 +15,43 @@ ProgressCB = Callable[[int, int], None]
 class Downloader:
     """Downloads files with progress tracking."""
 
-    def __init__(self, packages_dir: Path):
+    def __init__(
+        self,
+        packages_dir: Path,
+        source_archives_dir: Optional[Path] = None,
+        allow_network_downloads: bool = False,
+        on_log: Optional[Callable[[str], None]] = None,
+    ):
         """Initialize downloader.
 
         Args:
             packages_dir: Directory for downloaded files.
+            source_archives_dir: Persistent local source archive mirror.
+            allow_network_downloads: Whether network fallback is allowed when
+                the archive is not found in local storage.
+            on_log: Optional log callback.
         """
         self.packages_dir = packages_dir
         self.packages_dir.mkdir(parents=True, exist_ok=True)
+        self.source_archives_dir = source_archives_dir
+        if self.source_archives_dir is not None:
+            self.source_archives_dir.mkdir(parents=True, exist_ok=True)
+        self.allow_network_downloads = allow_network_downloads
+        self.on_log = on_log
         self._locks: Dict[str, threading.Lock] = {}
         self._locks_guard = threading.Lock()
+
+    def has_archive(self, filename: str) -> bool:
+        """Return whether an archive already exists in local storage."""
+        package_path = self.packages_dir / filename
+        if package_path.exists() and package_path.stat().st_size > 0:
+            return True
+
+        if self.source_archives_dir is None:
+            return False
+
+        source_path = self.source_archives_dir / filename
+        return source_path.exists() and source_path.stat().st_size > 0
 
     def download(
         self,
@@ -54,12 +81,23 @@ class Downloader:
             filename = url.split("/")[-1].split("?")[0]
 
         target_path = self.packages_dir / filename
+        source_path = self.source_archives_dir / filename if self.source_archives_dir else None
         lock = self._get_lock(filename)
 
         with lock:
             if target_path.exists() and target_path.stat().st_size > 0:
                 return target_path
+            if source_path is not None and source_path.exists() and source_path.stat().st_size > 0:
+                return source_path
 
+            if not self.allow_network_downloads:
+                location = str(source_path) if source_path is not None else str(target_path)
+                raise RuntimeError(
+                    f"Archive {filename} is missing in local source storage ({location}). "
+                    "Populate thrid_party/sources or set allow_network_downloads=true."
+                )
+
+            destination_path = source_path or target_path
             candidate_urls = self._candidate_urls(url)
 
             for attempt in range(max_retries):
@@ -67,17 +105,26 @@ class Downloader:
                 try:
                     for candidate_url in candidate_urls:
                         try:
-                            self._download_file(candidate_url, target_path, show_progress, progress_cb)
-                            return target_path
+                            if self.on_log is not None:
+                                self.on_log(f"Downloading {filename} from {candidate_url}")
+                            self._download_file(
+                                candidate_url,
+                                destination_path,
+                                show_progress,
+                                progress_cb,
+                            )
+                            return destination_path
                         except Exception as candidate_error:
                             last_error = candidate_error
-                            part_path = target_path.with_name(f"{target_path.name}.part")
+                            part_path = destination_path.with_name(
+                                f"{destination_path.name}.part"
+                            )
                             if part_path.exists():
                                 part_path.unlink()
                     if last_error is not None:
                         raise last_error
                 except Exception as e:
-                    part_path = target_path.with_name(f"{target_path.name}.part")
+                    part_path = destination_path.with_name(f"{destination_path.name}.part")
                     if part_path.exists():
                         part_path.unlink()
                     if attempt < max_retries - 1:
@@ -214,8 +261,7 @@ class AsyncDownloadManager:
             component: Component to prefetch.
         """
         filename = component.get_archive_filename()
-        target_path = self.downloader.packages_dir / filename
-        if target_path.exists() and target_path.stat().st_size > 0:
+        if self.downloader.has_archive(filename):
             return
 
         with self._lock:

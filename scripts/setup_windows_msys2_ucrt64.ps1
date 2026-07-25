@@ -107,6 +107,7 @@ if (-not $SkipPackageInstall) {
     $packages = @(
         "base-devel"
         "git"
+        "git-lfs"
         "curl"
         "tar"
         "unzip"
@@ -153,6 +154,11 @@ if (-not $SkipPackageInstall) {
 
 $projectMsys = To-MsysPath $ProjectRoot
 $venvMsys = "$projectMsys/$VenvName"
+
+if (Test-Path (Join-Path $ProjectRoot ".git")) {
+    Write-Step "Syncing Git LFS source archives"
+    Invoke-MsysBash "cd '$projectMsys'; git lfs install --local; git lfs pull"
+}
 
 Write-Step "Creating Python virtual environment in MSYS2 UCRT64 if missing"
 Invoke-MsysBash "cd '$projectMsys'; if [ ! -d '$VenvMsys' ]; then /ucrt64/bin/python -m venv --system-site-packages '$VenvMsys'; fi"
