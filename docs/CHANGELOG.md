@@ -26,6 +26,7 @@ All notable changes to the FFmpeg Builder project.
 
 - **Windows UCRT64 Intel QSV enablement** — Added QSV support path for `windows-msys2-ucrt64`: `onevpl` is now allowed by Windows HW-accel policy, QSV detection on UCRT64 requires Intel GPU plus pkg-config oneVPL module (`vpl`/`libvpl`), and FFmpeg configure now enables `libvpl` on supported UCRT64 setups instead of forcing `--disable-libvpl`
 - **Windows bootstrap QSV readiness check** — `scripts/setup_windows_msys2_ucrt64.ps1` now validates Intel GPU presence plus oneVPL pkg-config module (`vpl`/`libvpl`) and reports explicit QSV prerequisite status after environment setup
+- **Linux + WSL2 bootstrap guides in documentation** — Added dedicated setup sections to root `README.md` and `docs/README.md` for local repository cloning with Git LFS, Python virtual environment creation, editable install, and first-run validation (`check_python_env.sh`, `python -m ffmpeg_builder`)
 
 ### Changed
 
@@ -69,6 +70,9 @@ All notable changes to the FFmpeg Builder project.
 - **libplacebo.pc missing SPIRV-Tools transitive dependencies** — FFmpeg configure link test failed with hundreds of `undefined reference to spv*` / `spvtools::*` symbols. `libglslang.a(SpvTools.cpp.obj)` calls into SPIRV-Tools C/C++ APIs (`spvContextCreate`, `spvBinaryToText`, `spvtools::Optimizer`) but Meson does not list `libSPIRV-Tools.a` / `libSPIRV-Tools-opt.a` as direct dependencies of libplacebo in the generated `.pc` file. FFmpeg configure reports this as `ERROR: libplacebo >= 5.229.0 not found using pkg-config`. Fix: `build_libplacebo()` post-install patch now appends `-lSPIRV-Tools-opt -lSPIRV-Tools` after `-lglslang` in `libplacebo.pc` when not already present (applied on all platforms)
 
 - **libplacebo.pc absolute DLL import library paths on MSYS2** — Meson's `cxx.find_library('SPIRV', static: true)` on MSYS2 UCRT64 resolves to `/ucrt64/lib/libSPIRV.dll.a` (DLL import stub) instead of the workspace static `.a`. The absolute path ends up verbatim in `libplacebo.pc` `Libs:`, causing FFmpeg to link against the dynamic stub. Fix: `build_libplacebo()` post-install regex patch rewrites `\S+[/\\]lib*.dll.a` → `-l*` in `libplacebo.pc` (UCRT64 only)
+- **libplacebo build include path for C++ sources** — Added `-I{workspace}/include` to global `CXXFLAGS` so Meson C++ compilation for libplacebo can resolve glslang headers (`glslang/Public/ShaderLang.h`) on Linux/WSL2 and macOS builds
+- **Linux multiarch pkg-config visibility for libplacebo** — Added `{workspace}/lib/<multiarch>/pkgconfig` to `PKG_CONFIG_PATH` on Linux, so FFmpeg configure can resolve `libplacebo.pc` when Meson installs it under GNU multiarch paths (for example `lib/x86_64-linux-gnu/pkgconfig`)
+- **False `libplacebo >= 5.229.0 not found` on FFmpeg resume/retry** — Extracted libplacebo `.pc` normalization into a reusable helper and now run it both after libplacebo install and before FFmpeg configure. This fixes stale-state runs where libplacebo was already marked completed but metadata still contained unsafe static archive path forms or incorrect SPIRV link ordering
 
 
 - **Windows UCRT64 HW-acceleration policy (phase 3)** — Added explicit Windows component constraints in `ComponentRegistry`: for `HW_ACCEL` category only `nv-codec`, `vulkan-headers`, `glslang`, `opencl-headers`, and `opencl-icd-loader` are eligible, and only when runtime is detected as UCRT64 (`MSYSTEM=UCRT64`)

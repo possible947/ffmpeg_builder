@@ -232,15 +232,16 @@ class FFmpegBuilder:
         self.ldflags = f"-L{ws}/lib -L{ws}/lib64"
         self.ldexeflags = ""
         self.extralibs = "-ldl -lpthread -lm -lz"
+        # Keep C and C++ include roots aligned so Meson/CMake C++ probes can
+        # resolve headers from workspace-installed dependencies.
+        self.cxxflags = f"-I{ws}/include"
         if self._is_windows_ucrt64_backend():
             # -ldl / -lpthread / -lm / -lz are Linux-only; skip on Windows.
             self.extralibs = ""
 
         if self.platform == "linux":
             self.cflags += f" -std={self.config.linux.c_standard}"
-            self.cxxflags = f"-std={self.config.linux.cxx_standard}"
-        else:
-            self.cxxflags = ""
+            self.cxxflags += f" -std={self.config.linux.cxx_standard}"
 
         if self.config.full_static:
             if self.platform == "linux":
@@ -301,6 +302,9 @@ class FFmpegBuilder:
             if self.platform == "linux":
                 multiarch = self.platform_detector.get_multiarch_dir()
                 if multiarch:
+                    # Meson/GNUInstallDirs may install into
+                    # <prefix>/lib/<multiarch>/pkgconfig (e.g. libplacebo).
+                    pkg_config_paths.append(f"{self.workspace}/lib/{multiarch}/pkgconfig")
                     pkg_config_paths.append(f"/usr/local/lib/{multiarch}/pkgconfig")
                     pkg_config_paths.append(f"/usr/lib/{multiarch}/pkgconfig")
 
@@ -2262,21 +2266,28 @@ class FFmpegBuilder:
         if not result.success:
             raise BuildError(component.name, "Install failed", log_file)
 
-        # Patch libplacebo.pc for two issues:
-        #
-        # 1. MSYS2/UCRT64: Meson's cxx.find_library() may resolve glslang/SPIRV
-        #    libraries to absolute DLL import library paths (e.g.
-        #    C:/msys64/ucrt64/lib/libSPIRV.dll.a). Rewrite those to portable
-        #    -l flags so the linker uses the workspace static archives.
-        #
-        # 2. All platforms: libglslang.a(SpvTools.cpp.obj) calls into SPIRV-Tools
-        #    C/C++ APIs (spvContextCreate, spvtools::Optimizer, etc.) that live in
-        #    libSPIRV-Tools.a and libSPIRV-Tools-opt.a.  Meson does not discover
-        #    these as direct dependencies of libplacebo, so they are absent from
-        #    the generated Libs: line.  Append them after -lglslang so the static
-        #    linker can resolve the transitive symbols.
-        pc_file = self.workspace / "lib" / "pkgconfig" / "libplacebo.pc"
-        if pc_file.exists():
+        self._patch_libplacebo_pc()
+
+    def _patch_libplacebo_pc(self) -> None:
+        """Normalize libplacebo pkg-config metadata for FFmpeg probing.
+
+        1. Rewrite absolute SPIRV/glslang archive/import-library paths to -l*
+           flags so FFmpeg configure treats them as linker inputs.
+        2. Ensure SPIRV-Tools transitive static deps are present.
+        """
+        pc_candidates = [
+            self.workspace / "lib" / "pkgconfig" / "libplacebo.pc",
+            self.workspace / "lib64" / "pkgconfig" / "libplacebo.pc",
+        ]
+        multiarch = self.platform_detector.get_multiarch_dir()
+        if multiarch:
+            pc_candidates.append(
+                self.workspace / "lib" / multiarch / "pkgconfig" / "libplacebo.pc"
+            )
+
+        for pc_file in pc_candidates:
+            if not pc_file.exists():
+                continue
             text = pc_file.read_text(encoding="utf-8")
             if self._is_windows_ucrt64_backend():
                 text = re.sub(
@@ -2284,12 +2295,29 @@ class FFmpegBuilder:
                     lambda m: f" -l{m.group(1)}",
                     text,
                 )
-            # Add SPIRV-Tools transitive deps if not already present.
-            if "-lSPIRV-Tools" not in text and "-lglslang" in text:
-                text = text.replace(
-                    "-lglslang\n",
-                    "-lglslang -lSPIRV-Tools-opt -lSPIRV-Tools\n",
-                )
+            text = re.sub(
+                r"\s+\S+[/\\]lib([A-Za-z0-9_+-]+)\.a",
+                lambda m: f" -l{m.group(1)}",
+                text,
+            )
+            # Ensure SPIRV-Tools transitive deps are present and ordered for
+            # static linking: libSPIRV-Tools-opt depends on libSPIRV-Tools.
+            lines = text.splitlines()
+            for i, line in enumerate(lines):
+                if not line.startswith("Libs: "):
+                    continue
+                tokens = line[len("Libs: "):].split()
+                if "-lglslang" not in tokens:
+                    continue
+                tokens = [
+                    t for t in tokens
+                    if t not in ("-lSPIRV-Tools-opt", "-lSPIRV-Tools")
+                ]
+                insert_at = tokens.index("-lglslang") + 1
+                tokens[insert_at:insert_at] = ["-lSPIRV-Tools-opt", "-lSPIRV-Tools"]
+                lines[i] = "Libs: " + " ".join(tokens)
+                break
+            text = "\n".join(lines) + ("\n" if text.endswith("\n") else "")
             pc_file.write_text(text, encoding="utf-8")
 
     def build_glslang(self, component: Component, source_dir: Path) -> None:
@@ -2418,6 +2446,11 @@ class FFmpegBuilder:
             name for name, state in self.state_manager.get().components.items()
             if state.status in (ComponentStatus.COMPLETED, ComponentStatus.SYSTEM)
         ]
+
+        # Resume builds may skip libplacebo rebuild. Re-apply pkg-config
+        # normalization so FFmpeg's configure probe remains stable.
+        if "libplacebo" in built_components:
+            self._patch_libplacebo_pc()
 
         # Add libraries conditionally based on built components
         if "libvmaf" in built_components:
