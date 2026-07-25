@@ -1,0 +1,35 @@
+packages
+workspace
+.idea
+linux
+.artifacts
+build
+full-static-test.dockerfile
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.venv/
+scripts/env_windows_msys2_ucrt64.sh
+*.egg
+.mypy_cache/
+.pytest_cache/
+.kilo/
+workspace.zip
+# Local planning notes
+build-ffmpeg-plan.txt
+# Autoconf/CMake artifacts that may land in root during test builds
+CMakeFiles/
+CMakeCache.txt
+compile
+config.guess
+config.sub
+depcomp
+install-sh
+ltmain.sh
+missing
+test-driver
+# MSYS2 venvs
+.venv-msys2*/
