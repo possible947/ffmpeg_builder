@@ -100,6 +100,76 @@ Implementation details and migration plan are documented in:
 
 - `docs/Windows-UCRT64-Implementation-Plan.md`
 
+## Linux (native)
+
+For Ubuntu/Debian/Fedora/Arch-style Linux hosts, use a local Python virtual environment and sync Git LFS archives.
+
+From a Linux shell:
+
+```bash
+# 1) System prerequisites (Debian/Ubuntu example)
+sudo apt update
+sudo apt install -y git git-lfs python3-venv python3-pip
+
+# 2) Clone repository + source archive mirror (Git LFS)
+git clone <repository-url> ffmpeg_builder
+cd ffmpeg_builder
+git lfs install --local
+git lfs pull
+git lfs checkout
+
+# 3) Create and activate Python virtual environment
+python3 -m venv .venv
+source .venv/bin/activate
+
+# 4) Install project in editable mode
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -e .
+
+# 5) Validate environment and run
+./scripts/check_python_env.sh
+python -m ffmpeg_builder
+```
+
+Notes:
+
+- `thrid_party/sources` archives are stored with Git LFS; without `git lfs pull`, builds fail later during extract/configure stages.
+- On distributions with externally managed system Python (PEP 668), always use `.venv` (do not install with global `pip`).
+
+## Windows WSL2 (Ubuntu)
+
+WSL2 is supported as a Linux backend (`linux-wsl2`). Setup is the same as native Linux, plus optional CUDA passthrough checks.
+
+From your WSL2 Ubuntu shell:
+
+```bash
+# 1) System prerequisites
+sudo apt update
+sudo apt install -y git git-lfs python3-venv python3-pip
+
+# 2) Clone repository + fetch LFS archives
+git clone <repository-url> ffmpeg_builder
+cd ffmpeg_builder
+git lfs install --local
+git lfs pull
+git lfs checkout
+
+# 3) Python environment
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -e .
+
+# 4) Validate and run
+./scripts/check_python_env.sh
+python -m ffmpeg_builder
+```
+
+WSL2 notes:
+
+- CUDA can work in WSL2 when NVIDIA drivers/toolkit are installed correctly; OpenCL is typically unavailable in WSL2.
+- If you use `/mnt/<drive>/...` paths for the repository, expect slower I/O than using the Linux filesystem (`~/...`).
+
 ## Quick Start
 
 ```bash
@@ -401,6 +471,10 @@ On GCC 15/16 with the bundled libstdc++, `<limits>` no longer transitively pulls
 ### SVT-AV1 fails with "unknown type name 'locale_t' / 'clockid_t'"
 
 SVT-AV1 4.0.1 includes `<sched.h>`/`<pthread.h>` from a project header (`Source/Lib/Codec/svt_threads.h`) and defines `_GNU_SOURCE` there. On modern glibc this is ignored when compiled with `-std=c11` because GCC defines `__STRICT_ANSI__`. The builder applies a Linux `platform_overrides` entry that appends `-std=gnu11` to svtav1 CFLAGS, the same workaround already used for `gettext`.
+
+### FFmpeg configure fails with "libplacebo >= 5.229.0 not found using pkg-config"
+
+If `libplacebo` was already built, FFmpeg can still fail this check when `libplacebo.pc` contains absolute static archive paths or stale dependency ordering from a previous run. The builder now auto-normalizes `libplacebo.pc` before FFmpeg configure (including resume runs), rewrites absolute archives to `-l...` flags, and enforces SPIRV static dependency order.
 
 ### CUDA not detected
 
