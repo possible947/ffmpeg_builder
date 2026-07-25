@@ -1,0 +1,23 @@
+# FFmpeg Builder - Default Configuration
+# This file defines the default build parameters for FFmpeg
+
+ffmpeg_version: "8.1"
+gpl_enabled: false
+native_build: false
+full_static: false
+enable_libvmaf: true
+enable_libvmaf_cuda: true
+disable_lv2: false
+num_jobs: "auto"
+async_downloads: true
+download_workers: 4
+
+# macOS specific settings
+macos:
+  clang: "macports-clang-17"
+  openmp: true
+
+# Linux specific settings
+linux:
+  c_standard: "gnu11"
+  cxx_standard: "c++17"
