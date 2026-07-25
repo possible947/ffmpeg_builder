@@ -329,7 +329,7 @@ The following environments have been verified to complete a full FFmpeg build:
 
 | Date | OS | Environment | Configuration | Result |
 |------|------|-------------|---------------|--------|
-| 2026-07-25 | Windows 11 + MSYS2 UCRT64 | x86_64, GCC 16.1.0, Intel Arc A750 + NVIDIA TITAN V (CUDA 12.2) | GPL + non-free, native build, openmp, **libplacebo** | Successful build of FFmpeg 8.1 with all configured components including libplacebo 7.360.1; hardware accel: qsv, cuda/nvdec/nvenc/cuvid, Vulkan, OpenCL, D3D11VA, D3D12VA, DXVA2, AMF; filters: libplacebo (N->V) |
+| 2026-07-25 | Windows 11 + MSYS2 UCRT64 | x86_64, GCC 16.1.0, Intel Arc A750 + NVIDIA TITAN V (CUDA 12.2) | GPL + non-free, native build, openmp, **libplacebo**, `make_release: true` | Successful full build of FFmpeg 8.1 (`59/59` components) with all configured components including libplacebo 7.360.1; release bundle generated in `workspace/release` (`ffmpeg.exe`, `ffprobe.exe`, `ffplay.exe`, runtime DLL set, `manifest.json`) |
 | 2026-07-19 | Ubuntu 24.04 (WSL2) | x86_64, NVIDIA CUDA | GPL + non-free, native build | Successful build of FFmpeg 8.1 with all configured components enabled |
 | 2026-07-19 | Fedora Linux 44 | x86_64, dual AMD Instinct MI50, dual Intel Xeon Broadwell, GCC 16.1.1, glibc 2.43 | GPL + non-free, native build | Successful build of FFmpeg 8.1 (45/57 components; 12 LV2/OpenCL/Vulkan/AMF/VapourSynth items not built because the corresponding runtime libraries are not present on this system) |
 
@@ -340,6 +340,8 @@ ffmpeg_version: "8.1"
 gpl_enabled: true
 native_build: true
 full_static: false
+make_release: true
+openmp: true
 enable_libvmaf: true
 enable_libvmaf_cuda: true
 enable_libplacebo: true
@@ -355,8 +357,6 @@ Verified FFmpeg capabilities included:
 - Streaming/protocols: `openssl`, `libsrt`, `libzmq`
 - GPU processing: `vulkan`, `libglslang`, `libplacebo` (filter `libplacebo N->V`)
 - Other: `libvmaf`, `libvidstab`, `libfreetype`, `vapoursynth`, `lv2`
-
-Note: `rav1e` was skipped because the installed `rustc` version (1.75.0) was too old for the latest `cargo-c`. This is handled automatically by the builder.
 
 ## Project Structure
 

@@ -33,6 +33,8 @@ All notable changes to the FFmpeg Builder project.
 
 ### Fixed
 
+- **MSYS2 bootstrap Git LFS package target** — `scripts/setup_windows_msys2_ucrt64.ps1` now installs `mingw-w64-ucrt-x86_64-git-lfs` instead of `git-lfs`, which is not a valid target in current MSYS2 repositories. This removes repeated bootstrap failures during `pacman -S --needed ...` with `error: target not found: git-lfs`
+
 - **libvmaf CUDA build with OpenMP (`nvcc fatal: Unknown option '-fopenmp'`)** — For libvmaf CUDA path, the builder now strips raw `-fopenmp` from inherited `CFLAGS`/`CXXFLAGS`/`LDFLAGS` and forwards OpenMP to nvcc host compilation via `NVCC_PREPEND_FLAGS=-Xcompiler=-fopenmp`
 
 - **PKG_CONFIG_PATH corruption in MSYS path normalizer** — Regex `([A-Za-z]):/` matched mid-word (e.g. `pkgconfi` + `g:/`), corrupting paths containing drive-letter sequences. Fixed with `(^|:)([A-Za-z]):/` anchor so only actual Windows drive prefixes are converted

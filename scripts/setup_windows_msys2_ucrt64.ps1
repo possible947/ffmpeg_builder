@@ -107,7 +107,8 @@ if (-not $SkipPackageInstall) {
     $packages = @(
         "base-devel"
         "git"
-        "git-lfs"
+        # In current MSYS2 repos Git LFS is provided as a UCRT64 mingw package.
+        "mingw-w64-ucrt-x86_64-git-lfs"
         "curl"
         "tar"
         "unzip"
