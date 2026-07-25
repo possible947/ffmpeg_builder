@@ -170,6 +170,44 @@ WSL2 notes:
 - CUDA can work in WSL2 when NVIDIA drivers/toolkit are installed correctly; OpenCL is typically unavailable in WSL2.
 - If you use `/mnt/<drive>/...` paths for the repository, expect slower I/O than using the Linux filesystem (`~/...`).
 
+## macOS + MacPorts
+
+On macOS, use MacPorts for build toolchain dependencies and run the project from a local Python virtual environment.
+
+From Terminal:
+
+```bash
+# 1) Install required MacPorts packages
+sudo port selfupdate
+sudo port install \
+  git git-lfs pkgconfig cmake meson ninja nasm yasm autoconf automake libtool gettext \
+  python312 py312-pip py312-setuptools py312-wheel py312-rich py312-tqdm py312-yaml \
+  py312-requests py312-packaging py312-psutil
+
+# 2) Clone repository + fetch LFS archives
+git clone <repository-url> ffmpeg_builder
+cd ffmpeg_builder
+git lfs install --local
+git lfs pull
+git lfs checkout
+
+# 3) Create and activate Python environment
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -e .
+
+# 4) Validate and run
+./scripts/check_python_env.sh
+python -m ffmpeg_builder
+```
+
+macOS notes:
+
+- `thrid_party/sources` is Git LFS-backed; missing LFS pull/checkout leaves pointer files instead of source archives.
+- If multiple Python versions are installed, ensure `python3` points to a supported version (>= 3.8).
+- For best compatibility with this project’s defaults, keep the configured MacPorts clang toolchain (`macports-clang-17`) in `build_config.yaml`.
+
 ## Quick Start
 
 ```bash
