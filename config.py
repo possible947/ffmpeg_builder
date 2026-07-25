@@ -43,6 +43,8 @@ class BuildConfig:
     num_jobs: str = "auto"
     async_downloads: bool = True
     download_workers: int = 4
+    source_archives_dir: str = "thrid_party/sources"
+    allow_network_downloads: bool = False
     macos: MacOSConfig = field(default_factory=MacOSConfig)
     linux: LinuxConfig = field(default_factory=LinuxConfig)
     windows: WindowsConfig = field(default_factory=WindowsConfig)

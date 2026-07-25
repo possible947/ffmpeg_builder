@@ -96,11 +96,17 @@ class FFmpegBuilder:
         self.config = config
         self.workspace = workspace.absolute()
         self.packages = packages.absolute()
+        self.source_archives = Path(config.source_archives_dir).absolute()
         self.state_manager = state_manager
         self.platform_detector = platform_detector
 
         self.executor = CommandExecutor(self.workspace)
-        self.downloader = Downloader(self.packages)
+        self.downloader = Downloader(
+            packages_dir=self.packages,
+            source_archives_dir=self.source_archives,
+            allow_network_downloads=config.allow_network_downloads,
+            on_log=on_log,
+        )
         self.on_download_status = on_download_status
         self.on_log = on_log
         self.on_download_progress = on_download_progress
