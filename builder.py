@@ -6,7 +6,6 @@ import importlib.util
 import json
 import stat
 import tarfile
-import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict, Callable, Tuple, Set
@@ -491,6 +490,9 @@ class FFmpegBuilder:
         for component in components:
             if self.state_manager.is_component_completed(component.name, component.version):
                 continue
+            if component.name == "giflib":
+                # giflib is now always system-provided on all platforms.
+                continue
             if self._should_use_system_component(component) and self._prefer_system_packages():
                 continue
             if self._should_use_system_component(component):
@@ -574,6 +576,25 @@ class FFmpegBuilder:
         """
         if self.state_manager.is_component_completed(component.name, component.version):
             return
+
+        if component.name == "giflib":
+            tool = component.system_tool_name or component.name
+            if self._is_system_component_available(tool):
+                self.state_manager.mark_component_status(
+                    component.name,
+                    ComponentStatus.SYSTEM,
+                    component.version,
+                )
+                return
+            raise BuildError(
+                component.name,
+                (
+                    "Required system component 'giflib' is not available. "
+                    "Install giflib development/runtime packages for your platform "
+                    "(for example: libgif-dev on Debian/Ubuntu, giflib on MacPorts, "
+                    "or mingw-w64-ucrt-x86_64-giflib on MSYS2 UCRT64)."
+                ),
+            )
 
         # System-package mode for Windows MSYS2/UCRT64: do not fallback to
         # source downloads for declared system components.
@@ -704,7 +725,6 @@ class FFmpegBuilder:
         Returns:
             True if available in system, False otherwise.
         """
-        import shutil
         import subprocess
 
         # Check if it's a known tool
@@ -723,25 +743,34 @@ class FFmpegBuilder:
             if self._command_exists(candidate):
                 return True
 
-        # Check via pkg-config for libraries
-        try:
-            result = subprocess.run(
-                ["pkg-config", "--exists", tool_name],
-                capture_output=True,
-                timeout=5
-            )
-            if result.returncode == 0:
-                return True
-        except Exception:
-            pass
+        pkg_names = [tool_name]
+        if tool_name == "giflib":
+            pkg_names = ["giflib", "gif"]
+        for pkg_name in pkg_names:
+            try:
+                result = subprocess.run(
+                    ["pkg-config", "--exists", pkg_name],
+                    capture_output=True,
+                    timeout=5
+                )
+                if result.returncode == 0:
+                    return True
+            except Exception:
+                pass
 
         # Check for common library headers
-        lib_headers = [Path("/usr/include")]
+        lib_headers = [
+            Path("/usr/include"),
+            Path("/usr/local/include"),
+            Path("/opt/local/include"),
+            Path("/opt/homebrew/include"),
+        ]
         mingw_prefix = os.environ.get("MINGW_PREFIX")
         if mingw_prefix:
             lib_headers.append(Path(mingw_prefix) / "include")
         if self._is_windows_ucrt64_backend():
             lib_headers.append(Path(self.config.windows.msys2_root) / "ucrt64" / "include")
+            lib_headers.append(Path("/ucrt64/include"))
 
         header_by_tool = {
             "giflib": "gif_lib.h",
@@ -753,6 +782,23 @@ class FFmpegBuilder:
             for include_root in lib_headers:
                 if (Path(include_root) / header_name).exists():
                     return True
+
+        if tool_name == "giflib":
+            lib_roots = [
+                Path("/usr/lib"),
+                Path("/usr/local/lib"),
+                Path("/opt/local/lib"),
+                Path("/opt/homebrew/lib"),
+            ]
+            if mingw_prefix:
+                lib_roots.append(Path(mingw_prefix) / "lib")
+            if self._is_windows_ucrt64_backend():
+                lib_roots.append(Path(self.config.windows.msys2_root) / "ucrt64" / "lib")
+                lib_roots.append(Path("/ucrt64/lib"))
+            for root in lib_roots:
+                for name in ("libgif.a", "libgif.so", "libgif.dylib", "libgif.dll.a"):
+                    if (root / name).exists():
+                        return True
 
         return False
 

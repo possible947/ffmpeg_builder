@@ -109,7 +109,7 @@ From a Linux shell:
 ```bash
 # 1) System prerequisites (Debian/Ubuntu example)
 sudo apt update
-sudo apt install -y git git-lfs python3-venv python3-pip
+sudo apt install -y git git-lfs python3-venv python3-pip libgif-dev
 
 # 2) Clone repository + source archive mirror (Git LFS)
 git clone <repository-url> ffmpeg_builder
@@ -145,7 +145,7 @@ From your WSL2 Ubuntu shell:
 ```bash
 # 1) System prerequisites
 sudo apt update
-sudo apt install -y git git-lfs python3-venv python3-pip
+sudo apt install -y git git-lfs python3-venv python3-pip libgif-dev
 
 # 2) Clone repository + fetch LFS archives
 git clone <repository-url> ffmpeg_builder
@@ -180,7 +180,7 @@ From Terminal:
 # 1) Install required MacPorts packages
 sudo port selfupdate
 sudo port install \
-  git git-lfs pkgconfig cmake meson ninja nasm yasm autoconf automake libtool gettext \
+  git git-lfs pkgconfig cmake meson ninja nasm yasm autoconf automake libtool gettext giflib \
   clang-17 libomp \
   python312 py312-pip py312-setuptools py312-wheel py312-rich py312-tqdm py312-yaml \
   py312-requests py312-packaging py312-psutil
