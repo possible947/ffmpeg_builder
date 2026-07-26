@@ -34,6 +34,7 @@ DEPS=(
     "requests       2.31.0        requests        python3-requests    python3-requests     python-requests     python3-requests"
     "packaging      23.0          packaging       python3-packaging   python3-packaging    python-packaging    python3-packaging"
     "psutil         5.9.0         psutil          python3-psutil      python3-psutil       python-psutil       python3-psutil"
+    "jinja2         3.1.0         jinja2          python3-jinja2      python3-jinja2       python-jinja        python3-Jinja2"
 )
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
