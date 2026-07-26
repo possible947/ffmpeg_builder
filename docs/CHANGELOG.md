@@ -27,6 +27,7 @@ All notable changes to the FFmpeg Builder project.
 - **Cross-platform OpenMP support** — `BuildConfig.openmp: bool = True` (top-level, all platforms). When enabled, `-fopenmp` is added to `CFLAGS`/`CXXFLAGS`; the linker receives `-fopenmp` (GCC auto-links `libgomp`) on Linux and Windows UCRT64, or `-L/opt/local/lib -lomp` (MacPorts libomp) on macOS. `soxr`'s `-DWITH_OPENMP:bool=off` CMake flag is flipped to `on` automatically when `openmp` is enabled. `MacOSConfig.openmp` removed (replaced by top-level field). UI now shows and toggles the `OpenMP` setting
 
 - **Windows UCRT64 verified build** — End-to-end FFmpeg 8.1 build confirmed working on Windows 11 + MSYS2 UCRT64 (GCC 16.1.0). A test build was successfully completed on **Windows 11 / Intel Core i9-7980XE / Intel Arc A750 / NVIDIA TITAN V** with **OpenMP, CUDA, NVENC/NVDEC, Intel dec/enc, Vulkan, and OpenCL** enabled. All configured components build and link correctly. See **Verified Environments** in the README for the full feature list
+- **macOS verified build (current session)** — End-to-end FFmpeg 8.1 build now completes successfully on macOS after applying the OpenMP runtime linking and FFmpeg compiler-selection fixes (`gcc`/Apple clang fallback eliminated for OpenMP builds).
 
 - **Windows UCRT64 Intel QSV enablement** — Added QSV support path for `windows-msys2-ucrt64`: `onevpl` is now allowed by Windows HW-accel policy, QSV detection on UCRT64 requires Intel GPU plus pkg-config oneVPL module (`vpl`/`libvpl`), and FFmpeg configure now enables `libvpl` on supported UCRT64 setups instead of forcing `--disable-libvpl`
 - **Windows bootstrap QSV readiness check** — `scripts/setup_windows_msys2_ucrt64.ps1` now validates Intel GPU presence plus oneVPL pkg-config module (`vpl`/`libvpl`) and reports explicit QSV prerequisite status after environment setup
@@ -41,6 +42,8 @@ All notable changes to the FFmpeg Builder project.
 - **macOS OpenMP runtime linker resolution (`ld: library not found for -lomp`)** — OpenMP setup now resolves the runtime library location dynamically (`libomp`/`libgomp`/`libiomp5`) across common macOS toolchain paths (MacPorts/Homebrew), adds the matching `-L` and `-Wl,-rpath` flags, and surfaces a clear configuration error when no compatible runtime is installed.
 
 - **macOS x264 build failure in CLI path (GPAC `strcpy` macro conflict)** — x264 custom build now passes `--disable-cli` so the FFmpeg library build no longer pulls CLI-only GPAC/lavf code paths that fail on recent macOS GPAC headers.
+
+- **macOS FFmpeg configure compiler mismatch (`gcc is unable to create an executable file`)** — FFmpeg configure now receives explicit `--cc/--cxx` from builder environment and macOS compiler resolution now prefers configured/auto-detected MacPorts clang. This prevents fallback to `/usr/bin/gcc` (Apple clang shim without OpenMP), fixing the `C compiler test failed` path when `openmp: true`.
 
 - **MSYS2 bootstrap Git LFS package target** — `scripts/setup_windows_msys2_ucrt64.ps1` now installs `mingw-w64-ucrt-x86_64-git-lfs` instead of `git-lfs`, which is not a valid target in current MSYS2 repositories. This removes repeated bootstrap failures during `pacman -S --needed ...` with `error: target not found: git-lfs`
 
