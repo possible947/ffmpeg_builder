@@ -146,6 +146,7 @@ if (-not $SkipPackageInstall) {
         "mingw-w64-ucrt-x86_64-glslang"
         "mingw-w64-ucrt-x86_64-opencl-headers"
         "mingw-w64-ucrt-x86_64-opencl-icd"
+        "mingw-w64-ucrt-x86_64-giflib"
         "mingw-w64-ucrt-x86_64-llvm-openmp"
     )
 

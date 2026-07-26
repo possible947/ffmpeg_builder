@@ -12,10 +12,6 @@ All notable changes to the FFmpeg Builder project.
 >
 > **Stage 3** — Add macOS as a supported platform (MoltenVK backend). Requires detecting MoltenVK/`VK_ICD_FILENAMES` at platform-detect time. Remove `linux_only` restriction; add macOS-specific configure overrides and link flags. Stage 1/2 full_static restriction does not apply on macOS (frameworks handle Vulkan).
 
-### Planned
-
-- **System giflib policy across all platforms** — Standardize on using the host/system `giflib` when available on Linux, macOS, Windows WSL2, and Windows MSYS2-UCRT64, instead of building `giflib` from source.
-
 ### Rules
 
 - **libplacebo + liblcms2 are always disabled when `full_static: true` (Linux)** — `libvulkan.so` (system Vulkan ICD loader) is a runtime shared library with no static archive; linking FFmpeg fully statically against it is not supported. When `full_static: true` the builder skips `libplacebo` (and `liblcms2` in Stage 2) even if `enable_libplacebo: true` and `vulkan_available: true`.
@@ -36,6 +32,7 @@ All notable changes to the FFmpeg Builder project.
 ### Changed
 
 - **`--enable-pthreads` → `--enable-w32threads` on UCRT64** — POSIX pthreads are not a system library on MSYS2 UCRT64; the builder now passes `--enable-w32threads` to FFmpeg configure when the backend is `windows-msys2-ucrt64`. All other platforms continue to use `--enable-pthreads`
+- **System giflib policy across all platforms** — `giflib` is now treated as a required system-provided component across Linux, macOS, Windows WSL2, and Windows MSYS2-UCRT64. Source-download/build fallback for giflib is removed.
 
 ### Fixed
 
@@ -44,6 +41,8 @@ All notable changes to the FFmpeg Builder project.
 - **macOS x264 build failure in CLI path (GPAC `strcpy` macro conflict)** — x264 custom build now passes `--disable-cli` so the FFmpeg library build no longer pulls CLI-only GPAC/lavf code paths that fail on recent macOS GPAC headers.
 
 - **macOS FFmpeg configure compiler mismatch (`gcc is unable to create an executable file`)** — FFmpeg configure now receives explicit `--cc/--cxx` from builder environment and macOS compiler resolution now prefers configured/auto-detected MacPorts clang. This prevents fallback to `/usr/bin/gcc` (Apple clang shim without OpenMP), fixing the `C compiler test failed` path when `openmp: true`.
+
+- **giflib system detection on macOS/MSYS2 paths** — System-component probing now recognizes giflib from common non-`/usr/include` prefixes and pkg-config variants (`giflib`, `gif`), plus MSYS2 UCRT64 include/lib locations, preventing false “missing giflib” detection on valid setups.
 
 - **MSYS2 bootstrap Git LFS package target** — `scripts/setup_windows_msys2_ucrt64.ps1` now installs `mingw-w64-ucrt-x86_64-git-lfs` instead of `git-lfs`, which is not a valid target in current MSYS2 repositories. This removes repeated bootstrap failures during `pacman -S --needed ...` with `error: target not found: git-lfs`
 
