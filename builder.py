@@ -196,6 +196,34 @@ class FFmpegBuilder:
             return flags
         return " ".join(token for token in flags.split() if token != flag)
 
+    @staticmethod
+    def _resolve_darwin_openmp_runtime() -> Tuple[Optional[str], Optional[str]]:
+        """Resolve macOS OpenMP runtime library directory and linker flag.
+
+        Returns:
+            Tuple of (library_dir, linker_flag), for example
+            ("/opt/local/lib/libomp", "-lomp"). Returns (None, None) when no
+            compatible OpenMP runtime library is found in known locations.
+        """
+        runtime_candidates = [
+            ("libomp.dylib", "-lomp"),
+            ("libgomp.dylib", "-lgomp"),
+            ("libiomp5.dylib", "-liomp5"),
+        ]
+        search_dirs = [
+            Path("/opt/local/lib/libomp"),      # MacPorts libomp runtime
+            Path("/opt/local/lib"),             # MacPorts generic lib dir
+            Path("/opt/homebrew/opt/libomp/lib"),  # Homebrew on Apple Silicon
+            Path("/usr/local/opt/libomp/lib"),     # Homebrew on Intel
+        ]
+
+        for directory in search_dirs:
+            for library_name, linker_flag in runtime_candidates:
+                if (directory / library_name).exists():
+                    return str(directory), linker_flag
+
+        return None, None
+
     def _ws_str(self) -> str:
         """Return workspace path as a forward-slash string.
 
@@ -260,7 +288,14 @@ class FFmpegBuilder:
                 # not).  libomp is installed by MacPorts under /opt/local.
                 self.cflags += " -fopenmp"
                 self.cxxflags += " -fopenmp"
-                self.ldflags += " -L/opt/local/lib -lomp"
+                omp_lib_dir, omp_link_flag = self._resolve_darwin_openmp_runtime()
+                if omp_lib_dir is None or omp_link_flag is None:
+                    raise RuntimeError(
+                        "openmp=true on macOS but no OpenMP runtime library was found. "
+                        "Install libomp for your toolchain (e.g. `sudo port install libomp`) "
+                        "or disable OpenMP in build_config.yaml (`openmp: false`)."
+                    )
+                self.ldflags += f" -L{omp_lib_dir} -Wl,-rpath,{omp_lib_dir} {omp_link_flag}"
             else:
                 # GCC on Linux and MinGW/UCRT64: passing -fopenmp to the
                 # compiler and linker driver is sufficient; GCC automatically
@@ -1345,6 +1380,7 @@ class FFmpegBuilder:
             f"--prefix={self._ws_str()}",
             "--enable-static",
             "--enable-pic",
+            "--disable-cli",
         ]
 
         if self.platform == "linux":
