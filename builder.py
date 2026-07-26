@@ -1,6 +1,7 @@
 """Build orchestration engine."""
 import os
 import re
+import shutil
 import importlib.util
 import json
 import stat
@@ -363,10 +364,29 @@ class FFmpegBuilder:
             "LDEXEFLAGS": self.ldexeflags,
         }
 
-        if self.platform == "darwin" and self.platform_detector.platform_info.macports_clang:
-            clang_path = self.platform_detector.platform_info.macports_clang.path
-            self.env["CC"] = clang_path
-            self.env["CXX"] = clang_path.replace("clang", "clang++")
+        if self.platform == "darwin":
+            # Honour configured macOS compiler first; fallback to auto-detected
+            # MacPorts clang. This avoids FFmpeg defaulting to /usr/bin/gcc
+            # (Apple clang shim), which does not accept -fopenmp.
+            configured_cc = shutil.which(self.config.macos.clang)
+            detected = self.platform_detector.platform_info.macports_clang
+            clang_path = configured_cc or (detected.path if detected else None)
+            clangxx_path = None
+            if clang_path:
+                clangxx_path = clang_path.replace("clang", "clang++")
+                if not Path(clangxx_path).exists():
+                    clangxx_path = None
+
+            if clang_path and clangxx_path:
+                self.env["CC"] = clang_path
+                self.env["CXX"] = clangxx_path
+            elif self.config.openmp:
+                raise RuntimeError(
+                    "openmp=true on macOS requires a compiler with OpenMP support "
+                    f"(configured compiler '{self.config.macos.clang}' was not found). "
+                    "Install MacPorts clang (e.g. `sudo port install clang-17`) and "
+                    "set macos.clang accordingly, or disable OpenMP."
+                )
 
         # CUDA paths
         if self.platform_detector.platform_info.cuda_available:
@@ -2591,6 +2611,10 @@ class FFmpegBuilder:
             "--pkg-config-flags=--static",
             f"--prefix={self._ws_str()}",
         ]
+        if "CC" in env:
+            configure_args.append(f"--cc={env['CC']}")
+        if "CXX" in env:
+            configure_args.append(f"--cxx={env['CXX']}")
 
         # On UCRT64/MinGW, POSIX pthreads are not available as a system
         # library; use native Windows threads (w32threads) instead.
