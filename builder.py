@@ -1,6 +1,7 @@
 """Build orchestration engine."""
 import os
 import re
+import importlib.util
 import json
 import stat
 import tarfile
@@ -385,6 +386,42 @@ class FFmpegBuilder:
             env.update(component.extra_env)
 
         return env
+
+    @staticmethod
+    def _prepend_python_module_parent_to_pythonpath(
+        env: Dict[str, str],
+        module_name: str,
+    ) -> None:
+        """Add module parent dir to PYTHONPATH if module is importable.
+
+        Meson may pick `/usr/bin/python3` for custom commands even when the
+        builder itself runs from another Python environment. This keeps Python
+        module lookups (e.g. jinja2 for libplacebo shaders) aligned.
+        """
+        spec = importlib.util.find_spec(module_name)
+        if spec is None:
+            return
+
+        parent_dir: Optional[Path] = None
+        if spec.submodule_search_locations:
+            first = next(iter(spec.submodule_search_locations), None)
+            if first:
+                parent_dir = Path(first).resolve().parent
+        elif spec.origin and spec.origin != "built-in":
+            parent_dir = Path(spec.origin).resolve().parent
+
+        if parent_dir is None:
+            return
+
+        existing = env.get("PYTHONPATH", "")
+        paths = [str(parent_dir)]
+        if existing:
+            paths.extend(p for p in existing.split(os.pathsep) if p)
+        deduped = []
+        for path in paths:
+            if path not in deduped:
+                deduped.append(path)
+        env["PYTHONPATH"] = os.pathsep.join(deduped)
 
     def prefetch_downloads(self, components: List[Component]) -> None:
         """Start background downloads for buildable source archives.
@@ -2203,6 +2240,22 @@ class FFmpegBuilder:
         build_dir.mkdir(parents=True, exist_ok=True)
 
         env = self.get_build_env(component)
+        self._prepend_python_module_parent_to_pythonpath(env, "jinja2")
+
+        result, log_file = self.executor.execute_with_log(
+            ["python3", "-c", "import jinja2"],
+            component.name,
+            "check-jinja2",
+            source_dir,
+            env,
+        )
+        if not result.success:
+            raise BuildError(
+                component.name,
+                "Missing Python module 'jinja2' required by libplacebo "
+                "(install project deps via `pip install -e .` or distro package `python3-jinja2`)",
+                log_file,
+            )
 
         # Make workspace static libs take priority over system libs for
         # cxx.find_library() calls inside libplacebo's meson.build.

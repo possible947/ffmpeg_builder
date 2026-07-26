@@ -393,6 +393,7 @@ Windows phase-3 policy:
 - Supported platforms: Linux, Windows WSL2, Windows MSYS2-UCRT64; macOS planned (Stage 3)
 - Adds `--enable-libplacebo` to FFmpeg configure; exposes the `libplacebo` filter (`N->V`)
 - Built with: `-Dopengl=disabled -Dd3d11=disabled -Dshaderc=disabled -Dlibdovi=disabled -Dlcms=disabled`
+- Requires Python `jinja2` for GLSL preprocessing; installed with project dependencies (`pip install -e .`) or via distro package `python3-jinja2`
 - Requires `mingw-w64-ucrt-x86_64-python-jinja` on MSYS2 UCRT64 (GLSL preprocessor); installed by the bootstrap script automatically
 - Version: 7.360.1
 
