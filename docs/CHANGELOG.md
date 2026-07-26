@@ -12,6 +12,10 @@ All notable changes to the FFmpeg Builder project.
 >
 > **Stage 3** — Add macOS as a supported platform (MoltenVK backend). Requires detecting MoltenVK/`VK_ICD_FILENAMES` at platform-detect time. Remove `linux_only` restriction; add macOS-specific configure overrides and link flags. Stage 1/2 full_static restriction does not apply on macOS (frameworks handle Vulkan).
 
+### Planned
+
+- **System giflib policy across all platforms** — Standardize on using the host/system `giflib` when available on Linux, macOS, Windows WSL2, and Windows MSYS2-UCRT64, instead of building `giflib` from source.
+
 ### Rules
 
 - **libplacebo + liblcms2 are always disabled when `full_static: true` (Linux)** — `libvulkan.so` (system Vulkan ICD loader) is a runtime shared library with no static archive; linking FFmpeg fully statically against it is not supported. When `full_static: true` the builder skips `libplacebo` (and `liblcms2` in Stage 2) even if `enable_libplacebo: true` and `vulkan_available: true`.
@@ -33,6 +37,10 @@ All notable changes to the FFmpeg Builder project.
 - **`--enable-pthreads` → `--enable-w32threads` on UCRT64** — POSIX pthreads are not a system library on MSYS2 UCRT64; the builder now passes `--enable-w32threads` to FFmpeg configure when the backend is `windows-msys2-ucrt64`. All other platforms continue to use `--enable-pthreads`
 
 ### Fixed
+
+- **macOS OpenMP runtime linker resolution (`ld: library not found for -lomp`)** — OpenMP setup now resolves the runtime library location dynamically (`libomp`/`libgomp`/`libiomp5`) across common macOS toolchain paths (MacPorts/Homebrew), adds the matching `-L` and `-Wl,-rpath` flags, and surfaces a clear configuration error when no compatible runtime is installed.
+
+- **macOS x264 build failure in CLI path (GPAC `strcpy` macro conflict)** — x264 custom build now passes `--disable-cli` so the FFmpeg library build no longer pulls CLI-only GPAC/lavf code paths that fail on recent macOS GPAC headers.
 
 - **MSYS2 bootstrap Git LFS package target** — `scripts/setup_windows_msys2_ucrt64.ps1` now installs `mingw-w64-ucrt-x86_64-git-lfs` instead of `git-lfs`, which is not a valid target in current MSYS2 repositories. This removes repeated bootstrap failures during `pacman -S --needed ...` with `error: target not found: git-lfs`
 
