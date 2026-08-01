@@ -430,13 +430,14 @@ class PlatformDetector:
         if self.platform_info.is_macos:
             self.platform_info.macports_clang = self._find_macports_clang()
         
-        # Detect CUDA on Linux
+        # Detect CUDA on Linux/Windows
         if self.platform_info.is_linux or self.platform_info.is_windows:
             self._detect_cuda()
             self._detect_libvmaf_cuda_support()
             self.platform_info.qsv_available = self._check_qsv()
-            self.platform_info.vulkan_available = self._check_vulkan()
-            self.platform_info.opencl_available = self._check_opencl()
+        # Vulkan and OpenCL are available on all platforms (including macOS via LunarG SDK / OpenCL.framework)
+        self.platform_info.vulkan_available = self._check_vulkan()
+        self.platform_info.opencl_available = self._check_opencl()
         self.platform_info.vaapi_available = self._check_vaapi()
 
     def _detect_msys2_mode(self) -> None:
@@ -750,6 +751,8 @@ class PlatformDetector:
         vulkan_header_paths = [
             Path("/usr/include/vulkan/vulkan.h"),
             Path("/usr/local/include/vulkan/vulkan.h"),
+            Path("/opt/local/include/vulkan/vulkan.h"),  # MacPorts
+            Path("/opt/homebrew/include/vulkan/vulkan.h"),  # Homebrew ARM
         ]
         if self.platform_info.is_windows:
             vulkan_header_paths.extend([
@@ -793,12 +796,20 @@ class PlatformDetector:
         opencl_header_paths = [
             Path("/usr/include/CL/cl.h"),
             Path("/usr/local/include/CL/cl.h"),
+            Path("/opt/local/include/CL/cl.h"),  # MacPorts
+            Path("/opt/homebrew/include/CL/cl.h"),  # Homebrew ARM
         ]
         if self.platform_info.is_windows:
             opencl_header_paths.extend([
                 Path("/ucrt64/include/CL/cl.h"),
                 Path("C:/msys64/ucrt64/include/CL/cl.h"),
             ])
+
+        # On macOS, OpenCL is provided as a system framework — no separate header install needed
+        if self.platform_info.is_macos:
+            opencl_framework = Path("/System/Library/Frameworks/OpenCL.framework")
+            if opencl_framework.exists():
+                return True
         
         has_headers = any(path.exists() for path in opencl_header_paths)
         if not has_headers:
