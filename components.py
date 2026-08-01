@@ -991,6 +991,15 @@ class ComponentRegistry:
                 ffmpeg_configure_flag="--enable-libglslang",
             ),
             Component(
+                name="fast-float",
+                version="6.1.6",
+                url="https://github.com/fastfloat/fast_float/archive/refs/tags/v{version}.tar.gz",
+                category=ComponentCategory.HW_ACCEL,
+                build_system=BuildSystem.HEADERS_ONLY,
+                archive_filename="fast_float-{version}.tar.gz",
+                archive_dirname="fast_float-{version}",
+            ),
+            Component(
                 name="libplacebo",
                 version="7.360.1",
                 url="https://github.com/haasn/libplacebo/archive/refs/tags/v{version}.tar.gz",
@@ -1000,7 +1009,6 @@ class ComponentRegistry:
                 configure_args=[
                     "--prefix={workspace}",
                     "--default-library=static",
-                    "-Dglslang=enabled",
                     "-Dshaderc=disabled",
                     "-Dopengl=disabled",
                     "-Dd3d11=disabled",
@@ -1009,7 +1017,7 @@ class ComponentRegistry:
                     "-Dtests=false",
                     "-Ddemos=false",
                 ],
-                depends_on=["vulkan-headers", "glslang"],
+                depends_on=["vulkan-headers", "glslang", "fast-float"],
                 windows_ucrt64_supported=True,
                 ffmpeg_configure_flag="--enable-libplacebo",
             ),
