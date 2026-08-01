@@ -672,24 +672,36 @@ class PlatformDetector:
         return False
     
     def _find_macports_clang(self) -> Optional[ToolInfo]:
-        """Find macports clang.
-        
+        """Find the highest-version MacPorts clang available.
+
+        MacPorts installs clang as clang-mp-N (e.g. clang-mp-17, clang-mp-18).
+        The builder config stores the preferred version as macports-clang-N;
+        this method returns the highest installed version as the auto-detect
+        fallback when the configured name does not resolve directly.
+
         Returns:
-            ToolInfo for macports clang or None.
+            ToolInfo for the highest-version MacPorts clang, or None.
         """
         macports_bin = Path("/opt/local/bin")
-        
-        # Look for clang-mp-*
-        for clang_path in macports_bin.glob("clang-mp-*"):
-            version = clang_path.name.replace("clang-mp-", "")
-            return ToolInfo(
-                name=f"macports-clang-{version}",
-                path=str(clang_path),
-                version=version,
-                available=True
-            )
-        
-        return None
+        best: Optional[tuple] = None  # (version_int, path)
+        for clang_path in macports_bin.glob("clang-mp-[0-9]*"):
+            ver_str = clang_path.name.replace("clang-mp-", "")
+            try:
+                ver_int = int(ver_str)
+            except ValueError:
+                continue
+            if best is None or ver_int > best[0]:
+                best = (ver_int, clang_path)
+
+        if best is None:
+            return None
+        ver_int, clang_path = best
+        return ToolInfo(
+            name=f"macports-clang-{ver_int}",
+            path=str(clang_path),
+            version=str(ver_int),
+            available=True,
+        )
     
     def _check_vaapi(self) -> bool:
         """Check if VAAPI is available.

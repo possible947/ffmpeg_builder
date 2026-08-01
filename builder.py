@@ -367,7 +367,16 @@ class FFmpegBuilder:
             # Honour configured macOS compiler first; fallback to auto-detected
             # MacPorts clang. This avoids FFmpeg defaulting to /usr/bin/gcc
             # (Apple clang shim), which does not accept -fopenmp.
-            configured_cc = shutil.which(self.config.macos.clang)
+            #
+            # MacPorts names the binary clang-mp-N, but build_config.yaml
+            # stores it as macports-clang-N (human-readable alias).  Translate
+            # both forms so that shutil.which() can resolve the path.
+            configured_name = self.config.macos.clang
+            configured_cc = shutil.which(configured_name)
+            if not configured_cc and configured_name.startswith("macports-clang-"):
+                ver = configured_name.removeprefix("macports-clang-")
+                configured_cc = shutil.which(f"clang-mp-{ver}")
+
             detected = self.platform_detector.platform_info.macports_clang
             clang_path = configured_cc or (detected.path if detected else None)
             clangxx_path = None
