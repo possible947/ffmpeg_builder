@@ -2749,6 +2749,11 @@ class FFmpegBuilder:
                     self.extralibs += " -lvulkan"
                 elif self.platform == "darwin":
                     self.extralibs += " -L/usr/local/lib -lvulkan"
+                    # libvulkan.1.dylib is a shared library; dyld must be able
+                    # to find it at runtime via @rpath.  Add the LunarG SDK lib
+                    # directory so the compiler test executable doesn't crash
+                    # with "Library not loaded: @rpath/libvulkan.1.dylib".
+                    self.ldflags += " -Wl,-rpath,/usr/local/lib"
 
         # Strip leading/trailing whitespace that accumulates when starting from "".
         self.extralibs = self.extralibs.strip()
