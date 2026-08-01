@@ -1290,6 +1290,18 @@ class FFmpegBuilder:
                     elif item.is_dir():
                         shutil.copytree(item, dest_item, dirs_exist_ok=True)
 
+        elif component.name == "fast-float":
+            # fast_float is a header-only library used by libplacebo.
+            # Install include/fast_float/ to workspace/include/fast_float/ so
+            # build_libplacebo() can populate the libplacebo submodule dir.
+            dest = self.workspace / "include" / "fast_float"
+            dest.mkdir(parents=True, exist_ok=True)
+            src = source_dir / "include" / "fast_float"
+            if src.exists():
+                for item in src.iterdir():
+                    dest_item = dest / item.name
+                    shutil.copy2(item, dest_item)
+
         elif component.name == "amf":
             dest = self.workspace / "include" / "AMF"
             if dest.exists():
@@ -2376,35 +2388,87 @@ class FFmpegBuilder:
             and pi.vulkan_available
             and not (self.config.full_static and self.platform == "linux")
         )
-        vulkan_flag = "-Dvulkan=enabled" if vulkan_ok else "-Dvulkan=disabled"
 
-        # Make workspace static libs take priority over system libs for
-        # cxx.find_library() calls inside libplacebo's meson.build.
-        # GCC respects LIBRARY_PATH when resolving library names.
         ws = self._ws_str()
+
+        # libplacebo's tarball (GitHub archive) does not include git submodules,
+        # so 3rdparty/fast_float/include/ is an empty directory.  Populate it
+        # from workspace/include/fast_float/ (installed by the fast-float
+        # component) before calling meson, so that meson's fs.is_dir() check
+        # in src/meson.build succeeds and the header is added to inc_dirs.
+        fast_float_submod = source_dir / "3rdparty" / "fast_float" / "include" / "fast_float"
+        fast_float_ws = self.workspace / "include" / "fast_float"
+        if fast_float_ws.exists() and not any(fast_float_submod.iterdir() if fast_float_submod.exists() else iter([])):
+            fast_float_submod.mkdir(parents=True, exist_ok=True)
+            for item in fast_float_ws.iterdir():
+                dest = fast_float_submod / item.name
+                if not dest.exists():
+                    shutil.copy2(item, dest)
+
         existing_lp = env.get("LIBRARY_PATH", "")
         new_lp = f"{ws}/lib:{ws}/lib64"
+        env["LIBRARY_PATH"] = f"{new_lp}:{existing_lp}" if existing_lp else new_lp
 
         if self.platform == "darwin" and vulkan_ok:
-            # LunarG SDK installs to /usr/local/lib; add it so Meson's
-            # dependency('vulkan') / cxx.find_library('vulkan') succeeds.
-            new_lp = f"{new_lp}:/usr/local/lib"
+            # LunarG SDK installs to /usr/local/lib; extend PKG_CONFIG_PATH so
+            # meson's dependency('vulkan') probe via pkg-config succeeds.
             existing_pkgcp = env.get("PKG_CONFIG_PATH", "")
-            vulkan_pkgcp = "/usr/local/lib/pkgconfig:/usr/local/share/vulkan/registry"
+            vulkan_pkgcp = "/usr/local/lib/pkgconfig"
             env["PKG_CONFIG_PATH"] = (
                 f"{ws}/lib/pkgconfig:{ws}/lib64/pkgconfig:{vulkan_pkgcp}"
                 + (f":{existing_pkgcp}" if existing_pkgcp else "")
             )
 
-        env["LIBRARY_PATH"] = f"{new_lp}:{existing_lp}" if existing_lp else new_lp
-
         if self._is_windows_ucrt64_backend():
             env["PKG_CONFIG_PATH"] = f"{ws}/lib/pkgconfig;{ws}/lib64/pkgconfig"
+
+        if vulkan_ok:
+            # Patch libplacebo's src/glsl/meson.build so that glslang is found
+            # reliably regardless of platform or compiler toolchain.
+            #
+            # Root cause: meson's find_library() with static:true performs a
+            # FILE SEARCH (not a linker test).  It searches only dirs: param +
+            # compiler system dirs (from clang -print-search-dirs).  LDFLAGS,
+            # LIBRARY_PATH and cpp_link_args are completely ignored for static
+            # library detection.
+            #
+            # libplacebo passes dirs:vulkan_lib_dirs to find_library('SPIRV')
+            # (which is why SPIRV is found when -Dvulkan-sdk={workspace} is set),
+            # but the immediately following find_library('glslang') call is
+            # missing dirs: — an oversight in the upstream meson.build.
+            #
+            # The fix: add dirs:vulkan_lib_dirs to the glslang call, mirroring
+            # the SPIRV call on the preceding line.  This is the same variable
+            # already defined in the file; no new logic is introduced.
+            #
+            # The patch is applied to the source tree before meson runs and is
+            # idempotent (guarded by checking that the original text is present).
+            glsl_meson = source_dir / "src" / "glsl" / "meson.build"
+            if glsl_meson.exists():
+                original = "cxx.find_library('glslang', required: required, static: static)"
+                patched  = "cxx.find_library('glslang', required: required, static: static, dirs: vulkan_lib_dirs)"
+                text = glsl_meson.read_text(encoding="utf-8")
+                if original in text:
+                    glsl_meson.write_text(text.replace(original, patched, 1), encoding="utf-8")
 
         meson_args = [
             arg.replace("{workspace}", ws) for arg in component.configure_args
         ]
-        meson_args.append(vulkan_flag)
+
+        if vulkan_ok:
+            # -Dvulkan-sdk tells libplacebo where to find SPIRV/glslang static
+            # libs; vulkan_lib_dirs = [vulkan-sdk/lib] is added to dirs: in the
+            # find_library() searches.  -Dglslang is only meaningful with Vulkan.
+            meson_args += [
+                "-Dvulkan=enabled",
+                f"-Dvulkan-sdk={ws}",
+                "-Dglslang=enabled",
+            ]
+        else:
+            meson_args += [
+                "-Dvulkan=disabled",
+                "-Dglslang=disabled",
+            ]
 
         result, log_file = self.executor.execute_with_log(
             ["meson", "setup", "build"] + meson_args,
