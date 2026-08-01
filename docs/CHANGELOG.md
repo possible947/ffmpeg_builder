@@ -19,6 +19,13 @@ All notable changes to the FFmpeg Builder project.
 
 ### Added
 
+- **`fast-float` v6.1.6 headers-only component (2026-08-01)** — New `HEADERS_ONLY` component added before `libplacebo` in the build graph. GitHub release tarballs for libplacebo ship with an empty `3rdparty/fast_float/` git submodule directory; without the headers, `src/convert.cc` fails to compile. The component downloads `fast_float-6.1.6.tar.gz` and `build_libplacebo()` copies the `include/` tree into the submodule directory before invoking meson. The archive is included in `thrid_party/sources/` for offline builds. `libplacebo` component `depends_on` updated to include `fast-float`. Component count on macOS: 55 → **56**.
+
+- **libplacebo build fully automated — no manual intervention required (2026-08-01)** — Three root-cause build failures fixed so libplacebo builds end-to-end without any patching outside the builder:
+  1. **SPIRV not found** — libplacebo meson requires `-Dvulkan-sdk=PATH` to populate `vulkan_lib_dirs`; without it `cxx.find_library('SPIRV', dirs: vulkan_lib_dirs)` always fails. `build_libplacebo()` now passes `-Dvulkan-sdk={workspace}` so both SPIRV and Vulkan headers resolve correctly.
+  2. **glslang not found (upstream inconsistency)** — `src/glsl/meson.build` line 62 calls `cxx.find_library('glslang')` without a `dirs:` argument (unlike the adjacent SPIRV call which has `dirs: vulkan_lib_dirs`). MacPorts clang reports only its own LLVM lib dir as the system search path, so glslang installed in the workspace is never found. Fix: `build_libplacebo()` patches the single line before running meson (idempotent; checks original text); reverts naturally when the build directory is cleaned.
+  3. **fast_float headers missing** — covered by the `fast-float` component above.
+
 - **libplacebo Stage 3 — macOS support + permanent component (2026-08-01)** — libplacebo is now always built on all platforms (Linux, macOS, Windows UCRT64); it is no longer opt-in. Vulkan GPU acceleration inside libplacebo is controlled separately by the new `enable_libplacebo_vulkan` config flag (default `false`). Changes:
   - `components.py`: removed `linux_only=True` from `libplacebo` Component; removed `-Dvulkan=enabled` from static `configure_args` (now injected at build time by `build_libplacebo()`).
   - `builder.py` `build_libplacebo()`: computes `use_vulkan` from `enable_libplacebo_vulkan` + `vulkan_available` + `full_static` gate; appends `-Dvulkan=enabled` or `-Dvulkan=disabled` to meson args. On macOS with Vulkan enabled, extends `LIBRARY_PATH` and `PKG_CONFIG_PATH` with LunarG SDK paths (`/usr/local/lib`, `/usr/local/lib/pkgconfig`) so `dependency('vulkan')` and `cxx.find_library('vulkan')` succeed in Meson.
@@ -56,6 +63,14 @@ All notable changes to the FFmpeg Builder project.
 - **System giflib policy across all platforms** — `giflib` is now treated as a required system-provided component across Linux, macOS, Windows WSL2, and Windows MSYS2-UCRT64. Source-download/build fallback for giflib is removed.
 
 ### Fixed
+
+- **Start screen shows configured compiler instead of auto-detected (2026-08-01)** — `system_report.py` previously displayed the highest-version MacPorts clang found on the system (e.g. clang-18), while the actual build uses the version configured in `build_config.yaml` (`macos.clang: macports-clang-17`). This matters because OpenMP support requires a specific MacPorts clang; the displayed version must match the compiler that will be used. Fix: `SystemReportGenerator` now accepts an optional `config` argument; `generate()` reads `config.macos.clang` and stores it in the new `SystemReport.configured_clang` field; `get_compiler_info()` resolves `macports-clang-N` → `clang-mp-N` (same logic as `builder.py`) and returns that version if resolvable, falling back to auto-detect otherwise.
+
+- **`macports-clang-N` config entry not resolved to actual binary (2026-08-01)** — `build_config.yaml` stores the compiler as `macports-clang-17` (human-readable), but the binary on disk is `clang-mp-17`. `shutil.which('macports-clang-17')` always returned `None`, causing the builder to silently fall back to auto-detected clang (highest installed version, e.g. clang-18) instead of the configured one. `builder.py` now translates `macports-clang-N` → `clang-mp-N` before calling `shutil.which()`.
+
+- **`_find_macports_clang()` returned non-deterministic version (2026-08-01)** — The function previously returned the first result from `Path.glob("clang-mp-[0-9]*")`, whose order depends on the filesystem. Now sorts candidates by version number (integer) and returns the highest, making auto-detection deterministic.
+
+- **HW accel display missing Vulkan on macOS start screen (2026-08-01)** — `system_report.py::get_hardware_acceleration_status()` macOS branch hardcoded `VideoToolbox=True, OpenCL=True` without checking `vulkan_available`. Fixed to use dynamic `vulkan_available` / `opencl_available` flags from `PlatformInfo` so the start screen correctly lists all detected accelerators including Vulkan.
 
 - **macOS OpenMP runtime linker resolution (`ld: library not found for -lomp`)** — OpenMP setup now resolves the runtime library location dynamically (`libomp`/`libgomp`/`libiomp5`) across common macOS toolchain paths (MacPorts/Homebrew), adds the matching `-L` and `-Wl,-rpath` flags, and surfaces a clear configuration error when no compatible runtime is installed.
 
