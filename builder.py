@@ -2326,7 +2326,17 @@ class FFmpegBuilder:
                 pc_file.write_text(text)
 
     def build_libplacebo(self, component: Component, source_dir: Path) -> None:
-        """Build libplacebo with Vulkan and glslang support.
+        """Build libplacebo with optional Vulkan acceleration.
+
+        Vulkan support is enabled when all three conditions hold:
+          - config.enable_libplacebo_vulkan is True
+          - platform_info.vulkan_available is True
+          - NOT (full_static AND Linux) — no static libvulkan.so exists on Linux
+
+        On macOS the system Vulkan ICD loader (libvulkan.dylib from the LunarG
+        SDK) is used; no static restriction applies.  LIBRARY_PATH and
+        PKG_CONFIG_PATH are extended to include system Vulkan locations so that
+        Meson's dependency('vulkan') probe succeeds.
 
         Uses a custom build path to set LIBRARY_PATH so Meson's
         cxx.find_library() prefers the workspace-built static glslang/SPIRV
@@ -2359,12 +2369,33 @@ class FFmpegBuilder:
                 log_file,
             )
 
+        # Determine whether to enable Vulkan inside libplacebo.
+        pi = self.platform_detector.platform_info
+        vulkan_ok = (
+            self.config.enable_libplacebo_vulkan
+            and pi.vulkan_available
+            and not (self.config.full_static and self.platform == "linux")
+        )
+        vulkan_flag = "-Dvulkan=enabled" if vulkan_ok else "-Dvulkan=disabled"
+
         # Make workspace static libs take priority over system libs for
         # cxx.find_library() calls inside libplacebo's meson.build.
         # GCC respects LIBRARY_PATH when resolving library names.
         ws = self._ws_str()
         existing_lp = env.get("LIBRARY_PATH", "")
         new_lp = f"{ws}/lib:{ws}/lib64"
+
+        if self.platform == "darwin" and vulkan_ok:
+            # LunarG SDK installs to /usr/local/lib; add it so Meson's
+            # dependency('vulkan') / cxx.find_library('vulkan') succeeds.
+            new_lp = f"{new_lp}:/usr/local/lib"
+            existing_pkgcp = env.get("PKG_CONFIG_PATH", "")
+            vulkan_pkgcp = "/usr/local/lib/pkgconfig:/usr/local/share/vulkan/registry"
+            env["PKG_CONFIG_PATH"] = (
+                f"{ws}/lib/pkgconfig:{ws}/lib64/pkgconfig:{vulkan_pkgcp}"
+                + (f":{existing_pkgcp}" if existing_pkgcp else "")
+            )
+
         env["LIBRARY_PATH"] = f"{new_lp}:{existing_lp}" if existing_lp else new_lp
 
         if self._is_windows_ucrt64_backend():
@@ -2373,6 +2404,7 @@ class FFmpegBuilder:
         meson_args = [
             arg.replace("{workspace}", ws) for arg in component.configure_args
         ]
+        meson_args.append(vulkan_flag)
 
         result, log_file = self.executor.execute_with_log(
             ["meson", "setup", "build"] + meson_args,
@@ -2628,10 +2660,22 @@ class FFmpegBuilder:
         # libplacebo links against the system Vulkan ICD loader at runtime.
         # On Linux the loader is libvulkan.so; it must appear in extralibs so
         # the static FFmpeg binary resolves Vulkan symbols at link time.
+        # On macOS the loader is libvulkan.dylib (LunarG SDK in /usr/local/lib);
+        # -L/usr/local/lib is added so the linker finds it.
         # On Windows UCRT64 the loader (vulkan-1.dll) is auto-discovered via
         # pkg-config Libs, so no extra flag is needed there.
-        if "libplacebo" in built_components and self.platform == "linux":
-            self.extralibs += " -lvulkan"
+        if "libplacebo" in built_components:
+            pi = self.platform_detector.platform_info
+            placebo_vulkan = (
+                self.config.enable_libplacebo_vulkan
+                and pi.vulkan_available
+                and not (self.config.full_static and self.platform == "linux")
+            )
+            if placebo_vulkan:
+                if self.platform == "linux":
+                    self.extralibs += " -lvulkan"
+                elif self.platform == "darwin":
+                    self.extralibs += " -L/usr/local/lib -lvulkan"
 
         # Strip leading/trailing whitespace that accumulates when starting from "".
         self.extralibs = self.extralibs.strip()

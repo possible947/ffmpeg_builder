@@ -140,7 +140,8 @@ class SystemReportScreen(UIScreen):
         config_table.add_row("Full Static", "Yes" if config.full_static else "No")
         config_table.add_row("libvmaf", "Yes" if config.enable_libvmaf else "No")
         config_table.add_row("libvmaf CUDA", "Yes" if config.enable_libvmaf_cuda else "No")
-        config_table.add_row("libplacebo", "Yes" if config.enable_libplacebo else "No")
+        config_table.add_row("libplacebo", "Yes")
+        config_table.add_row("libplacebo Vulkan", "Yes" if config.enable_libplacebo_vulkan else "No")
         config_table.add_row("Parallel Jobs", str(config.num_jobs))
         config_table.add_row(
             "Async Downloads",
@@ -321,9 +322,9 @@ class ConfigScreen(UIScreen):
             "Enable CUDA path for libvmaf when supported?",
             default=config.enable_libvmaf_cuda,
         )
-        config.enable_libplacebo = Confirm.ask(
-            "Enable libplacebo Vulkan processing (requires Vulkan, disabled on full_static Linux)?",
-            default=config.enable_libplacebo,
+        config.enable_libplacebo_vulkan = Confirm.ask(
+            "Enable libplacebo Vulkan GPU processing (requires Vulkan; disabled on full_static Linux)?",
+            default=config.enable_libplacebo_vulkan,
         )
         config.disable_lv2 = Confirm.ask("Disable LV2 libraries?", default=config.disable_lv2)
         jobs = Prompt.ask("Number of parallel jobs", default=str(config.num_jobs))

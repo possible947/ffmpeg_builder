@@ -5,7 +5,7 @@ native_build: true
 full_static: false
 enable_libvmaf: true
 enable_libvmaf_cuda: true
-enable_libplacebo: false
+enable_libplacebo_vulkan: false
 disable_lv2: false
 openmp: true
 num_jobs: auto
