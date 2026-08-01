@@ -108,7 +108,6 @@ class FFmpegBuilderApp:
             config.disable_lv2,
             config.enable_libvmaf,
             self.platform_info,
-            enable_libplacebo=config.enable_libplacebo,
             full_static=config.full_static,
         )
 

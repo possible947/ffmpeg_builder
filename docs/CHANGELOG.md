@@ -6,17 +6,27 @@ All notable changes to the FFmpeg Builder project.
 
 ### Planned — libplacebo Vulkan integration (3 phases)
 
-> **Stage 1 ✅ released 2026-07-25** — Linux + Windows WSL2 + Windows MSYS2-UCRT64. No lcms2 colour-management. libplacebo is disabled by default (`enable_libplacebo: false`). Only activates when `vulkan_available` is detected at runtime. Disabled automatically when `full_static: true` on Linux (system `libvulkan.so` is required at link time and cannot be bundled statically). Verified: Windows 11 + MSYS2 UCRT64 / GCC 16.1.0 / Intel Arc A750 + NVIDIA TITAN V.
+> **Stage 1 ✅ released 2026-07-25** — Linux + Windows WSL2 + Windows MSYS2-UCRT64. libplacebo disabled by default. Only activates when `vulkan_available` is detected at runtime. Disabled automatically when `full_static: true` on Linux. Verified: Windows 11 + MSYS2 UCRT64 / GCC 16.1.0 / Intel Arc A750 + NVIDIA TITAN V.
 >
-> **Stage 2 (next)** — Same platform set, plus `liblcms2` as a build component providing colour-space conversion inside libplacebo. Adds `liblcms2` component (Meson/autotools), `-Dlcms=enabled` in libplacebo configure, and `-llcms2` extralibs pass through to FFmpeg. Stage 1 full_static restriction carries over.
+> **Stage 2 (next)** — Same platform set plus `liblcms2` build component providing colour-space conversion inside libplacebo. Adds `liblcms2` component (Meson/autotools), `-Dlcms=enabled` in libplacebo configure, and `-llcms2` extralibs pass through to FFmpeg. Stage 1 full_static restriction carries over.
 >
-> **Stage 3** — Add macOS as a supported platform (MoltenVK backend). Requires detecting MoltenVK/`VK_ICD_FILENAMES` at platform-detect time. Remove `linux_only` restriction; add macOS-specific configure overrides and link flags. Stage 1/2 full_static restriction does not apply on macOS (frameworks handle Vulkan).
+> **Stage 3 ✅ released 2026-08-01** — macOS support added. libplacebo is now a permanent component (always built). Vulkan GPU acceleration is opt-in via `enable_libplacebo_vulkan`. System Vulkan ICD loader (`libvulkan.dylib`, LunarG SDK `/usr/local/lib/`) is used on macOS; no `full_static` restriction applies. Removes `linux_only` restriction from the libplacebo component.
 
 ### Rules
 
-- **libplacebo + liblcms2 are always disabled when `full_static: true` (Linux)** — `libvulkan.so` (system Vulkan ICD loader) is a runtime shared library with no static archive; linking FFmpeg fully statically against it is not supported. When `full_static: true` the builder skips `libplacebo` (and `liblcms2` in Stage 2) even if `enable_libplacebo: true` and `vulkan_available: true`.
+- **libplacebo Vulkan path is disabled when `full_static: true` (Linux)** — `libvulkan.so` (system Vulkan ICD loader) is a runtime shared library with no static archive; `-Dvulkan=disabled` is passed to meson in this case. On macOS `libvulkan.dylib` is linked normally, so no restriction applies.
+- **libplacebo is now always built** — `enable_libplacebo_vulkan` controls only whether Vulkan GPU acceleration is compiled in (`-Dvulkan=enabled/disabled`). Software-side libplacebo features (tone mapping, colour space conversion, scaling) are always available.
 
 ### Added
+
+- **libplacebo Stage 3 — macOS support + permanent component (2026-08-01)** — libplacebo is now always built on all platforms (Linux, macOS, Windows UCRT64); it is no longer opt-in. Vulkan GPU acceleration inside libplacebo is controlled separately by the new `enable_libplacebo_vulkan` config flag (default `false`). Changes:
+  - `components.py`: removed `linux_only=True` from `libplacebo` Component; removed `-Dvulkan=enabled` from static `configure_args` (now injected at build time by `build_libplacebo()`).
+  - `builder.py` `build_libplacebo()`: computes `use_vulkan` from `enable_libplacebo_vulkan` + `vulkan_available` + `full_static` gate; appends `-Dvulkan=enabled` or `-Dvulkan=disabled` to meson args. On macOS with Vulkan enabled, extends `LIBRARY_PATH` and `PKG_CONFIG_PATH` with LunarG SDK paths (`/usr/local/lib`, `/usr/local/lib/pkgconfig`) so `dependency('vulkan')` and `cxx.find_library('vulkan')` succeed in Meson.
+  - `builder.py` FFmpeg extralibs: on `darwin` with libplacebo+Vulkan adds `-L/usr/local/lib -lvulkan`; on `linux` keeps the existing `-lvulkan`.
+  - `config.py`: `enable_libplacebo: bool` replaced by `enable_libplacebo_vulkan: bool = False`.
+  - `system_report.py`: start-screen "libplacebo" row now always shows "Yes"; new "libplacebo Vulkan" row reflects `enable_libplacebo_vulkan`.
+  - `build_config.yaml`: key renamed to `enable_libplacebo_vulkan`.
+  - Component count on macOS: 52 (pre-detection-fix) → 54 (Vulkan detection fix) → **55** (libplacebo now permanent).
 
 - **macOS Vulkan + OpenCL detection fix** — `_check_vulkan()` and `_check_opencl()` were previously called only for Linux/Windows backends; on macOS they were silently skipped, leaving `vulkan_available` and `opencl_available` as `False` despite a working LunarG Vulkan SDK and `OpenCL.framework` being present. Fixed by moving both checks outside the Linux/Windows-only gate so they run on all platforms. Additionally:
   - `_check_vulkan()` now searches `/opt/local/include/vulkan/vulkan.h` (MacPorts) and `/opt/homebrew/include/vulkan/vulkan.h` (Homebrew ARM) in addition to `/usr/local`.
