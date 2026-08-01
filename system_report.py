@@ -74,7 +74,8 @@ class SystemReport:
         
         if self.platform_info.is_macos:
             status["VideoToolbox"] = True  # Always available on macOS
-            status["OpenCL"] = True  # Always available on macOS
+            status["Vulkan"] = self.platform_info.vulkan_available
+            status["OpenCL"] = self.platform_info.opencl_available
         elif self.platform_info.is_linux or self.platform_info.is_windows:
             status["CUDA"] = self.platform_info.cuda_available
             status["libvmaf_cuda"] = self.platform_info.libvmaf_cuda_supported
