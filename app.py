@@ -36,7 +36,12 @@ class FFmpegBuilderApp:
         self.platform_detector = PlatformDetector()
         self.system_info, self.platform_info, self.tools = self.platform_detector.detect_all()
 
-        report_gen = SystemReportGenerator(self.system_info, self.platform_info, self.tools)
+        report_gen = SystemReportGenerator(
+            self.system_info,
+            self.platform_info,
+            self.tools,
+            config=self.config_manager.load(),
+        )
         self.system_report = report_gen.generate()
 
         self.registry = ComponentRegistry()
