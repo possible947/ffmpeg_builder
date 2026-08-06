@@ -146,6 +146,7 @@ class FFmpegBuilder:
         step_name: str,
         work_dir: Path,
         env: Dict[str, str],
+        stdin: Optional[str] = None,
     ) -> Tuple[ExecutionResult, Path]:
         """Mark status, execute a shell command, and raise on failure.
 
@@ -166,6 +167,7 @@ class FFmpegBuilder:
             step_name: Internal step identifier (used for log-file naming).
             work_dir: Working directory for execution.
             env: Environment variables.
+            stdin: Optional string passed as process stdin (e.g. ar script).
 
         Returns:
             ``(result, log_file)`` on success.
@@ -177,7 +179,7 @@ class FFmpegBuilder:
             component.name, status, component.version, detail=detail
         )
         result, log_file = self.executor.execute_with_log(
-            command, component.name, step_name, work_dir, env
+            command, component.name, step_name, work_dir, env, stdin=stdin
         )
         if not result.success:
             raise BuildError(component.name, error_msg, log_file)
@@ -889,9 +891,18 @@ class FFmpegBuilder:
                     staging.mkdir(parents=True)
                     tar.extractall(staging, filter="data")
 
-                    # Move contents of the top-level directory into target_dir
-                    for item in sorted(staging.iterdir()):
-                        item.rename(target_dir / item.name)
+                    # Move contents of the top-level directory into target_dir.
+                    # When strip_components=1, archives typically contain a single
+                    # top-level directory whose contents should be promoted.
+                    top_items = list(staging.iterdir())
+                    if len(top_items) == 1 and top_items[0].is_dir():
+                        # Strip the top-level directory: move its contents up.
+                        for child in sorted(top_items[0].iterdir()):
+                            child.rename(target_dir / child.name)
+                    else:
+                        # Fallback: move items as-is (should not happen normally).
+                        for item in sorted(staging.iterdir()):
+                            item.rename(target_dir / item.name)
 
                     if staging.exists():
                         _rmtree(staging)
@@ -1571,6 +1582,7 @@ class FFmpegBuilder:
                 "merge-libs",
                 eight_dir,
                 env,
+                stdin=m_script,
             )
 
         self._run_step(
