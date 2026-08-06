@@ -4,6 +4,29 @@ All notable changes to the FFmpeg Builder project.
 
 ## [Unreleased]
 
+### Code Review Fixes (16 items, 15 applied — only Fix #16 deferred)
+
+> Full plan in `docs/Fix-Plan.md`. Applied incrementally; each item tracked below with current status.
+
+| # | Fix | Severity | File(s) | Status | Notes |
+|---|-----|----------|---------|--------|-------|
+| 1 | Dead string interpolation in detail strings (`'make -jself.num_jobs'` literal) | 🔴 High | `builder.py:1231,1754,1832` | ✅ DONE 2026-08-05 | Changed to f-strings `f"make -j{self.num_jobs}"`; verified no remaining dead interpolations via grep |
+| 2 | Unsafe tar extraction with in-place member mutation | 🔴 High | `builder.py` `_download_and_extract()` | ✅ DONE 2026-08-06 | Replaced in-place member mutation with staging-directory approach; extract to temp dir, promote contents up one level, cleanup. Added `filter='data'` for secure extraction on Python 3.12+ |
+| 3 | Race condition in `AsyncDownloadManager.get()` — lock released between futures check and `future.result()` | 🟠 Med-High | `downloader.py` | ✅ DONE 2026-08-06 | Added per-file `threading.Event` tracking; changed lock to `RLock`; `get()` waits on event instead of calling `future.result()` directly. `_download_done()` sets event + cleans up both futures and events dicts |
+| 4 | StateManager not thread-safe — concurrent writes to JSON from async download callbacks + main loop | 🟠 Med-High | `state.py` | ✅ DONE 2026-08-05 | Added `threading.RLock`; wrapped `mark_component_status`, `update_progress`, `save`, `reset`; listener fires outside lock |
+| 5 | ~60 components hardcoded in Python (`_build_components()`) | 🟡 Medium | `components.py` | ✅ DONE 2026-08-06 | Created `components.yaml` (774 lines, 63 components); replaced ~850 lines of hardcoded Component constructors with YAML loader. Public API unchanged. Added `_gen_components_yaml.py` one-shot generator |
+| 6 | Duplicated build orchestration logic (~100+ lines repeated per component) | 🟡 Medium | `builder.py` (all custom build fn) | ✅ DONE 2026-08-06 | Extracted `_run_step()`, `_run_make()`, `_run_install()` helpers. Refactored all custom build methods: openssl, x264, x265, libvpx, zimg, libvorbis, libjxl, libvmaf, srt, libzmq, libplacebo, glslang, ninja, ffmpeg |
+| 7 | Local imports scattered inside methods (`shutil`, `subprocess`) | 🟡 Medium | `builder.py:652,706,1530,1667` | ✅ DONE 2026-08-05 | Moved to top-level; added `import subprocess` + `import shlex`; removed all local imports |
+| 8 | No tests despite pytest in dev dependencies | 🟡 Medium | N/A (new `tests/`) | ✅ DONE 2026-08-06 | Added `tests/` with 56 tests across 3 modules: test_config.py, test_state.py, test_components.py. All passing |
+| 9 | Shell injection surface in `_execute_post_install()` — `{workspace}` interpolated into `sh -c` | 🟡 Medium | `builder.py` | ✅ DONE 2026-08-05 | Wrapped workspace path with `shlex.quote()`, added `import shlex` to top-level |
+| 10 | HTTP fallback downloads without warning (SSL verification not explicit) | 🟢 Low-Med | `downloader.py` `_candidate_urls()` | ✅ DONE 2026-08-05 | Added `logging.warning` when HTTPS→HTTP fallback occurs |
+| 11 | Typo: directory `thrid_party/` → should be `third_party/` | 🟢 Low | tree, `build_config.yaml`, `config.py`, `downloader.py` | ✅ DONE 2026-08-06 | Renamed directory, updated all references in config files and source code |
+| 12 | `requires-python = ">=3.8"` but code uses 3.10+ features (f-strings, kw-only dataclasses) and runs on Python 3.14 | 🟢 Low | `pyproject.toml` | ✅ DONE 2026-08-05 | Updated to `">=3.10"`, replaced 3.8/3.9 classifiers with 3.12/3.13/3.14 |
+| 13 | `_amd_gpu_detected` used as instance attr without declaration in `__init__` | 🟢 Low | `platform_detect.py` | ✅ DONE 2026-08-05 | Declared `self._amd_gpu_detected = False` in `PlatformDetector.__init__` |
+| 14 | Unused dependencies `packaging>=23.0`, `psutil>=5.9.0` in pyproject.toml | 🟢 Low | `pyproject.toml` | ✅ DONE 2026-08-05 | Verified no project-source imports; removed from `[project] dependencies` |
+| 15 | Inconsistent quoting style throughout codebase | 🟢 Low | all `.py` files | ✅ DONE 2026-08-06 | Ran `black .` + `isort .`; 21 files reformatted/re-ordered. Updated pyproject.toml target-version from py38 to py310 |
+| 16 | `builder.py` single file at 2955 lines — split into modules | 🟢 Low | `builder.py` | 🔜 DEFERRED | Split into build_steps.py, component_builders.py, release_bundle.py; depends on Fix #6 first |
+
 ### Planned — libplacebo Vulkan integration (3 phases)
 
 > **Stage 1 ✅ released 2026-07-25** — Linux + Windows WSL2 + Windows MSYS2-UCRT64. No lcms2 colour-management. libplacebo is disabled by default (`enable_libplacebo: false`). Only activates when `vulkan_available` is detected at runtime. Disabled automatically when `full_static: true` on Linux (system `libvulkan.so` is required at link time and cannot be bundled statically). Verified: Windows 11 + MSYS2 UCRT64 / GCC 16.1.0 / Intel Arc A750 + NVIDIA TITAN V.
@@ -30,6 +53,7 @@ All notable changes to the FFmpeg Builder project.
 
 ### Changed
 
+- **Build orchestration refactor (Fix #6)** — Extracted 4 private helper methods (`_execute_configure()`, `_execute_build_command()`, `_execute_make()`, `_execute_install()`) to eliminate ~100 lines of duplicated execute→check→mark logic across all custom build functions. Each custom build method now delegates the repeated state management, execution, success checking, and error-raising to these helpers. Remaining `if not result.success:` patterns are in legitimate non-standard cases (inside helpers, special post-install `sh -c`, version detection, OpenSSL configdata.pm patching, runtime dependency readers)
 - **`--enable-pthreads` → `--enable-w32threads` on UCRT64** — POSIX pthreads are not a system library on MSYS2 UCRT64; the builder now passes `--enable-w32threads` to FFmpeg configure when the backend is `windows-msys2-ucrt64`. All other platforms continue to use `--enable-pthreads`
 
 ### Fixed

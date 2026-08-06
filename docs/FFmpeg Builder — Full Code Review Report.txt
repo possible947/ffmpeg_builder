@@ -1,0 +1,215 @@
+FFmpeg Builder — Full Code Review Report16
+
+  Project Overview
+
+  A well-structured Python application (~5,000+ lines across 12 source files + UI modules) that orchestrates custom FFmpeg 8.1 builds with ~60 configurable components across Linux, macOS, and Windows (MSYS2 UCRT64). Architecture is clean and
+  modular.
+
+  ---
+
+  🔴 CRITICAL / HIGH PRIORITY
+
+  1. Dead string interpolation — detail strings show literal variable names
+  Severity: High (silent functional bug)
+  Files: builder.py lines 1231, 1754, 1832, and others
+
+  Several detail= arguments use single-quoted strings containing what looks like f-string syntax but is not an f-string:
+
+    # builder.py:1231 — inside build_giflib()
+    detail='make -jself.num_jobs',   # Shows literally: "make -jself.num_jobs"
+
+    # builder.py:1754 — inside build_zimg()
+    detail='make -jself.num_jobs',   # Same bug
+
+    # builder.py:1832 — inside build_libvorbis()
+    detail='make -jself.num_jobs',   # Same bug
+
+  The dashboard displays make -jself.num_jobs literally instead of make -j8. Other examples on lines 1499, 1570, 1952, 2463 use correct f-strings or plain strings. Fix: change to f"make
+  -j{self.num_jobs}".
+
+  ---
+
+  2. Unsafe tar extraction with in-place member mutation
+  Severity: High (potential data loss / incorrect extraction)
+  File: builder.py, _download_and_extract():
+
+    with tarfile.open(archive_path, "r:*") as tar:
+        if component.archive_strip_components == 1:
+            for member in tar.getmembers():
+                member_path = Path(member.name)
+                if len(member_path.parts) > 1:
+                    member.name = str(Path(*member_path.parts[1:]))
+                    if member.name:
+                        tar.extract(member, target_dir)
+
+  Problems:
+  - tar.getmembers() returns a list and you mutate .name in-place — the original object's name is changed. While extracting individual members is safe, this pattern is error-prone and has been known to cause issues with some tarfile
+  versions.
+  - Members whose top-level directory name differs from others will land at mixed depths. If an archive has a/b/ and c/d/e/, stripping 1 component gives b/ and d/e/ — correct, but the logic skips any member with exactly 1 path part (top-level
+  files).
+  - Recommendation: Use tar.extractall() then rename, or iterate over a copy of the member list and use explicit os.rename / shutil.move.
+
+  ---
+
+  3. Race condition in AsyncDownloadManager
+  Severity: Medium-High
+  File: downloader.py, AsyncDownloadManager.get()
+
+    def get(self, component: Any) -> Path:
+        filename = component.get_archive_filename()
+        with self._lock:
+            future = self.futures.get(filename)   # Lock released here!
+
+        if future is None:
+            ...                                    # Gap: another thread can schedule now
+        try:
+            return future.result()                 # future could have failed
+
+  The lock is released between checking self.futures and calling future.result(). Another thread could schedule a new download or clear the entry in that gap. Fix: hold the lock through the lookup + wait, or use a per-file event/condition
+  variable.
+
+  ---
+
+  4. StateManager not thread-safe
+  Severity: Medium-High
+  File: state.py
+
+  StateManager has no internal locking but its callbacks fire from async download threads via self.status_listener(...). The main build loop simultaneously calls mark_component_status() and save(). Concurrent writes to the JSON file can cause corruption. Fix: add a threading.RLock to all state
+  mutations.
+
+  ---
+
+  🟡 MEDIUM PRIORITY
+
+  5. Massive hardcoded component registry
+  Severity: Medium (maintainability)
+  File: components.py
+
+  All ~60 components are defined inline as Python code in _build_components(). This makes version updates, adding new components, and platform-specific tweaks require Python edits and redeployment. Recommendation: Load component definitions from a YAML/JSON file alongside build_config.yaml. This also enables
+  non-technical users to tweak versions.
+
+  6. Duplicate build orchestration logic
+  Severity: Medium (DRY violation)
+  File: builder.py
+
+  Every custom build function (build_giflib, build_openssl, build_x264, build_x265, build_libvpx, etc.) repeats the same 3-step pattern:
+
+    result, log = self.executor.execute_with_log(...)   # configure/build
+    if not result.success: raise BuildError(...)
+    self.state_manager.mark_component_status(..., BUILDING)
+    result, log = self.executor.execute_make(...)       # build
+    if not result.success: raise BuildError(...)
+    self.state_manager.mark_component_status(..., INSTALLING)
+    ...  # install
+
+  This is ~100+ lines of repeated structure per component. Recommendation: Extract a build_step() helper that takes (command, step_name, status_enum) and handles the execute → check → mark
+  cycle.
+
+  7. Local imports scattered throughout methods
+  Severity: Medium (code hygiene)
+  File: builder.py lines 652-653, 706, 1530, 1667
+
+    # Inside _is_system_component_available():
+    import shutil
+    import subprocess
+
+    # Inside build_x265():
+    import subprocess
+
+  Move all imports to the top of the file. PEP 8 recommends top-level imports unless there's a circular import problem (which doesn't exist here).
+
+  8. Missing tests despite dev dependencies
+  Severity: Medium (quality assurance)
+  pyproject.toml declares pytest, pytest-cov, black, mypy under [dev], but no test files exist. For a tool that runs dangerous system commands, automated testing of the config parsing, state serialization, component filtering, and path normalization logic is
+  important.
+
+  9. Shell injection surface in post_install
+  Severity: Medium (security)
+  File: builder.py, _execute_post_install():
+
+    cmd = component.post_install.replace("{workspace}", self._ws_str())
+    result, log_file = self.executor.execute_with_log(
+        ["sh", "-c", cmd], ...
+
+  The {workspace} value is interpolated directly into a shell command string. If self._ws_str() contains untrusted input (it doesn't now, but the pattern is unsafe), this is shell injection. Recommendation: Use shlex.quote() for workspace path in shell context, or pass workspace as an environment variable
+  instead.
+
+  10. SSL verification not configured
+  Severity: Low-Medium
+  File: downloader.py
+
+    response = requests.get(url, stream=True, timeout=300)
+
+  No explicit verify=True. While requests defaults to verifying certs, the _candidate_urls method adds HTTP fallback URLs. This means some downloads may transit over unencrypted HTTP without warning. Consider adding a log message when falling back to
+  HTTP.
+
+  ---
+
+  🟢 LOW PRIORITY / STYLE
+
+  11. Typo in directory name
+  thrid_party/ → should be third_party/. Found in source tree and referenced in build_config.yaml, config.py, and downloader.py. This is a cosmetic issue but will confuse new
+  users.
+
+  12. pyproject.toml Python version mismatch
+  pyproject.toml lists requires-python = ">=3.8" and classifiers for 3.8-3.11, but the venv uses Python 3.14. The harness itself uses features like f-strings, dataclasses with kw-only fields — update requires-python to ">=3.10" at minimum and add the 3.12/3.13/3.14
+  classifiers.
+
+  13. _amd_gpu_detected used as instance attr without declaration
+  File: platform_detect.py
+
+    self._amd_gpu_detected = False   # Set in _detect_gpu_info()
+    ...
+    self.platform_info.amf_available = getattr(self, "_amd_gpu_detected", False)
+
+  This works but is fragile — if _detect_gpu_info() is never called (e.g., on macOS), the fallback getattr masks the missing attribute. Consider declaring it in __init__.
+
+  14. Unused imports
+  - import re in builder.py line 3 (used later, OK)
+  - packaging>=23.0 and psutil>=5.9.0 are listed as dependencies in pyproject.toml but are never imported anywhere in the codebase. Remove them to keep deps minimal.
+
+  15. Inconsistent quoting style
+  Mixed 'single' and "double" quotes throughout. The pyproject.toml configures black with line-length = 100, which is good, but consider running black . + isort to
+  normalize.
+
+  16. Large single file — builder.py at 2955 lines
+  Consider splitting builder.py into:
+  - build_steps.py — generic build step orchestration (configure → build → install helpers)
+  - component_builders.py — per-component custom build functions
+  - release_bundle.py — the make_release_bundle() and dependency collection logic
+
+  ---
+
+  📊 Summary Table
+
+  #  | Issue                                              | Severity    | File(s)                          | Effort
+  1  | Dead string interpolation (literal                 | 🔴 High     | builder.py:1231,1754,1832        | Trivial
+     | self.num_jobs)                                     |             |                                  |
+  2  | Unsafe tar member mutation during                  | 🔴 High     | builder.py _download_and_extract | Small
+     | extraction                                         |             |                                  |
+  3  | Race condition in AsyncDownloadManager.get()       | 🟠 Med-High | downloader.py                    | Small
+  4  | StateManager not thread-safe                       | 🟠 Med-High | state.py                         | Small
+  5  | All components hardcoded in                        | 🟡 Medium   | components.py                    | Large
+     | Python                                             |             |                                  |
+  6  | Duplicated build orchestration logic (~100+        | 🟡 Medium   | builder.py                       | Medium
+     | lines)                                             |             |                                  |
+  7  | Local imports scattered in                         | 🟡 Medium   | builder.py                       | Trivial
+     | methods                                            |             |                                  |
+  8  | No tests despite pytest in                         | 🟡 Medium   | N/A                              | Large
+     | deps                                               |             |                                  |
+  9  | Shell injection in post_install                    | 🟡 Medium   | builder.py                       | Small
+     | cmd                                                |             |                                  |
+  10 | HTTP fallback downloads without                    | 🟢 Low-Med  | downloader.py                    | Trivial
+     | warning                                            |             |                                  |
+  11 | Typo: thrid_party → third_party                    | 🟢 Low      | tree + config                    | Small
+  12 | requires-python = ">=3.8" but running              | 🟢 Low      | pyproject.toml                   | Trivial
+     | 3.14                                               |             |                                  |
+  13 | _amd_gpu_detected not declared in                  | 🟢 Low      | platform_detect.py               | Trivial
+     | __init__                                           |             |                                  |
+  14 | Unused dependencies (packaging,                    | 🟢 Low      | pyproject.toml                   | Trivial
+     | psutil)                                            |             |                                  |
+  15 | Inconsistent quoting style                         | 🟢 Low      | all                              | Trivial
+  16 | builder.py too large (2955                         | 🟢 Low      | builder.py                       | Large
+     | lines)                                             |             |                                  |
+
+  ---

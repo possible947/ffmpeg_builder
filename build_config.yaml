@@ -5,13 +5,13 @@ native_build: true
 full_static: false
 enable_libvmaf: true
 enable_libvmaf_cuda: true
-enable_libplacebo: false
+enable_libplacebo: true
 disable_lv2: false
 openmp: true
 num_jobs: auto
 async_downloads: true
 download_workers: 4
-source_archives_dir: thrid_party/sources
+source_archives_dir: third_party/sources
 allow_network_downloads: false
 macos:
   clang: macports-clang-17

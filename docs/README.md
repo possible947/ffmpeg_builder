@@ -10,7 +10,7 @@ FFmpeg Builder replaces the traditional bash `build-ffmpeg` script with a modern
 - **Platform Detection** — Automatic detection of CPU, RAM, GPU, compilers, and build tools
 - **Hardware Acceleration** — Detects and configures CUDA, Vulkan, VAAPI, AMF, and OpenCL support
 - **Resumable Builds** — JSON state file tracks progress; interrupted builds can be resumed
-- **Local source mirror by default** — Archives are read from `thrid_party/sources` first; network fallback is configurable
+- **Local source mirror by default** — Archives are read from `third_party/sources` first; network fallback is configurable
 - **Interactive Error Handling** — On failure, choose to retry, skip component, or abort
 - **YAML Configuration** — Human-readable build profiles with platform-specific settings
 - **~50 Components** — All codecs, libraries, and tools built from source in correct dependency order
@@ -133,7 +133,7 @@ python -m ffmpeg_builder
 
 Notes:
 
-- `thrid_party/sources` archives are stored with Git LFS; without `git lfs pull`, builds fail later during extract/configure stages.
+- `third_party/sources` archives are stored with Git LFS; without `git lfs pull`, builds fail later during extract/configure stages.
 - On distributions with externally managed system Python (PEP 668), always use `.venv` (do not install with global `pip`).
 
 ## Windows WSL2 (Ubuntu)
@@ -239,7 +239,7 @@ disable_lv2: false
 num_jobs: "auto"
 async_downloads: true
 download_workers: 4
-source_archives_dir: "thrid_party/sources"
+source_archives_dir: "third_party/sources"
 allow_network_downloads: false
 
 macos:
@@ -252,7 +252,7 @@ windows:
   prefer_system_packages: true
 ```
 
-By default, builds are **offline-first**: every archive must exist in `thrid_party/sources`.
+By default, builds are **offline-first**: every archive must exist in `third_party/sources`.
 To allow fetching missing archives from the network, set `allow_network_downloads: true`.
 
 ### Command Line

@@ -11,7 +11,7 @@ disable_lv2: false
 num_jobs: "auto"
 async_downloads: true
 download_workers: 4
-source_archives_dir: "thrid_party/sources"
+source_archives_dir: "third_party/sources"
 allow_network_downloads: false
 
 # macOS specific settings

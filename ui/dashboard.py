@@ -1,4 +1,5 @@
 """Live build dashboard for terminal progress."""
+
 from __future__ import annotations
 
 import threading
@@ -20,6 +21,7 @@ from ..state import ComponentStatus
 @dataclass
 class ComponentRow:
     """UI row for a build component."""
+
     index: int
     total: int
     name: str
@@ -260,10 +262,12 @@ class BuildDashboard:
         rendered = []
         for row in visible:
             pct = int(row.progress)
-            bar = '█' * (pct // 10) + '-' * ((100 - pct)//10)
+            bar = "█" * (pct // 10) + "-" * ((100 - pct) // 10)
             status_label = _STATUS_LABELS[row.status]
-            txt = (f"{row.index}/{row.total} {row.name:20.20} "
-                   f"{bar} {pct}% [{status_label}] | {row.detail}")
+            txt = (
+                f"{row.index}/{row.total} {row.name:20.20} "
+                f"{bar} {pct}% [{status_label}] | {row.detail}"
+            )
             rendered.append(Text(txt, style=_STATUS_STYLES[row.status]))
         # Pad so the component area always has the same height; messages panel stays anchored.
         for _ in range(height - len(rendered)):

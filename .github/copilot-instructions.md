@@ -49,5 +49,5 @@ Key boundaries:
 - Prefer metadata-driven customization (`platform_overrides`, `configure_args_override`, `skip_condition`, `custom_build_fn`) over ad-hoc per-component branching in generic build paths.
 - Preserve `ComponentStatus` values exactly (`pending`, `system`, `downloading`, `configuring`, `building`, `installing`, `completed`, `failed`, `skipped`) because state recovery and dashboard rendering depend on them.
 - Raise build failures as `BuildError(component, message, log_file)` so UI recovery can show actionable component + log context.
-- Maintain offline-first source behavior: archives resolve from `thrid_party/sources`; network fetching is opt-in via `allow_network_downloads`.
+- Maintain offline-first source behavior: archives resolve from `third_party/sources`; network fetching is opt-in via `allow_network_downloads`.
 - Treat `windows-msys2-ucrt64` as a distinct backend with explicit path normalization/system-package rules; do not generalize native Windows assumptions onto the UCRT64 flow.

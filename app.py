@@ -1,20 +1,21 @@
 """Main application class for FFmpeg Builder."""
+
 import os
 from pathlib import Path
 from typing import List, Optional
+
 from rich.console import Console
 from rich.live import Live
 
-from .components import Component
-from .config import ConfigManager, BuildConfig
-from .state import StateManager, ComponentStatus
+from .builder import BuildError, FFmpegBuilder, SkipComponent
+from .components import Component, ComponentRegistry
+from .config import BuildConfig, ConfigManager
 from .platform_detect import PlatformDetector
+from .state import ComponentStatus, StateManager
 from .system_report import SystemReportGenerator
-from .components import ComponentRegistry
-from .builder import FFmpegBuilder, BuildError, SkipComponent
 from .ui.dashboard import BuildDashboard
-from .ui.screens import SystemReportScreen, ConfigScreen, InfoScreen, FinalReportScreen, HelpScreen
 from .ui.error_handler import ErrorHandler
+from .ui.screens import ConfigScreen, FinalReportScreen, HelpScreen, InfoScreen, SystemReportScreen
 
 
 class FFmpegBuilderApp:
@@ -286,6 +287,7 @@ class FFmpegBuilderApp:
                     func(fpath)
                 except Exception:
                     pass
+
             shutil.rmtree(path, onerror=_on_error)
 
         self.state_manager.reset()

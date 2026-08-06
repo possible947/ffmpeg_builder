@@ -1,18 +1,20 @@
 """Platform detection and system information gathering."""
+
 import os
 import platform
 import re
-import subprocess
 import shutil
+import subprocess
 import tempfile
-from pathlib import Path
-from typing import Optional, Dict, List, Tuple
 from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 
 @dataclass
 class SystemInfo:
     """System information."""
+
     os_name: str = ""
     os_version: str = ""
     architecture: str = ""
@@ -20,7 +22,7 @@ class SystemInfo:
     cpu_cores: int = 0
     ram_gb: float = 0.0
     gpu_info: List[str] = field(default_factory=list)
-    
+
     def to_dict(self) -> Dict:
         """Convert to dictionary."""
         return {
@@ -30,31 +32,33 @@ class SystemInfo:
             "cpu_model": self.cpu_model,
             "cpu_cores": self.cpu_cores,
             "ram_gb": self.ram_gb,
-            "gpu_info": self.gpu_info
+            "gpu_info": self.gpu_info,
         }
 
 
 @dataclass
 class ToolInfo:
     """Information about a tool."""
+
     name: str
     path: Optional[str] = None
     version: Optional[str] = None
     available: bool = False
-    
+
     def to_dict(self) -> Dict:
         """Convert to dictionary."""
         return {
             "name": self.name,
             "path": self.path,
             "version": self.version,
-            "available": self.available
+            "available": self.available,
         }
 
 
 @dataclass
 class PlatformInfo:
     """Platform-specific information."""
+
     platform: str = "linux"
     build_backend: str = "linux-native"
     is_macos: bool = False
@@ -76,7 +80,7 @@ class PlatformInfo:
     amf_available: bool = False
     vulkan_available: bool = False
     opencl_available: bool = False
-    
+
     def to_dict(self) -> Dict:
         """Convert to dictionary."""
         return {
@@ -100,29 +104,30 @@ class PlatformInfo:
             "qsv_available": self.qsv_available,
             "amf_available": self.amf_available,
             "vulkan_available": self.vulkan_available,
-            "opencl_available": self.opencl_available
+            "opencl_available": self.opencl_available,
         }
 
 
 class PlatformDetector:
     """Detects platform and system information."""
-    
+
     def __init__(self):
         """Initialize platform detector."""
         self.system_info = SystemInfo()
         self.platform_info = PlatformInfo()
         self.tools: Dict[str, ToolInfo] = {}
-    
+        self._amd_gpu_detected = False
+
     def detect_all(self) -> Tuple[SystemInfo, PlatformInfo, Dict[str, ToolInfo]]:
         """Detect all system information.
-        
+
         Returns:
             Tuple of (SystemInfo, PlatformInfo, tools dict).
         """
         self._detect_system_info()
         self._detect_platform_info()
         self._detect_tools()
-        
+
         return self.system_info, self.platform_info, self.tools
 
     def get_platform_name(self) -> str:
@@ -132,16 +137,16 @@ class PlatformDetector:
     def get_build_backend_name(self) -> str:
         """Get normalized backend name (e.g. linux-wsl2, windows-msys2-ucrt64)."""
         return self.platform_info.build_backend
-    
+
     def get_multiarch_dir(self) -> str:
         """Get Linux multiarch directory suffix based on architecture.
-        
+
         Returns:
             Multiarch directory string (e.g., "x86_64-linux-gnu") or empty string.
         """
         if not self.platform_info.is_linux:
             return ""
-        
+
         arch = self.system_info.architecture
         arch_map = {
             "x86_64": "x86_64-linux-gnu",
@@ -152,12 +157,12 @@ class PlatformDetector:
             "i686": "i386-linux-gnu",
         }
         return arch_map.get(arch, "")
-    
+
     def _detect_system_info(self) -> None:
         """Detect system information."""
         self.system_info.os_name = platform.system()
         self.system_info.architecture = platform.machine()
-        
+
         # Get proper OS name and version
         if platform.system() == "Linux":
             try:
@@ -174,7 +179,7 @@ class PlatformDetector:
             self.system_info.os_version = platform.mac_ver()[0]
         else:
             self.system_info.os_version = platform.version()
-        
+
         # CPU info
         try:
             if platform.system() == "Darwin":
@@ -182,18 +187,15 @@ class PlatformDetector:
                     ["sysctl", "-n", "machdep.cpu.brand_string"],
                     capture_output=True,
                     text=True,
-                    timeout=5
+                    timeout=5,
                 )
                 self.system_info.cpu_model = result.stdout.strip()
-                
+
                 result = subprocess.run(
-                    ["sysctl", "-n", "hw.ncpu"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5
+                    ["sysctl", "-n", "hw.ncpu"], capture_output=True, text=True, timeout=5
                 )
                 self.system_info.cpu_cores = int(result.stdout.strip())
-                
+
             elif platform.system() == "Linux":
                 with open("/proc/cpuinfo", "r") as f:
                     content = f.read()
@@ -201,9 +203,9 @@ class PlatformDetector:
                         if "model name" in line:
                             self.system_info.cpu_model = line.split(":")[1].strip()
                             break
-                    
+
                     self.system_info.cpu_cores = content.count("processor")
-                
+
                 # RAM info
                 with open("/proc/meminfo", "r") as f:
                     for line in f:
@@ -211,7 +213,7 @@ class PlatformDetector:
                             ram_kb = int(line.split()[1])
                             self.system_info.ram_gb = ram_kb / (1024 * 1024)
                             break
-                
+
                 # GPU info
                 self._detect_gpu_info()
             elif (
@@ -221,27 +223,24 @@ class PlatformDetector:
                 or platform.system().startswith("CYGWIN")
             ):
                 self._detect_gpu_info_windows()
-                
+
         except Exception:
             pass
-        
+
         # macOS RAM
         if platform.system() == "Darwin":
             try:
                 result = subprocess.run(
-                    ["sysctl", "-n", "hw.memsize"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5
+                    ["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, timeout=5
                 )
                 ram_bytes = int(result.stdout.strip())
-                self.system_info.ram_gb = ram_bytes / (1024 ** 3)
+                self.system_info.ram_gb = ram_bytes / (1024**3)
             except Exception:
                 pass
-        
+
         if self.system_info.cpu_cores <= 0:
             self.system_info.cpu_cores = os.cpu_count() or 1
-        
+
         if self.system_info.ram_gb <= 0 and (
             platform.system() == "Windows"
             or platform.system().startswith("MSYS")
@@ -321,10 +320,10 @@ class PlatformDetector:
             status = MEMORYSTATUSEX()
             status.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
             ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status))
-            return status.ullTotalPhys / (1024 ** 3)
+            return status.ullTotalPhys / (1024**3)
         except Exception:
             return 0.0
-    
+
     def _detect_gpu_info(self) -> None:
         """Detect GPU information on Linux.
 
@@ -337,12 +336,7 @@ class PlatformDetector:
         lspci = shutil.which("lspci")
         if lspci:
             try:
-                result = subprocess.run(
-                    [lspci, "-nn"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5
-                )
+                result = subprocess.run([lspci, "-nn"], capture_output=True, text=True, timeout=5)
                 if result.returncode == 0:
                     for line in result.stdout.splitlines():
                         if (
@@ -352,7 +346,10 @@ class PlatformDetector:
                         ):
                             # Match vendor bracket and device model.
                             # Example: ... [AMD/ATI] Vega 20 [Radeon Pro VII/...] [1002:66a1] (rev 06)
-                            match = re.search(r"\[([A-Za-z/]+)\]\s+(.*?)\s+\[[0-9a-fA-F]{4}:[0-9a-fA-F]{4}\]", line)
+                            match = re.search(
+                                r"\[([A-Za-z/]+)\]\s+(.*?)\s+\[[0-9a-fA-F]{4}:[0-9a-fA-F]{4}\]",
+                                line,
+                            )
                             if match:
                                 vendor_label = match.group(1)
                                 model = match.group(2).split("[")[0].strip()
@@ -390,7 +387,7 @@ class PlatformDetector:
                                 self.system_info.gpu_info.append("Intel GPU")
             except Exception:
                 pass
-    
+
     def _detect_platform_info(self) -> None:
         """Detect platform-specific information."""
         sys_name = platform.system()
@@ -410,26 +407,25 @@ class PlatformDetector:
             self.platform_info.platform = "linux"
         self.platform_info.is_arm64 = platform.machine() in ("arm64", "aarch64")
         self._detect_msys2_mode()
-        
+
         # Detect WSL2
         if self.platform_info.is_linux:
             self.platform_info.is_wsl2 = self._check_wsl2()
         self.platform_info.build_backend = self._resolve_build_backend()
-        
+
         # Detect AMF on Linux: enable when an AMD GPU is present, since the
         # AMF headers component downloads the required headers from GPUOpen.
         if self.platform_info.is_linux:
             self.platform_info.amf_available = getattr(self, "_amd_gpu_detected", False)
         elif self.platform_info.is_windows:
             self.platform_info.amf_available = any(
-                "amd" in gpu.lower() or "radeon" in gpu.lower()
-                for gpu in self.system_info.gpu_info
+                "amd" in gpu.lower() or "radeon" in gpu.lower() for gpu in self.system_info.gpu_info
             )
-        
+
         # Detect macports clang on macOS
         if self.platform_info.is_macos:
             self.platform_info.macports_clang = self._find_macports_clang()
-        
+
         # Detect CUDA on Linux
         if self.platform_info.is_linux or self.platform_info.is_windows:
             self._detect_cuda()
@@ -467,7 +463,7 @@ class PlatformDetector:
             return "windows-native"
 
         return "unknown"
-    
+
     def _detect_cuda(self) -> None:
         """Detect CUDA installation."""
         # Try PATH first
@@ -477,18 +473,18 @@ class PlatformDetector:
             self.platform_info.cuda_path = nvcc_path
             self._detect_cuda_compute_capability()
             return
-        
+
         # Try common Linux CUDA installation paths
         cuda_paths = [
             Path("/usr/local/cuda/bin/nvcc"),
             Path("/usr/local/cuda-12/bin/nvcc"),
             Path("/usr/local/cuda-11/bin/nvcc"),
         ]
-        
+
         # Also check versioned paths like /usr/local/cuda-12.*
         for cuda_dir in Path("/usr/local").glob("cuda-*/bin/nvcc"):
             cuda_paths.append(cuda_dir)
-        
+
         if self.platform_info.is_windows:
             windows_cuda_root = Path("C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA")
             if windows_cuda_root.exists():
@@ -501,10 +497,10 @@ class PlatformDetector:
                 self.platform_info.cuda_path = str(nvcc)
                 self._detect_cuda_compute_capability()
                 return
-    
+
     def _detect_cuda_compute_capability(self) -> None:
         """Detect CUDA compute capability using nvidia-smi.
-        
+
         Queries all GPUs and returns the minimum compute capability
         to ensure compatibility with all installed GPUs.
         """
@@ -513,7 +509,7 @@ class PlatformDetector:
                 ["nvidia-smi", "--query-gpu=compute_cap", "--format=csv,noheader"],
                 capture_output=True,
                 text=True,
-                timeout=5
+                timeout=5,
             )
             if result.returncode == 0 and result.stdout.strip():
                 capabilities = []
@@ -521,7 +517,7 @@ class PlatformDetector:
                     cap = line.strip()
                     if cap and "." in cap:
                         capabilities.append(cap.replace(".", ""))
-                
+
                 if capabilities:
                     self.platform_info.cuda_compute_capability = min(capabilities)
         except Exception:
@@ -576,10 +572,10 @@ class PlatformDetector:
                 return result.returncode == 0
         except Exception:
             return False
-    
+
     def _check_wsl2(self) -> bool:
         """Check if running in WSL2 environment.
-        
+
         Returns:
             True if running in WSL2.
         """
@@ -589,10 +585,10 @@ class PlatformDetector:
                 return "microsoft" in version_info or "wsl" in version_info
         except Exception:
             return False
-    
+
     def _check_qsv(self) -> bool:
         """Check if Intel QSV is available.
-        
+
         Returns:
             True if Intel QSV is available.
         """
@@ -605,9 +601,7 @@ class PlatformDetector:
                 for pkg_name in ("vpl", "libvpl"):
                     try:
                         result = subprocess.run(
-                            ["pkg-config", "--exists", pkg_name],
-                            capture_output=True,
-                            timeout=5
+                            ["pkg-config", "--exists", pkg_name], capture_output=True, timeout=5
                         )
                         if result.returncode == 0:
                             return True
@@ -617,9 +611,7 @@ class PlatformDetector:
 
             try:
                 result = subprocess.run(
-                    ["pkg-config", "--exists", "libvpl"],
-                    capture_output=True,
-                    timeout=5
+                    ["pkg-config", "--exists", "libvpl"], capture_output=True, timeout=5
                 )
                 if result.returncode == 0:
                     return True
@@ -631,26 +623,21 @@ class PlatformDetector:
         # QSV is not supported in WSL2
         if self.platform_info.is_wsl2:
             return False
-        
+
         # QSV requires VAAPI
         if not self.platform_info.vaapi_available:
             return False
-        
+
         # Check for Intel GPU via vainfo
         if shutil.which("vainfo"):
             try:
-                result = subprocess.run(
-                    ["vainfo"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5
-                )
+                result = subprocess.run(["vainfo"], capture_output=True, text=True, timeout=5)
                 # Check for Intel driver (iHD or i965)
                 if "Intel" in result.stdout or "iHD" in result.stdout or "i965" in result.stdout:
                     return True
             except Exception:
                 pass
-        
+
         # Check for Intel GPU via PCI IDs (only display/3D class devices)
         display_class_prefixes = ("03", "0300", "0301", "0302", "0320", "0380")
         try:
@@ -667,17 +654,17 @@ class PlatformDetector:
                             return True
         except Exception:
             pass
-        
+
         return False
-    
+
     def _find_macports_clang(self) -> Optional[ToolInfo]:
         """Find macports clang.
-        
+
         Returns:
             ToolInfo for macports clang or None.
         """
         macports_bin = Path("/opt/local/bin")
-        
+
         # Look for clang-mp-*
         for clang_path in macports_bin.glob("clang-mp-*"):
             version = clang_path.name.replace("clang-mp-", "")
@@ -685,14 +672,14 @@ class PlatformDetector:
                 name=f"macports-clang-{version}",
                 path=str(clang_path),
                 version=version,
-                available=True
+                available=True,
             )
-        
+
         return None
-    
+
     def _check_vaapi(self) -> bool:
         """Check if VAAPI is available.
-        
+
         Returns:
             True if VAAPI is available.
         """
@@ -702,20 +689,18 @@ class PlatformDetector:
         # VAAPI is not supported in WSL2
         if self.platform_info.is_wsl2:
             return False
-        
+
         try:
             result = subprocess.run(
-                ["pkg-config", "--exists", "libva"],
-                capture_output=True,
-                timeout=5
+                ["pkg-config", "--exists", "libva"], capture_output=True, timeout=5
             )
             return result.returncode == 0
         except Exception:
             return False
-    
+
     def _check_amf(self) -> bool:
         """Check if AMF headers are available.
-        
+
         Returns:
             True if AMF is available.
         """
@@ -723,56 +708,56 @@ class PlatformDetector:
         amf_paths = [
             Path("/usr/include/AMF"),
             Path("/usr/local/include/AMF"),
-            Path("/opt/AMF/amf/public/include")
+            Path("/opt/AMF/amf/public/include"),
         ]
-        
+
         return any(path.exists() for path in amf_paths)
-    
+
     def _check_vulkan(self) -> bool:
         """Check if Vulkan SDK/headers are available.
-        
+
         Returns:
             True if Vulkan is available.
         """
         # Check pkg-config
         try:
             result = subprocess.run(
-                ["pkg-config", "--exists", "vulkan"],
-                capture_output=True,
-                timeout=5
+                ["pkg-config", "--exists", "vulkan"], capture_output=True, timeout=5
             )
             if result.returncode == 0:
                 return True
         except Exception:
             pass
-        
+
         # Check header files
         vulkan_header_paths = [
             Path("/usr/include/vulkan/vulkan.h"),
             Path("/usr/local/include/vulkan/vulkan.h"),
         ]
         if self.platform_info.is_windows:
-            vulkan_header_paths.extend([
-                Path("/ucrt64/include/vulkan/vulkan.h"),
-                Path("C:/msys64/ucrt64/include/vulkan/vulkan.h"),
-                Path("C:/VulkanSDK/Include/vulkan/vulkan.h"),
-            ])
+            vulkan_header_paths.extend(
+                [
+                    Path("/ucrt64/include/vulkan/vulkan.h"),
+                    Path("C:/msys64/ucrt64/include/vulkan/vulkan.h"),
+                    Path("C:/VulkanSDK/Include/vulkan/vulkan.h"),
+                ]
+            )
             vulkan_sdk = os.environ.get("VULKAN_SDK")
             if vulkan_sdk:
                 vulkan_header_paths.append(Path(vulkan_sdk) / "Include" / "vulkan" / "vulkan.h")
-        
+
         if any(path.exists() for path in vulkan_header_paths):
             return True
-        
+
         # Check vulkaninfo command
         if shutil.which("vulkaninfo") is not None:
             return True
-        
+
         return False
-    
+
     def _check_opencl(self) -> bool:
         """Check if OpenCL development files and runtime are available.
-        
+
         Returns:
             True if OpenCL headers, ICD loader, and at least one vendor ICD are available.
         """
@@ -780,9 +765,7 @@ class PlatformDetector:
         for pkg_name in ("OpenCL", "opencl"):
             try:
                 result = subprocess.run(
-                    ["pkg-config", "--exists", pkg_name],
-                    capture_output=True,
-                    timeout=5
+                    ["pkg-config", "--exists", pkg_name], capture_output=True, timeout=5
                 )
                 if result.returncode == 0:
                     return True
@@ -795,44 +778,50 @@ class PlatformDetector:
             Path("/usr/local/include/CL/cl.h"),
         ]
         if self.platform_info.is_windows:
-            opencl_header_paths.extend([
-                Path("/ucrt64/include/CL/cl.h"),
-                Path("C:/msys64/ucrt64/include/CL/cl.h"),
-            ])
-        
+            opencl_header_paths.extend(
+                [
+                    Path("/ucrt64/include/CL/cl.h"),
+                    Path("C:/msys64/ucrt64/include/CL/cl.h"),
+                ]
+            )
+
         has_headers = any(path.exists() for path in opencl_header_paths)
         if not has_headers:
             return False
-        
+
         # Check for ICD loader library
         icd_loader_paths = [
             Path("/usr/lib/libOpenCL.so"),
             Path("/usr/lib64/libOpenCL.so"),
         ]
         if self.platform_info.is_windows:
-            icd_loader_paths.extend([
-                Path("/c/Windows/System32/OpenCL.dll"),
-                Path("C:/Windows/System32/OpenCL.dll"),
-                Path("/ucrt64/bin/libOpenCL.dll.a"),
-            ])
-        
+            icd_loader_paths.extend(
+                [
+                    Path("/c/Windows/System32/OpenCL.dll"),
+                    Path("C:/Windows/System32/OpenCL.dll"),
+                    Path("/ucrt64/bin/libOpenCL.dll.a"),
+                ]
+            )
+
         # Add architecture-specific paths
         multiarch = self.get_multiarch_dir()
         if multiarch:
-            icd_loader_paths.extend([
-                Path(f"/usr/lib/{multiarch}/libOpenCL.so"),
-                Path(f"/usr/lib/{multiarch}/libOpenCL.so.1"),
-            ])
-        
+            icd_loader_paths.extend(
+                [
+                    Path(f"/usr/lib/{multiarch}/libOpenCL.so"),
+                    Path(f"/usr/lib/{multiarch}/libOpenCL.so.1"),
+                ]
+            )
+
         has_loader = any(path.exists() for path in icd_loader_paths)
         if not has_loader:
             return False
-        
+
         # Check for at least one vendor ICD file
         icd_vendors_dir = Path("/etc/OpenCL/vendors")
         if icd_vendors_dir.exists() and any(icd_vendors_dir.glob("*.icd")):
             return True
-        
+
         # Check WSL NVIDIA OpenCL (not available in WSL)
         wsl_lib = Path("/usr/lib/wsl/lib")
         if wsl_lib.exists():
@@ -840,120 +829,114 @@ class PlatformDetector:
                 return True
             # WSL without OpenCL implementation
             return False
-        
+
         return False
-    
+
     def _detect_tools(self) -> None:
         """Detect available tools."""
         tool_names = [
-            "make", "g++", "clang++", "gcc", "clang",
-            "pkg-config", "nasm", "yasm", "cmake",
-            "python3", "meson", "ninja",
-            "cargo", "rustc",
-            "curl", "git"
+            "make",
+            "g++",
+            "clang++",
+            "gcc",
+            "clang",
+            "pkg-config",
+            "nasm",
+            "yasm",
+            "cmake",
+            "python3",
+            "meson",
+            "ninja",
+            "cargo",
+            "rustc",
+            "curl",
+            "git",
         ]
-        
+
         for tool_name in tool_names:
             self.tools[tool_name] = self._detect_tool(tool_name)
-    
+
     def _detect_tool(self, tool_name: str) -> ToolInfo:
         """Detect a single tool.
-        
+
         Args:
             tool_name: Name of the tool.
-            
+
         Returns:
             ToolInfo instance.
         """
         tool_path = shutil.which(tool_name)
-        
+
         if tool_path is None:
             return ToolInfo(name=tool_name, available=False)
-        
+
         # Try to get version
         version = self._get_tool_version(tool_name, tool_path)
-        
-        return ToolInfo(
-            name=tool_name,
-            path=tool_path,
-            version=version,
-            available=True
-        )
-    
+
+        return ToolInfo(name=tool_name, path=tool_path, version=version, available=True)
+
     def _get_tool_version(self, tool_name: str, tool_path: str) -> Optional[str]:
         """Get tool version.
-        
+
         Args:
             tool_name: Name of the tool.
             tool_path: Path to the tool.
-            
+
         Returns:
             Version string or None.
         """
         try:
             if tool_name in ("g++", "gcc", "clang++", "clang"):
                 result = subprocess.run(
-                    [tool_path, "--version"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5
+                    [tool_path, "--version"], capture_output=True, text=True, timeout=5
                 )
                 output = result.stdout.split("\n")[0]
                 # Extract version number
                 for part in output.split():
                     if part[0].isdigit():
                         return part.rstrip(")")
-            
+
             elif tool_name in ("cmake", "nasm", "yasm", "python3", "meson", "ninja"):
                 result = subprocess.run(
-                    [tool_path, "--version"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5
+                    [tool_path, "--version"], capture_output=True, text=True, timeout=5
                 )
                 output = result.stdout.strip()
                 # First line often contains version
                 for part in output.split():
                     if part[0].isdigit():
                         return part
-            
+
             elif tool_name in ("cargo", "rustc"):
                 result = subprocess.run(
-                    [tool_path, "--version"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5
+                    [tool_path, "--version"], capture_output=True, text=True, timeout=5
                 )
                 output = result.stdout.strip()
                 # Format: "cargo 1.70.0" or "rustc 1.70.0"
                 parts = output.split()
                 if len(parts) >= 2:
                     return parts[1]
-            
+
             elif tool_name == "pkg-config":
                 result = subprocess.run(
-                    [tool_path, "--version"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5
+                    [tool_path, "--version"], capture_output=True, text=True, timeout=5
                 )
                 return result.stdout.strip()
-            
+
         except Exception:
             pass
-        
+
         return None
-    
+
     def get_num_jobs(self, config_num_jobs: str = "auto") -> int:
         """Get number of parallel jobs.
-        
+
         Args:
             config_num_jobs: Configuration value ("auto" or number).
-            
+
         Returns:
             Number of jobs.
         """
         if config_num_jobs != "auto":
             return int(config_num_jobs)
-        
+
         return self.system_info.cpu_cores or 4

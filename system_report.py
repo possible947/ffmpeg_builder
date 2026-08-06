@@ -1,53 +1,58 @@
 """System report generation."""
-from typing import Dict, Any
+
 from dataclasses import dataclass, field
-from .platform_detect import SystemInfo, PlatformInfo, ToolInfo
+from typing import Any, Dict
+
+from .platform_detect import PlatformInfo, SystemInfo, ToolInfo
 
 
 @dataclass
 class SystemReport:
     """System report containing all detected information."""
+
     system_info: SystemInfo = field(default_factory=SystemInfo)
     platform_info: PlatformInfo = field(default_factory=PlatformInfo)
     tools: Dict[str, ToolInfo] = field(default_factory=dict)
     build_environment: Dict[str, str] = field(default_factory=dict)
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
         return {
             "system_info": self.system_info.to_dict(),
             "platform_info": self.platform_info.to_dict(),
             "tools": {name: tool.to_dict() for name, tool in self.tools.items()},
-            "build_environment": self.build_environment
+            "build_environment": self.build_environment,
         }
-    
+
     def get_available_tools_summary(self) -> Dict[str, bool]:
         """Get summary of available tools.
-        
+
         Returns:
             Dictionary mapping tool name to availability.
         """
         return {name: tool.available for name, tool in self.tools.items()}
-    
+
     def get_missing_required_tools(self) -> list:
         """Get list of missing required tools.
-        
+
         Returns:
             List of missing tool names.
         """
         required = ["make", "pkg-config", "curl"]
-        
+
         # Platform-specific requirements
         if self.platform_info.is_macos:
             required.append("clang++")
         else:
             required.append("g++")
-        
-        return [tool for tool in required if not self.tools.get(tool, ToolInfo(name=tool)).available]
-    
+
+        return [
+            tool for tool in required if not self.tools.get(tool, ToolInfo(name=tool)).available
+        ]
+
     def get_optional_tools_status(self) -> Dict[str, bool]:
         """Get status of optional tools.
-        
+
         Returns:
             Dictionary mapping optional tool name to availability.
         """
@@ -59,19 +64,21 @@ class SystemReport:
             "meson": "Meson build system (for dav1d, libvmaf)",
             "ninja": "Ninja build system (for dav1d, libvmaf)",
             "cargo": "Cargo (for rav1e)",
-            "rustc": "Rust compiler (for rav1e)"
+            "rustc": "Rust compiler (for rav1e)",
         }
-        
-        return {name: self.tools.get(name, ToolInfo(name=name)).available for name in optional.keys()}
-    
+
+        return {
+            name: self.tools.get(name, ToolInfo(name=name)).available for name in optional.keys()
+        }
+
     def get_hardware_acceleration_status(self) -> Dict[str, bool]:
         """Get hardware acceleration availability.
-        
+
         Returns:
             Dictionary mapping acceleration type to availability.
         """
         status = {}
-        
+
         if self.platform_info.is_macos:
             status["VideoToolbox"] = True  # Always available on macOS
             status["OpenCL"] = True  # Always available on macOS
@@ -84,12 +91,12 @@ class SystemReport:
             status["AMF"] = self.platform_info.amf_available
             status["Vulkan"] = self.platform_info.vulkan_available
             status["OpenCL"] = self.platform_info.opencl_available
-        
+
         return status
-    
+
     def get_compiler_info(self) -> Dict[str, str]:
         """Get compiler information.
-        
+
         Returns:
             Dictionary with compiler name and version.
         """
@@ -98,33 +105,27 @@ class SystemReport:
                 return {
                     "compiler": "Macports Clang",
                     "version": self.platform_info.macports_clang.version,
-                    "path": self.platform_info.macports_clang.path
+                    "path": self.platform_info.macports_clang.path,
                 }
             elif self.tools.get("clang++", ToolInfo(name="clang++")).available:
                 clang = self.tools["clang++"]
-                return {
-                    "compiler": "System Clang",
-                    "version": clang.version,
-                    "path": clang.path
-                }
+                return {"compiler": "System Clang", "version": clang.version, "path": clang.path}
         elif self.platform_info.is_linux or self.platform_info.is_windows:
             if self.tools.get("g++", ToolInfo(name="g++")).available:
                 gcc = self.tools["g++"]
-                return {
-                    "compiler": "GCC",
-                    "version": gcc.version,
-                    "path": gcc.path
-                }
-        
+                return {"compiler": "GCC", "version": gcc.version, "path": gcc.path}
+
         return {"compiler": "Unknown", "version": "Unknown", "path": "Unknown"}
 
 
 class SystemReportGenerator:
     """Generates system reports."""
-    
-    def __init__(self, system_info: SystemInfo, platform_info: PlatformInfo, tools: Dict[str, ToolInfo]):
+
+    def __init__(
+        self, system_info: SystemInfo, platform_info: PlatformInfo, tools: Dict[str, ToolInfo]
+    ):
         """Initialize report generator.
-        
+
         Args:
             system_info: System information.
             platform_info: Platform information.
@@ -133,28 +134,27 @@ class SystemReportGenerator:
         self.system_info = system_info
         self.platform_info = platform_info
         self.tools = tools
-    
+
     def generate(self) -> SystemReport:
         """Generate system report.
-        
+
         Returns:
             SystemReport instance.
         """
         report = SystemReport(
-            system_info=self.system_info,
-            platform_info=self.platform_info,
-            tools=self.tools
+            system_info=self.system_info, platform_info=self.platform_info, tools=self.tools
         )
-        
+
         # Add build environment info
         import os
+
         report.build_environment = {
             "PATH": os.environ.get("PATH", ""),
             "PKG_CONFIG_PATH": os.environ.get("PKG_CONFIG_PATH", ""),
             "CFLAGS": os.environ.get("CFLAGS", ""),
             "LDFLAGS": os.environ.get("LDFLAGS", ""),
             "CC": os.environ.get("CC", ""),
-            "CXX": os.environ.get("CXX", "")
+            "CXX": os.environ.get("CXX", ""),
         }
-        
+
         return report

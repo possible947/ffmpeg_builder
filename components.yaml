@@ -1,0 +1,774 @@
+# Auto-generated component registry.
+# Edit this file to add/change versions, add new components, or tweak build params.
+# Run: python _gen_components_yaml.py  (re-generates from live Python objects)
+---
+- name: giflib
+  version: 5.2.2
+  url: https://sf-eu-introserv-1.dl.sourceforge.net/project/giflib/giflib-5.x/giflib-{version}.tar.gz
+  category: build_tool
+  build_system: custom
+  system_component: true
+  system_tool_name: giflib
+  custom_build_fn: build_giflib
+- name: pkg-config
+  version: 0.29.2
+  url: https://pkgconfig.freedesktop.org/releases/pkg-config-{version}.tar.gz
+  category: build_tool
+  build_system: autotools
+  configure_args:
+  - --prefix={workspace}
+  - --with-pc-path={workspace}/lib/pkgconfig
+  - --with-internal-glib
+  system_component: true
+  system_tool_name: pkg-config
+- name: yasm
+  version: 1.3.0
+  url: https://github.com/yasm/yasm/releases/download/v{version}/yasm-{version}.tar.gz
+  category: build_tool
+  build_system: autotools
+  configure_args:
+  - --prefix={workspace}
+  system_component: true
+  system_tool_name: yasm
+- name: nasm
+  version: '3.01'
+  url: https://www.nasm.us/pub/nasm/releasebuilds/{version}/nasm-{version}.tar.xz
+  category: build_tool
+  build_system: autotools
+  configure_args:
+  - --prefix={workspace}
+  - --disable-shared
+  - --enable-static
+  system_component: true
+  system_tool_name: nasm
+- name: zlib
+  version: 1.3.2
+  url: https://github.com/madler/zlib/releases/download/v{version}/zlib-{version}.tar.gz
+  category: build_tool
+  build_system: autotools
+  configure_args:
+  - --static
+  - --prefix={workspace}
+  system_component: true
+  system_tool_name: zlib
+- name: m4
+  version: 1.4.20
+  url: https://ftpmirror.gnu.org/gnu/m4/m4-{version}.tar.gz
+  category: build_tool
+  build_system: autotools
+  configure_args:
+  - --prefix={workspace}
+  system_component: true
+  system_tool_name: m4
+- name: autoconf
+  version: '2.72'
+  url: https://ftpmirror.gnu.org/gnu/autoconf/autoconf-{version}.tar.gz
+  category: build_tool
+  build_system: autotools
+  configure_args:
+  - --prefix={workspace}
+  depends_on:
+  - m4
+  system_component: true
+  system_tool_name: autoconf
+- name: automake
+  version: 1.18.1
+  url: https://ftpmirror.gnu.org/gnu/automake/automake-{version}.tar.gz
+  category: build_tool
+  build_system: autotools
+  configure_args:
+  - --prefix={workspace}
+  depends_on:
+  - autoconf
+  system_component: true
+  system_tool_name: automake
+- name: libtool
+  version: 2.5.4
+  url: https://ftpmirror.gnu.org/libtool/libtool-{version}.tar.gz
+  category: build_tool
+  build_system: autotools
+  configure_args:
+  - --prefix={workspace}
+  - --enable-static
+  - --disable-shared
+  system_component: true
+  system_tool_name: libtool
+- name: cmake
+  version: 4.2.3
+  url: https://github.com/Kitware/CMake/releases/download/v{version}/cmake-{version}.tar.gz
+  category: build_tool
+  build_system: autotools
+  configure_args:
+  - --prefix={workspace}
+  - --parallel={num_jobs}
+  - --
+  - -DCMAKE_USE_OPENSSL=OFF
+  system_component: true
+  system_tool_name: cmake
+  extra_env:
+    CXXFLAGS_EXTRA: -std=c++11
+- name: meson
+  version: 1.8.2
+  url: https://github.com/mesonbuild/meson/releases/download/{version}/meson-{version}.tar.gz
+  category: build_tool
+  build_system: autotools
+  configure_args:
+  - --prefix={workspace}
+  system_component: true
+  system_tool_name: meson
+- name: ninja
+  version: 1.12.1
+  url: https://github.com/ninja-build/ninja/archive/refs/tags/v{version}.tar.gz
+  category: build_tool
+  build_system: custom
+  system_component: true
+  system_tool_name: ninja
+  custom_build_fn: build_ninja
+- name: gettext
+  version: 0.22.5
+  url: https://ftpmirror.gnu.org/gettext/gettext-{version}.tar.gz
+  category: crypto
+  build_system: autotools
+  configure_args:
+  - --prefix={workspace}
+  - --enable-static
+  - --disable-shared
+  - --without-libiconv-prefix
+  - --without-libintl-prefix
+  - --disable-c++
+  gpl_only: true
+  platform_overrides:
+    linux:
+      extra_env: {}
+      extra_cflags: -std=gnu11
+- name: openssl
+  version: 3.6.1
+  url: https://github.com/openssl/openssl/archive/refs/tags/openssl-{version}.tar.gz
+  category: crypto
+  build_system: custom
+  gpl_only: true
+  archive_filename: openssl-{version}.tar.gz
+  custom_build_fn: build_openssl
+  ffmpeg_configure_flag: --enable-openssl
+- name: gmp
+  version: 6.3.0
+  url: https://ftpmirror.gnu.org/gnu/gmp/gmp-{version}.tar.xz
+  category: crypto
+  build_system: autotools
+  configure_args:
+  - --prefix={workspace}
+  - --disable-shared
+  - --enable-static
+  non_gpl_only: true
+- name: nettle
+  version: 3.10.2
+  url: https://ftpmirror.gnu.org/gnu/nettle/nettle-{version}.tar.gz
+  category: crypto
+  build_system: autotools
+  configure_args:
+  - --prefix={workspace}
+  - --disable-shared
+  - --enable-static
+  - --disable-openssl
+  - --disable-documentation
+  - --libdir={workspace}/lib
+  depends_on:
+  - gmp
+  non_gpl_only: true
+- name: gnutls
+  version: 3.8.12
+  url: https://www.gnupg.org/ftp/gcrypt/gnutls/v3.8/gnutls-{version}.tar.xz
+  category: crypto
+  build_system: autotools
+  configure_args:
+  - --prefix={workspace}
+  - --disable-shared
+  - --enable-static
+  - --disable-doc
+  - --disable-tools
+  - --disable-cxx
+  - --disable-tests
+  - --disable-gtk-doc-html
+  - --disable-libdane
+  - --disable-nls
+  - --enable-local-libopts
+  - --disable-guile
+  - --with-included-libtasn1
+  - --with-included-unistring
+  - --without-p11-kit
+  depends_on:
+  - nettle
+  non_gpl_only: true
+- name: dav1d
+  version: 1.5.3
+  url: https://code.videolan.org/videolan/dav1d/-/archive/{version}/dav1d-{version}.tar.gz
+  category: video_codec
+  build_system: meson
+  configure_args:
+  - --prefix={workspace}
+  - --buildtype=release
+  - --default-library=static
+  - --libdir={workspace}/lib
+  requires_tools:
+  - python3
+  - meson
+  - ninja
+  ffmpeg_configure_flag: --enable-libdav1d
+- name: svtav1
+  version: 4.0.1
+  url: https://gitlab.com/AOMediaCodec/SVT-AV1/-/archive/v{version}/SVT-AV1-v{version}.tar.gz
+  category: video_codec
+  build_system: cmake
+  configure_args:
+  - -DCMAKE_INSTALL_PREFIX={workspace}
+  - -DENABLE_SHARED=off
+  - -DBUILD_SHARED_LIBS=OFF
+  - -DCMAKE_BUILD_TYPE=Release
+  archive_filename: svtav1-{version}.tar.gz
+  workdir: Build/linux
+  platform_overrides:
+    linux:
+      extra_env: {}
+      extra_cflags: -std=gnu11
+  ffmpeg_configure_flag: --enable-libsvtav1
+- name: rav1e
+  version: 0.8.1
+  url: https://github.com/xiph/rav1e/archive/refs/tags/v{version}.tar.gz
+  category: video_codec
+  build_system: cargo
+  requires_tools:
+  - cargo
+  - rustc
+  ffmpeg_configure_flag: --enable-librav1e
+- name: x264
+  version: 0480cb05
+  url: https://code.videolan.org/videolan/x264/-/archive/{version}/x264-{version}.tar.gz
+  category: video_codec
+  build_system: custom
+  gpl_only: true
+  archive_filename: x264-{version}.tar.gz
+  custom_build_fn: build_x264
+  ffmpeg_configure_flag: --enable-libx264
+- name: x265
+  version: 8be7dbf
+  url: https://bitbucket.org/multicoreware/x265_git/get/8be7dbf8159ddfceea4115675a6d48e1611b8baa.tar.gz
+  category: video_codec
+  build_system: custom
+  gpl_only: true
+  archive_filename: x265-{version}.tar.gz
+  custom_build_fn: build_x265
+  ffmpeg_configure_flag: --enable-libx265
+- name: libvpx
+  version: 1.16.0
+  url: https://github.com/webmproject/libvpx/archive/refs/tags/v{version}.tar.gz
+  category: video_codec
+  build_system: custom
+  archive_filename: libvpx-{version}.tar.gz
+  custom_build_fn: build_libvpx
+  ffmpeg_configure_flag: --enable-libvpx
+- name: xvidcore
+  version: 1.3.7
+  url: https://downloads.xvid.com/downloads/xvidcore-{version}.tar.gz
+  category: video_codec
+  build_system: autotools
+  configure_args:
+  - --prefix={workspace}
+  - --disable-shared
+  - --enable-static
+  gpl_only: true
+  workdir: build/generic
+  platform_overrides:
+    windows:
+      extra_env: {}
+      extra_cflags: -std=gnu11
+  ffmpeg_configure_flag: --enable-libxvid
+- name: vid_stab
+  version: 1.1.1
+  url: https://github.com/georgmartius/vid.stab/archive/v{version}.tar.gz
+  category: video_codec
+  build_system: cmake
+  configure_args:
+  - -DBUILD_SHARED_LIBS=OFF
+  - -DCMAKE_INSTALL_PREFIX={workspace}
+  - -DUSE_OMP=OFF
+  - -DENABLE_SHARED=off
+  gpl_only: true
+  archive_filename: vid.stab-{version}.tar.gz
+  ffmpeg_configure_flag: --enable-libvidstab
+- name: av1
+  version: 3.12.0
+  url: https://aomedia.googlesource.com/aom/+archive/refs/tags/v{version}.tar.gz
+  category: video_codec
+  build_system: cmake
+  configure_args:
+  - -DENABLE_TESTS=0
+  - -DENABLE_EXAMPLES=0
+  - -DCMAKE_INSTALL_PREFIX={workspace}
+  - -DCMAKE_INSTALL_LIBDIR=lib
+  archive_strip_components: 0
+  archive_filename: av1-{version}.tar.gz
+  archive_dirname: av1
+  workdir: aom_build
+  ffmpeg_configure_flag: --enable-libaom
+- name: zimg
+  version: 3.0.6
+  url: https://github.com/sekrit-twc/zimg/archive/refs/tags/release-{version}.tar.gz
+  category: video_codec
+  build_system: custom
+  archive_filename: zimg-{version}.tar.gz
+  archive_dirname: zimg-release-{version}
+  custom_build_fn: build_zimg
+  ffmpeg_configure_flag: --enable-libzimg
+- name: lv2
+  version: 1.18.10
+  url: https://lv2plug.in/spec/lv2-{version}.tar.xz
+  category: audio_codec
+  build_system: meson
+  configure_args:
+  - --prefix={workspace}
+  - --buildtype=release
+  - --default-library=static
+  - --libdir={workspace}/lib
+  requires_tools:
+  - python3
+  - meson
+  - ninja
+  skip_condition: disable_lv2
+- name: waflib
+  version: b600c92
+  url: https://gitlab.com/drobilla/autowaf/-/archive/{version}/autowaf-{version}.tar.gz
+  category: audio_codec
+  build_system: headers_only
+  archive_filename: autowaf.tar.gz
+  archive_dirname: autowaf-{version}
+  skip_condition: disable_lv2
+- name: serd
+  version: 0.32.8
+  url: https://gitlab.com/drobilla/serd/-/archive/v{version}/serd-v{version}.tar.gz
+  category: audio_codec
+  build_system: meson
+  configure_args:
+  - --prefix={workspace}
+  - --buildtype=release
+  - --default-library=static
+  - --libdir={workspace}/lib
+  requires_tools:
+  - python3
+  - meson
+  - ninja
+  skip_condition: disable_lv2
+- name: pcre
+  version: '8.45'
+  url: https://altushost-swe.dl.sourceforge.net/project/pcre/pcre/{version}/pcre-{version}.tar.gz
+  category: audio_codec
+  build_system: autotools
+  configure_args:
+  - --prefix={workspace}
+  - --disable-shared
+  - --enable-static
+  archive_filename: pcre-{version}.tar.gz
+  skip_condition: disable_lv2
+- name: zix
+  version: 0.8.0
+  url: https://gitlab.com/drobilla/zix/-/archive/v{version}/zix-v{version}.tar.gz
+  category: audio_codec
+  build_system: meson
+  configure_args:
+  - --prefix={workspace}
+  - --buildtype=release
+  - --default-library=static
+  - --libdir={workspace}/lib
+  requires_tools:
+  - python3
+  - meson
+  - ninja
+  skip_condition: disable_lv2
+- name: sord
+  version: 0.16.22
+  url: https://gitlab.com/drobilla/sord/-/archive/v{version}/sord-v{version}.tar.gz
+  category: audio_codec
+  build_system: meson
+  configure_args:
+  - --prefix={workspace}
+  - --buildtype=release
+  - --default-library=static
+  - --libdir={workspace}/lib
+  requires_tools:
+  - python3
+  - meson
+  - ninja
+  skip_condition: disable_lv2
+- name: sratom
+  version: 0.6.22
+  url: https://gitlab.com/lv2/sratom/-/archive/v{version}/sratom-v{version}.tar.gz
+  category: audio_codec
+  build_system: meson
+  configure_args:
+  - --prefix={workspace}
+  - -Ddocs=disabled
+  - --buildtype=release
+  - --default-library=static
+  - --libdir={workspace}/lib
+  requires_tools:
+  - python3
+  - meson
+  - ninja
+  skip_condition: disable_lv2
+- name: lilv
+  version: 0.26.4
+  url: https://gitlab.com/lv2/lilv/-/archive/v{version}/lilv-v{version}.tar.gz
+  category: audio_codec
+  build_system: meson
+  configure_args:
+  - --prefix={workspace}
+  - -Ddocs=disabled
+  - --buildtype=release
+  - --default-library=static
+  - --libdir={workspace}/lib
+  - -Dcpp_std=c++11
+  requires_tools:
+  - python3
+  - meson
+  - ninja
+  ffmpeg_configure_flag: --enable-lv2
+  skip_condition: disable_lv2
+- name: opencore
+  version: 0.1.6
+  url: https://deac-ams.dl.sourceforge.net/project/opencore-amr/opencore-amr/opencore-amr-{version}.tar.gz
+  category: audio_codec
+  build_system: autotools
+  configure_args:
+  - --prefix={workspace}
+  - --disable-shared
+  - --enable-static
+  archive_filename: opencore-amr-{version}.tar.gz
+  ffmpeg_configure_flag: --enable-libopencore_amrnb --enable-libopencore_amrwb
+- name: lame
+  version: '3.100'
+  url: https://sourceforge.net/projects/lame/files/lame/{version}/lame-{version}.tar.gz/download?use_mirror=gigenet
+  category: audio_codec
+  build_system: autotools
+  configure_args:
+  - --prefix={workspace}
+  - --disable-shared
+  - --enable-static
+  archive_filename: lame-{version}.tar.gz
+  platform_overrides:
+    windows:
+      extra_env: {}
+      configure_args_override:
+      - --prefix={workspace}
+      - --disable-shared
+      - --enable-static
+      - --disable-frontend
+  ffmpeg_configure_flag: --enable-libmp3lame
+- name: opus
+  version: 1.6.1
+  url: https://downloads.xiph.org/releases/opus/opus-{version}.tar.gz
+  category: audio_codec
+  build_system: autotools
+  configure_args:
+  - --prefix={workspace}
+  - --disable-shared
+  - --enable-static
+  ffmpeg_configure_flag: --enable-libopus
+- name: libogg
+  version: 1.3.6
+  url: https://ftp.osuosl.org/pub/xiph/releases/ogg/libogg-{version}.tar.xz
+  category: audio_codec
+  build_system: autotools
+  configure_args:
+  - --prefix={workspace}
+  - --disable-shared
+  - --enable-static
+- name: libvorbis
+  version: 1.3.7
+  url: https://ftp.osuosl.org/pub/xiph/releases/vorbis/libvorbis-{version}.tar.gz
+  category: audio_codec
+  build_system: custom
+  depends_on:
+  - libogg
+  custom_build_fn: build_libvorbis
+  ffmpeg_configure_flag: --enable-libvorbis
+- name: libtheora
+  version: 1.2.0
+  url: https://ftp.osuosl.org/pub/xiph/releases/theora/libtheora-{version}.tar.gz
+  category: audio_codec
+  build_system: autotools
+  configure_args:
+  - --prefix={workspace}
+  - --with-ogg-libraries={workspace}/lib
+  - --with-ogg-includes={workspace}/include/
+  - --with-vorbis-libraries={workspace}/lib
+  - --with-vorbis-includes={workspace}/include/
+  - --enable-static
+  - --disable-shared
+  - --disable-oggtest
+  - --disable-vorbistest
+  - --disable-examples
+  - --disable-spec
+  depends_on:
+  - libogg
+  - libvorbis
+  ffmpeg_configure_flag: --enable-libtheora
+- name: fdk_aac
+  version: 2.0.3
+  url: https://sourceforge.net/projects/opencore-amr/files/fdk-aac/fdk-aac-{version}.tar.gz/download?use_mirror=gigenet
+  category: audio_codec
+  build_system: autotools
+  configure_args:
+  - --prefix={workspace}
+  - --disable-shared
+  - --enable-static
+  - --enable-pic
+  gpl_only: true
+  archive_filename: fdk-aac-{version}.tar.gz
+  ffmpeg_configure_flag: --enable-libfdk-aac
+- name: soxr
+  version: 0.1.3
+  url: https://sourceforge.net/projects/soxr/files/soxr-{version}-Source.tar.xz/download?use_mirror=gigenet
+  category: audio_codec
+  build_system: cmake
+  configure_args:
+  - -DCMAKE_BUILD_TYPE=Release
+  - -DCMAKE_INSTALL_PREFIX={workspace}
+  - -DBUILD_SHARED_LIBS:bool=off
+  - -DWITH_OPENMP:bool=off
+  - -DBUILD_TESTS:bool=off
+  - -Wno-dev
+  archive_filename: soxr-{version}.tar.xz
+  workdir: build
+  ffmpeg_configure_flag: --enable-libsoxr
+- name: libtiff
+  version: 4.7.1
+  url: https://download.osgeo.org/libtiff/tiff-{version}.tar.xz
+  category: image_codec
+  build_system: autotools
+  configure_args:
+  - --prefix={workspace}
+  - --disable-shared
+  - --enable-static
+  - --disable-dependency-tracking
+  - --disable-lzma
+  - --disable-webp
+  - --disable-zstd
+  - --without-x
+- name: libpng
+  version: 1.6.55
+  url: https://sourceforge.net/projects/libpng/files/libpng16/{version}/libpng-{version}.tar.gz
+  category: image_codec
+  build_system: autotools
+  configure_args:
+  - --prefix={workspace}
+  - --disable-shared
+  - --enable-static
+  archive_filename: libpng-{version}.tar.gz
+- name: lcms2
+  version: '2.18'
+  url: https://github.com/mm2/Little-CMS/releases/download/lcms{version}/lcms2-{version}.tar.gz
+  category: image_codec
+  build_system: autotools
+  configure_args:
+  - --prefix={workspace}
+  - --disable-shared
+  - --enable-static
+- name: libjxl
+  version: 0.11.2
+  url: https://github.com/libjxl/libjxl/archive/refs/tags/v{version}.tar.gz
+  category: image_codec
+  build_system: custom
+  archive_filename: libjxl-{version}.tar.gz
+  custom_build_fn: build_libjxl
+  ffmpeg_configure_flag: --enable-libjxl
+  extra_libs: -llcms2
+- name: libwebp
+  version: 1.6.0
+  url: https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-{version}.tar.gz
+  category: image_codec
+  build_system: cmake
+  configure_args:
+  - -DCMAKE_INSTALL_PREFIX={workspace}
+  - -DCMAKE_INSTALL_LIBDIR=lib
+  - -DCMAKE_INSTALL_BINDIR=bin
+  - -DCMAKE_INSTALL_INCLUDEDIR=include
+  - -DENABLE_SHARED=OFF
+  - -DENABLE_STATIC=ON
+  - -DWEBP_BUILD_CWEBP=OFF
+  - -DWEBP_BUILD_DWEBP=OFF
+  - -DWEBP_BUILD_GIF2WEBP=OFF
+  - -DWEBP_BUILD_IMG2WEBP=OFF
+  - -DWEBP_BUILD_VWEBP=OFF
+  - -DWEBP_BUILD_ANIM_UTILS=OFF
+  - -DWEBP_BUILD_WEBPINFO=OFF
+  - -DWEBP_BUILD_WEBPMUX=OFF
+  - -DWEBP_BUILD_EXTRAS=OFF
+  archive_filename: libwebp-{version}.tar.gz
+  workdir: build
+  ffmpeg_configure_flag: --enable-libwebp
+- name: libsdl
+  version: 2.30.12
+  url: https://github.com/libsdl-org/SDL/releases/download/release-{version}/SDL2-{version}.tar.gz
+  category: other_lib
+  build_system: autotools
+  configure_args:
+  - --prefix={workspace}
+  - --disable-shared
+  - --enable-static
+- name: FreeType2
+  version: 2.14.2
+  url: https://downloads.sourceforge.net/freetype/freetype-{version}.tar.xz
+  category: other_lib
+  build_system: autotools
+  configure_args:
+  - --prefix={workspace}
+  - --disable-shared
+  - --enable-static
+  ffmpeg_configure_flag: --enable-libfreetype
+- name: VapourSynth
+  version: '73'
+  url: https://github.com/vapoursynth/vapoursynth/archive/R{version}.tar.gz
+  category: other_lib
+  build_system: headers_only
+  ffmpeg_configure_flag: --enable-vapoursynth
+- name: libvmaf
+  version: 3.0.0
+  url: https://github.com/Netflix/vmaf/archive/refs/tags/v{version}.tar.gz
+  category: other_lib
+  build_system: custom
+  requires_tools:
+  - python3
+  - meson
+  - ninja
+  archive_filename: vmaf-{version}.tar.gz
+  archive_dirname: libvmaf
+  custom_build_fn: build_libvmaf
+  ffmpeg_configure_flag: --enable-libvmaf
+- name: srt
+  version: 1.5.4
+  url: https://github.com/Haivision/srt/archive/v{version}.tar.gz
+  category: other_lib
+  build_system: custom
+  gpl_only: true
+  archive_filename: srt-{version}.tar.gz
+  custom_build_fn: build_srt
+  ffmpeg_configure_flag: --enable-libsrt
+- name: libzmq
+  version: 4.3.5
+  url: https://github.com/zeromq/libzmq/releases/download/v{version}/zeromq-{version}.tar.gz
+  category: other_lib
+  build_system: custom
+  custom_build_fn: build_libzmq
+  ffmpeg_configure_flag: --enable-libzmq
+- name: vulkan-headers
+  version: 1.4.341.0
+  url: https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/vulkan-sdk-{version}.tar.gz
+  category: hw_accel
+  build_system: cmake
+  configure_args:
+  - -DCMAKE_INSTALL_PREFIX={workspace}
+  archive_filename: Vulkan-Headers-{version}.tar.gz
+  workdir: build
+  ffmpeg_configure_flag: --enable-vulkan
+- name: glslang
+  version: 16.2.0
+  url: https://github.com/KhronosGroup/glslang/archive/refs/tags/{version}.tar.gz
+  category: hw_accel
+  build_system: custom
+  requires_tools:
+  - python3
+  custom_build_fn: build_glslang
+  ffmpeg_configure_flag: --enable-libglslang
+- name: libplacebo
+  version: 7.360.1
+  url: https://github.com/haasn/libplacebo/archive/refs/tags/v{version}.tar.gz
+  category: hw_accel
+  build_system: meson
+  configure_args:
+  - --prefix={workspace}
+  - --default-library=static
+  - -Dvulkan=enabled
+  - -Dglslang=enabled
+  - -Dshaderc=disabled
+  - -Dopengl=disabled
+  - -Dd3d11=disabled
+  - -Dlcms=disabled
+  - -Dlibdovi=disabled
+  - -Dtests=false
+  - -Ddemos=false
+  depends_on:
+  - vulkan-headers
+  - glslang
+  linux_only: true
+  windows_ucrt64_supported: true
+  custom_build_fn: build_libplacebo
+  ffmpeg_configure_flag: --enable-libplacebo
+- name: nv-codec
+  version: 13.0.19.0
+  url: https://github.com/FFmpeg/nv-codec-headers/releases/download/n{version}/nv-codec-headers-{version}.tar.gz
+  category: hw_accel
+  build_system: make_only
+  build_args:
+  - PREFIX={workspace}
+  install_args:
+  - PREFIX={workspace}
+  linux_only: true
+  windows_ucrt64_supported: true
+- name: amf
+  version: 1.5.0
+  url: https://github.com/GPUOpen-LibrariesAndSDKs/AMF/archive/refs/tags/v{version}.tar.gz
+  category: hw_accel
+  build_system: headers_only
+  linux_only: true
+  archive_filename: AMF-{version}.tar.gz
+  archive_dirname: AMF-{version}
+  ffmpeg_configure_flag: --enable-amf
+- name: opencl-headers
+  version: 2025.07.22
+  url: https://github.com/KhronosGroup/OpenCL-Headers/archive/refs/tags/v{version}.tar.gz
+  category: hw_accel
+  build_system: cmake
+  configure_args:
+  - -DCMAKE_INSTALL_PREFIX={workspace}
+  linux_only: true
+  windows_ucrt64_supported: true
+  archive_filename: OpenCL-Headers-{version}.tar.gz
+  workdir: build
+- name: opencl-icd-loader
+  version: 2025.07.22
+  url: https://github.com/KhronosGroup/OpenCL-ICD-Loader/archive/refs/tags/v{version}.tar.gz
+  category: hw_accel
+  build_system: cmake
+  configure_args:
+  - -DCMAKE_PREFIX_PATH={workspace}
+  - -DCMAKE_INSTALL_PREFIX={workspace}
+  - -DENABLE_SHARED=OFF
+  - -DBUILD_SHARED_LIBS=OFF
+  depends_on:
+  - opencl-headers
+  linux_only: true
+  windows_ucrt64_supported: true
+  archive_filename: OpenCL-ICD-Loader-{version}.tar.gz
+  workdir: build
+  ffmpeg_configure_flag: --enable-opencl
+- name: onevpl
+  version: 2.17.0
+  url: https://github.com/intel/libvpl/archive/refs/tags/v{version}.tar.gz
+  category: hw_accel
+  build_system: cmake
+  configure_args:
+  - -DCMAKE_INSTALL_PREFIX={workspace}
+  - -DBUILD_SHARED_LIBS=OFF
+  - -DENABLE_SHARED=OFF
+  - -DCMAKE_BUILD_TYPE=Release
+  linux_only: true
+  windows_ucrt64_supported: true
+  system_component: true
+  system_tool_name: vpl
+  ffmpeg_configure_flag: --enable-libvpl
+- name: ffmpeg
+  version: '8.1'
+  url: https://github.com/FFmpeg/FFmpeg/archive/refs/tags/n{version}.tar.gz
+  category: target
+  build_system: custom
+  archive_filename: FFmpeg-release-{version}.tar.gz
+  custom_build_fn: build_ffmpeg

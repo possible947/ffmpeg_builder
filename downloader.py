@@ -1,4 +1,5 @@
 """Download management with progress tracking."""
+
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -7,7 +8,6 @@ from typing import Any, Callable, Dict, Iterable, List, Optional
 
 import requests
 from tqdm import tqdm
-
 
 ProgressCB = Callable[[int, int], None]
 
@@ -94,7 +94,7 @@ class Downloader:
                 location = str(source_path) if source_path is not None else str(target_path)
                 raise RuntimeError(
                     f"Archive {filename} is missing in local source storage ({location}). "
-                    "Populate thrid_party/sources or set allow_network_downloads=true."
+                    "Populate third_party/sources or set allow_network_downloads=true."
                 )
 
             destination_path = source_path or target_path
@@ -105,6 +105,16 @@ class Downloader:
                 try:
                     for candidate_url in candidate_urls:
                         try:
+                            # Warn when falling back to unencrypted HTTP
+                            if candidate_url.startswith("http://") and not url.startswith(
+                                "http://"
+                            ):
+                                import logging
+
+                                logging.getLogger(__name__).warning(
+                                    "Falling back to unencrypted HTTP for %s (HTTPS failed).",
+                                    filename,
+                                )
                             if self.on_log is not None:
                                 self.on_log(f"Downloading {filename} from {candidate_url}")
                             self._download_file(
@@ -116,9 +126,7 @@ class Downloader:
                             return destination_path
                         except Exception as candidate_error:
                             last_error = candidate_error
-                            part_path = destination_path.with_name(
-                                f"{destination_path.name}.part"
-                            )
+                            part_path = destination_path.with_name(f"{destination_path.name}.part")
                             if part_path.exists():
                                 part_path.unlink()
                     if last_error is not None:
@@ -149,7 +157,7 @@ class Downloader:
         candidates = [url]
 
         if url.startswith("https://ftp.osuosl.org/"):
-            candidates.append("http://ftp.osuosl.org/" + url[len("https://ftp.osuosl.org/"):])
+            candidates.append("http://ftp.osuosl.org/" + url[len("https://ftp.osuosl.org/") :])
 
         if url.startswith("https://downloads.xiph.org/releases/"):
             rel_path = url.split("/releases/", 1)[1]
@@ -243,7 +251,8 @@ class AsyncDownloadManager:
         self.on_progress = on_progress
         self.executor = ThreadPoolExecutor(max_workers=self.max_workers)
         self.futures: Dict[str, Future] = {}
-        self._lock = threading.Lock()
+        self._events: Dict[str, threading.Event] = {}
+        self._lock = threading.RLock()
 
     def prefetch(self, components: Iterable[Any]) -> None:
         """Queue component archive downloads.
@@ -268,6 +277,10 @@ class AsyncDownloadManager:
             future = self.futures.get(filename)
             if future is not None and not future.done():
                 return
+            event = self._events.get(filename)
+            if event is None:
+                event = threading.Event()
+                self._events[filename] = event
             component_name = component.name
             url = component.get_url()
             progress_cb = self._make_progress_cb(component_name)
@@ -313,6 +326,17 @@ class AsyncDownloadManager:
         if future.cancelled():
             return
         error = future.exception()
+        with self._lock:
+            filename = None
+            for fn, f in list(self.futures.items()):
+                if f is future:
+                    filename = fn
+                    break
+            if filename:
+                self.futures.pop(filename, None)
+                event = self._events.pop(filename, None)
+                if event is not None:
+                    event.set()
         if error is None:
             if self.on_status is not None:
                 self.on_status(component_name, "pending")
@@ -332,28 +356,31 @@ class AsyncDownloadManager:
         """
         filename = component.get_archive_filename()
         with self._lock:
-            future = self.futures.get(filename)
+            event = self._events.get(filename)
 
-        if future is None:
-            if self.on_status is not None:
-                self.on_status(component.name, "downloading")
-            if self.on_log is not None:
-                self.on_log(f"Downloading {component.name}")
-            progress_cb = self._make_progress_cb(component.name)
-            return self.downloader.download(
-                component.get_url(),
-                filename,
-                show_progress=False,
-                progress_cb=progress_cb,
-            )
+        if event is not None:
+            # A background download is (or was) in progress; wait for it
+            event.wait()
+            path = self.downloader.packages_dir / filename
+            if self.downloader.source_archives_dir is not None:
+                src_path = self.downloader.source_archives_dir / filename
+                if src_path.exists() and src_path.stat().st_size > 0:
+                    return src_path
+            if path.exists() and path.stat().st_size > 0:
+                return path
 
-        try:
-            return future.result()
-        except Exception:
-            with self._lock:
-                if self.futures.get(filename) is future:
-                    del self.futures[filename]
-            raise
+        # No in-progress download or archive still missing — download directly
+        if self.on_status is not None:
+            self.on_status(component.name, "downloading")
+        if self.on_log is not None:
+            self.on_log(f"Downloading {component.name}")
+        progress_cb = self._make_progress_cb(component.name)
+        return self.downloader.download(
+            component.get_url(),
+            filename,
+            show_progress=False,
+            progress_cb=progress_cb,
+        )
 
     def retry(self, component: Any) -> None:
         """Queue a fresh download after a failed attempt.

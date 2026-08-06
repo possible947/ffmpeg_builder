@@ -1,6 +1,8 @@
 """Interactive error handling."""
+
 from pathlib import Path
 from typing import Optional
+
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
@@ -9,15 +11,15 @@ from rich.table import Table
 
 class ErrorHandler:
     """Handles build errors interactively."""
-    
+
     def __init__(self, console: Console):
         """Initialize error handler.
-        
+
         Args:
             console: Rich console instance.
         """
         self.console = console
-    
+
     def handle_error(
         self,
         component_name: str,
@@ -25,26 +27,27 @@ class ErrorHandler:
         log_file: Optional[Path] = None,
     ) -> str:
         """Handle build error interactively.
-        
+
         Args:
             component_name: Name of failed component.
             error_message: Error message.
             log_file: Path to log file.
-            
+
         Returns:
             User choice: "retry", "skip", or "abort".
         """
         self.console.print()
-        self.console.print(Panel(
-            f"[bold red]Build failed for {component_name}[/bold red]\n\n"
-            f"{error_message}",
-            title="Error",
-            border_style="red",
-        ))
-        
+        self.console.print(
+            Panel(
+                f"[bold red]Build failed for {component_name}[/bold red]\n\n" f"{error_message}",
+                title="Error",
+                border_style="red",
+            )
+        )
+
         if log_file and log_file.exists():
             self.console.print(f"\n[dim]Log file: {log_file}[/dim]")
-            
+
             try:
                 with open(log_file, "r", encoding="utf-8") as f:
                     lines = f.readlines()
@@ -53,7 +56,7 @@ class ErrorHandler:
                 self.console.print("".join(last_lines), style="dim")
             except Exception:
                 pass
-        
+
         while True:
             self.console.print("\n[bold]What would you like to do?[/bold]")
             self.console.print("  [r] Retry build")
@@ -83,27 +86,32 @@ class ErrorHandler:
         """Show the key reference for the error prompt."""
         from .screens import _ERROR_KEYS
 
-        table = Table(title="Error prompt keys", show_header=True, header_style="bold cyan", title_justify="left")
+        table = Table(
+            title="Error prompt keys",
+            show_header=True,
+            header_style="bold cyan",
+            title_justify="left",
+        )
         table.add_column("Key", style="bold", no_wrap=True, width=10)
         table.add_column("Action", style="cyan", no_wrap=True, width=22)
         table.add_column("Description")
         for key, action, desc in _ERROR_KEYS:
             table.add_row(key, action, desc)
         self.console.print(table)
-    
+
     def _show_full_log(self, log_file: Path) -> None:
         """Show full log file.
-        
+
         Args:
             log_file: Path to log file.
         """
         try:
             with open(log_file, "r", encoding="utf-8") as f:
                 content = f.read()
-            
+
             self.console.print("\n[bold]Full log:[/bold]")
             self.console.print(Panel(content, border_style="dim"))
-            
+
             Prompt.ask("\nPress Enter to continue")
         except Exception as e:
             self.console.print(f"[red]Failed to read log file: {e}[/red]")

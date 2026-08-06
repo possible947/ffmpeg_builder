@@ -1,22 +1,26 @@
 """Build orchestration engine."""
-import os
-import re
+
 import importlib.util
 import json
-import stat
-import tarfile
+import os
+import re
+import shlex
 import shutil
+import stat
+import subprocess
+import tarfile
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, List, Dict, Callable, Tuple, Set
+from typing import Callable, Dict, List, Optional, Set, Tuple, Union
+
 from tqdm import tqdm
 
+from .components import BuildSystem, Component, ComponentRegistry
 from .config import BuildConfig
-from .state import StateManager, ComponentStatus
-from .components import Component, ComponentRegistry, BuildSystem
-from .executor import CommandExecutor, ExecutionResult
 from .downloader import AsyncDownloadManager, Downloader
+from .executor import CommandExecutor, ExecutionResult
 from .platform_detect import PlatformDetector
+from .state import ComponentStatus, StateManager
 
 
 def _rmtree(path: Path) -> None:
@@ -25,6 +29,7 @@ def _rmtree(path: Path) -> None:
     Git repositories mark objects as read-only; shutil.rmtree fails with
     [WinError 5] on Windows without an onerror handler.
     """
+
     def _on_error(func, fpath, exc_info):
         # Clear the read-only bit and retry.
         try:
@@ -127,6 +132,108 @@ class FFmpegBuilder:
 
         self._setup_environment()
 
+    # ------------------------------------------------------------------
+    # Build-step orchestration helpers (Fix #6)
+    # ------------------------------------------------------------------
+
+    def _run_step(
+        self,
+        component: Component,
+        status: ComponentStatus,
+        detail: str,
+        error_msg: str,
+        command: List[str],
+        step_name: str,
+        work_dir: Path,
+        env: Dict[str, str],
+    ) -> Tuple[ExecutionResult, Path]:
+        """Mark status, execute a shell command, and raise on failure.
+
+        Replaces the three-line pattern that appeared ~40 times across all
+        build functions::
+
+            self.state_manager.mark_component_status(...)
+            result, log_file = self.executor.execute_with_log(...)
+            if not result.success:
+                raise BuildError(...)
+
+        Args:
+            component: Component being built.
+            status: Status to mark (BUILDING or INSTALLING).
+            detail: Human-readable detail string shown in the UI / logs.
+            error_msg: Error message used when raising ``BuildError``.
+            command: Command line to run.
+            step_name: Internal step identifier (used for log-file naming).
+            work_dir: Working directory for execution.
+            env: Environment variables.
+
+        Returns:
+            ``(result, log_file)`` on success.
+
+        Raises:
+            BuildError: When the command fails (non-zero exit code).
+        """
+        self.state_manager.mark_component_status(
+            component.name, status, component.version, detail=detail
+        )
+        result, log_file = self.executor.execute_with_log(
+            command, component.name, step_name, work_dir, env
+        )
+        if not result.success:
+            raise BuildError(component.name, error_msg, log_file)
+        return result, log_file
+
+    def _run_make(
+        self,
+        component: Component,
+        status: ComponentStatus,
+        detail: str,
+        error_msg: str,
+        work_dir: Path,
+        jobs: Union[str, int],
+        env: Dict[str, str],
+    ) -> Tuple[ExecutionResult, Path]:
+        """Mark status, run ``make``, and raise on failure.
+
+        Thin wrapper around :meth:`_run_step` that delegates to the executor's
+        ``execute_make`` helper (which constructs ``make -jN``).
+
+        Returns ``(result, log_file)`` on success; raises ``BuildError``
+        otherwise.
+        """
+        self.state_manager.mark_component_status(
+            component.name, status, component.version, detail=detail
+        )
+        result, log_file = self.executor.execute_make(work_dir, jobs, env, component.name)
+        if not result.success:
+            raise BuildError(component.name, error_msg, log_file)
+        return result, log_file
+
+    def _run_install(
+        self,
+        component: Component,
+        status: ComponentStatus,
+        detail: str,
+        error_msg: str,
+        work_dir: Path,
+        env: Dict[str, str],
+    ) -> Tuple[ExecutionResult, Path]:
+        """Mark status, run ``make install``, and raise on failure.
+
+        Thin wrapper around :meth:`_run_step` that delegates to the executor's
+        ``execute_install`` helper (which constructs ``make install``).
+
+        Returns ``(result, log_file)`` on success; raises ``BuildError``
+        otherwise.
+        """
+        self.state_manager.mark_component_status(
+            component.name, status, component.version, detail=detail
+        )
+        result, log_file = self.executor.execute_install(work_dir, env, component.name)
+        if not result.success:
+            raise BuildError(component.name, error_msg, log_file)
+        return result, log_file
+
     def _is_windows_ucrt64_backend(self) -> bool:
         """Return True only for Windows + MSYS2 UCRT64 backend."""
         pi = self.platform_detector.platform_info
@@ -166,6 +273,7 @@ class FFmpegBuilder:
 
         try:
             import ctypes
+
             buffer = ctypes.create_unicode_buffer(32768)
             result = ctypes.windll.kernel32.GetShortPathNameW(native, buffer, len(buffer))
             if result:
@@ -310,13 +418,15 @@ class FFmpegBuilder:
                     pkg_config_paths.append(f"/usr/lib/{multiarch}/pkgconfig")
 
             # Add generic paths
-            pkg_config_paths.extend([
-                "/usr/local/lib/pkgconfig",
-                "/usr/local/share/pkgconfig",
-                "/usr/lib/pkgconfig",
-                "/usr/share/pkgconfig",
-                "/usr/lib64/pkgconfig",
-            ])
+            pkg_config_paths.extend(
+                [
+                    "/usr/local/lib/pkgconfig",
+                    "/usr/local/share/pkgconfig",
+                    "/usr/lib/pkgconfig",
+                    "/usr/share/pkgconfig",
+                    "/usr/lib64/pkgconfig",
+                ]
+            )
             pkg_config_path = ":".join(pkg_config_paths)
 
         self.env = {
@@ -626,7 +736,7 @@ class FFmpegBuilder:
         if not component.post_install:
             return
 
-        cmd = component.post_install.replace("{workspace}", self._ws_str())
+        cmd = component.post_install.replace("{workspace}", shlex.quote(self._ws_str()))
         env = self.get_build_env(component)
 
         result, log_file = self.executor.execute_with_log(
@@ -649,9 +759,6 @@ class FFmpegBuilder:
         Returns:
             True if available in system, False otherwise.
         """
-        import shutil
-        import subprocess
-
         # Check if it's a known tool
         if tool_name in self.platform_detector.tools:
             tool_info = self.platform_detector.tools[tool_name]
@@ -671,9 +778,7 @@ class FFmpegBuilder:
         # Check via pkg-config for libraries
         try:
             result = subprocess.run(
-                ["pkg-config", "--exists", tool_name],
-                capture_output=True,
-                timeout=5
+                ["pkg-config", "--exists", tool_name], capture_output=True, timeout=5
             )
             if result.returncode == 0:
                 return True
@@ -703,8 +808,6 @@ class FFmpegBuilder:
 
     def _command_exists(self, command: str) -> bool:
         """Check command availability with MSYS2/UCRT64-aware PATH probing."""
-        import shutil
-
         if shutil.which(command):
             return True
 
@@ -776,14 +879,24 @@ class FFmpegBuilder:
         try:
             with tarfile.open(archive_path, "r:*") as tar:
                 if component.archive_strip_components == 1:
-                    for member in tar.getmembers():
-                        member_path = Path(member.name)
-                        if len(member_path.parts) > 1:
-                            member.name = str(Path(*member_path.parts[1:]))
-                            if member.name:
-                                tar.extract(member, target_dir)
+                    # Extract to a temporary staging directory, then promote
+                    # the top-level directory contents into target_dir. This
+                    # avoids in-place mutation of tar member objects which is
+                    # error-prone across tarfile versions.
+                    staging = target_dir.parent / (target_dir.name + "_staging")
+                    if staging.exists():
+                        _rmtree(staging)
+                    staging.mkdir(parents=True)
+                    tar.extractall(staging, filter="data")
+
+                    # Move contents of the top-level directory into target_dir
+                    for item in sorted(staging.iterdir()):
+                        item.rename(target_dir / item.name)
+
+                    if staging.exists():
+                        _rmtree(staging)
                 else:
-                    tar.extractall(target_dir)
+                    tar.extractall(target_dir, filter="data")
         except Exception as e:
             raise BuildError(component.name, f"Failed to extract archive: {e}")
 
@@ -817,8 +930,7 @@ class FFmpegBuilder:
                     encoder_h.write_text(content.replace(legacy, patched, 1))
 
         configure_args = [
-            arg.replace("{workspace}", self._ws_str())
-            .replace("{num_jobs}", str(self.num_jobs))
+            arg.replace("{workspace}", self._ws_str()).replace("{num_jobs}", str(self.num_jobs))
             for arg in component.configure_args
         ]
 
@@ -827,56 +939,43 @@ class FFmpegBuilder:
             override = component.platform_overrides[self.platform]
             if override.configure_args_override is not None:
                 configure_args = [
-                    arg.replace("{workspace}", self._ws_str())
-                    .replace("{num_jobs}", str(self.num_jobs))
+                    arg.replace("{workspace}", self._ws_str()).replace(
+                        "{num_jobs}", str(self.num_jobs)
+                    )
                     for arg in override.configure_args_override
                 ]
 
         env = self.get_build_env(component)
 
-        result, log_file = self.executor.execute_with_log(
+        self._run_step(
+            component,
+            ComponentStatus.CONFIGURING,
+            f"./configure",
+            "Configure failed",
             ["./configure"] + configure_args,
-            component.name,
             "configure",
             build_dir,
             env,
         )
 
-        if not result.success:
-            raise BuildError(component.name, "Configure failed", log_file)
-
-        self.state_manager.mark_component_status(
-            component.name,
+        self._run_make(
+            component,
             ComponentStatus.BUILDING,
-            component.version,
-            detail=f"make -j{self.num_jobs}",
-        )
-
-        result, log_file = self.executor.execute_make(
+            f"make -j{self.num_jobs}",
+            "Build failed",
             build_dir,
             self.num_jobs,
             env,
-            component.name,
         )
 
-        if not result.success:
-            raise BuildError(component.name, "Build failed", log_file)
-
-        self.state_manager.mark_component_status(
-            component.name,
+        self._run_install(
+            component,
             ComponentStatus.INSTALLING,
-            component.version,
-            detail="make install",
-        )
-
-        result, log_file = self.executor.execute_install(
+            "make install",
+            "Install failed",
             build_dir,
             env,
-            component.name,
         )
-
-        if not result.success:
-            raise BuildError(component.name, "Install failed", log_file)
 
     def _build_cmake(self, component: Component, source_dir: Path) -> None:
         """Build component with CMake.
@@ -891,16 +990,14 @@ class FFmpegBuilder:
             build_dir.mkdir(parents=True, exist_ok=True)
 
         cmake_args = [
-            arg.replace("{workspace}", self._ws_str())
-            for arg in component.configure_args
+            arg.replace("{workspace}", self._ws_str()) for arg in component.configure_args
         ]
 
         # Honour config.openmp: replace WITH_OPENMP:bool=off → on when
         # OpenMP is enabled (e.g. soxr exposes this CMake option).
         if self.config.openmp:
             cmake_args = [
-                arg.replace("-DWITH_OPENMP:bool=off", "-DWITH_OPENMP:bool=on")
-                for arg in cmake_args
+                arg.replace("-DWITH_OPENMP:bool=off", "-DWITH_OPENMP:bool=on") for arg in cmake_args
             ]
 
         env = self.get_build_env(component)
@@ -910,52 +1007,39 @@ class FFmpegBuilder:
             ws = self._ws_str()
             env["PKG_CONFIG_PATH"] = f"{ws}/lib/pkgconfig;{ws}/lib64/pkgconfig"
 
-        result, log_file = self.executor.execute_with_log(
-            ["cmake", "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"] + cmake_args + [str(source_dir)],
-            component.name,
+        cmake_cmd = ["cmake", "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"] + cmake_args + [str(source_dir)]
+        self._run_step(
+            component,
+            ComponentStatus.CONFIGURING,
+            "cmake <source>",
+            "CMake configure failed",
+            cmake_cmd,
             "configure",
             build_dir,
             env,
         )
 
-        if not result.success:
-            raise BuildError(component.name, "CMake configure failed", log_file)
-
-        self.state_manager.mark_component_status(
-            component.name,
+        self._run_step(
+            component,
             ComponentStatus.BUILDING,
-            component.version,
-            detail="cmake --build",
-        )
-
-        result, log_file = self.executor.execute_with_log(
+            "cmake --build",
+            "Build failed",
             ["cmake", "--build", ".", "--parallel", str(self.num_jobs)],
-            component.name,
             "build",
             build_dir,
             env,
         )
 
-        if not result.success:
-            raise BuildError(component.name, "Build failed", log_file)
-
-        self.state_manager.mark_component_status(
-            component.name,
+        self._run_step(
+            component,
             ComponentStatus.INSTALLING,
-            component.version,
-            detail="cmake --install",
-        )
-
-        result, log_file = self.executor.execute_with_log(
+            "cmake --install",
+            "Install failed",
             ["cmake", "--install", "."],
-            component.name,
             "install",
             build_dir,
             env,
         )
-
-        if not result.success:
-            raise BuildError(component.name, "Install failed", log_file)
 
     def _build_meson(self, component: Component, source_dir: Path) -> None:
         """Build component with Meson.
@@ -970,8 +1054,7 @@ class FFmpegBuilder:
         build_dir.mkdir(parents=True, exist_ok=True)
 
         meson_args = [
-            arg.replace("{workspace}", self._ws_str())
-            for arg in component.configure_args
+            arg.replace("{workspace}", self._ws_str()) for arg in component.configure_args
         ]
 
         env = self.get_build_env(component)
@@ -982,52 +1065,38 @@ class FFmpegBuilder:
             ws = self._ws_str()
             env["PKG_CONFIG_PATH"] = f"{ws}/lib/pkgconfig;{ws}/lib64/pkgconfig"
 
-        result, log_file = self.executor.execute_with_log(
+        self._run_step(
+            component,
+            ComponentStatus.CONFIGURING,
+            "meson setup build",
+            "Meson configure failed",
             ["meson", "setup", "build"] + meson_args,
-            component.name,
             "configure",
             source_dir,
             env,
         )
 
-        if not result.success:
-            raise BuildError(component.name, "Meson configure failed", log_file)
-
-        self.state_manager.mark_component_status(
-            component.name,
+        self._run_step(
+            component,
             ComponentStatus.BUILDING,
-            component.version,
-            detail="ninja -C build",
-        )
-
-        result, log_file = self.executor.execute_with_log(
+            "ninja -C build",
+            "Build failed",
             ["ninja", "-C", "build"],
-            component.name,
             "build",
             source_dir,
             env,
         )
 
-        if not result.success:
-            raise BuildError(component.name, "Build failed", log_file)
-
-        self.state_manager.mark_component_status(
-            component.name,
+        self._run_step(
+            component,
             ComponentStatus.INSTALLING,
-            component.version,
-            detail="ninja install",
-        )
-
-        result, log_file = self.executor.execute_with_log(
+            "ninja install",
+            "Install failed",
             ["ninja", "-C", "build", "install"],
-            component.name,
             "install",
             source_dir,
             env,
         )
-
-        if not result.success:
-            raise BuildError(component.name, "Install failed", log_file)
 
     def _build_make_only(self, component: Component, source_dir: Path) -> None:
         """Build component with make only.
@@ -1042,51 +1111,33 @@ class FFmpegBuilder:
 
         env = self.get_build_env(component)
 
-        self.state_manager.mark_component_status(
-            component.name,
+        build_args = [arg.replace("{workspace}", self._ws_str()) for arg in component.build_args]
+
+        self._run_step(
+            component,
             ComponentStatus.BUILDING,
-            component.version,
-            detail="make -j" + str(self.num_jobs),
-        )
-
-        build_args = [
-            arg.replace("{workspace}", self._ws_str())
-            for arg in component.build_args
-        ]
-
-        result, log_file = self.executor.execute_with_log(
+            f"make -j{self.num_jobs} {' '.join(build_args)}",
+            "Build failed",
             ["make", f"-j{self.num_jobs}"] + build_args,
-            component.name,
             "build",
             build_dir,
             env,
         )
 
-        if not result.success:
-            raise BuildError(component.name, "Build failed", log_file)
-
-        self.state_manager.mark_component_status(
-            component.name,
-            ComponentStatus.INSTALLING,
-            component.version,
-            detail="make install",
-        )
-
         install_args = [
-            arg.replace("{workspace}", self._ws_str())
-            for arg in component.install_args
+            arg.replace("{workspace}", self._ws_str()) for arg in component.install_args
         ]
 
-        result, log_file = self.executor.execute_with_log(
+        self._run_step(
+            component,
+            ComponentStatus.INSTALLING,
+            f"make install {' '.join(install_args)}",
+            "Install failed",
             ["make", "install"] + install_args,
-            component.name,
             "install",
             build_dir,
             env,
         )
-
-        if not result.success:
-            raise BuildError(component.name, "Install failed", log_file)
 
     def _get_rustc_version(self) -> Optional[Tuple[int, int, int]]:
         """Get installed rustc version.
@@ -1116,59 +1167,45 @@ class FFmpegBuilder:
         rustc_version = self._get_rustc_version()
         if rustc_version is None:
             raise SkipComponent(
-                component.name,
-                "rustc is not available or version cannot be determined"
+                component.name, "rustc is not available or version cannot be determined"
             )
 
         if rustc_version < (1, 95, 0):
             raise SkipComponent(
                 component.name,
                 f"rustc {'.'.join(map(str, rustc_version))} is too old. "
-                f"cargo-c requires rustc 1.95 or newer"
+                f"cargo-c requires rustc 1.95 or newer",
             )
 
-        self.state_manager.mark_component_status(
-            component.name,
+        self._run_step(
+            component,
             ComponentStatus.BUILDING,
-            component.version,
-            detail="cargo install cargo-c",
-        )
-
-        result, log_file = self.executor.execute_with_log(
+            "cargo install cargo-c",
+            "Failed to install cargo-c",
             ["cargo", "install", "cargo-c"],
-            component.name,
             "install-cargo-c",
             source_dir,
             env,
         )
 
-        if not result.success:
-            raise BuildError(component.name, "Failed to install cargo-c", log_file)
-
-        self.state_manager.mark_component_status(
-            component.name,
+        self._run_step(
+            component,
             ComponentStatus.INSTALLING,
-            component.version,
-            detail="cargo cinstall",
-        )
-
-        result, log_file = self.executor.execute_with_log(
+            "cargo cinstall",
+            "Cargo build failed",
             [
-                "cargo", "cinstall",
+                "cargo",
+                "cinstall",
                 f"--prefix={self._ws_str()}",
                 "--libdir=lib",
                 "--library-type=staticlib",
                 "--crt-static",
                 "--release",
             ],
-            component.name,
             "build",
             source_dir,
             env,
         )
-
-        if not result.success:
-            raise BuildError(component.name, "Cargo build failed", log_file)
 
     def _install_headers_only(self, component: Component, source_dir: Path) -> None:
         """Install headers only.
@@ -1220,44 +1257,30 @@ class FFmpegBuilder:
             content = content.replace("$(MAKE) -C doc", "")
             content = content.replace(
                 "install: all install-bin install-include install-lib install-man",
-                "install: all install-bin install-include install-lib"
+                "install: all install-bin install-include install-lib",
             )
             makefile.write_text(content)
 
-        self.state_manager.mark_component_status(
-            component.name,
+        self._run_make(
+            component,
             ComponentStatus.BUILDING,
-            component.version,
-        detail='make -jself.num_jobs',
-        )
-
-        result, log_file = self.executor.execute_make(
+            f"make -j1",
+            "Build failed",
             source_dir,
             1,
             env,
-            component.name,
         )
 
-        if not result.success:
-            raise BuildError(component.name, "Build failed", log_file)
-
-        self.state_manager.mark_component_status(
-            component.name,
+        self._run_step(
+            component,
             ComponentStatus.INSTALLING,
-            component.version,
-        detail='make install',
-        )
-
-        result, log_file = self.executor.execute_with_log(
+            "make install",
+            "Install failed",
             ["make", f"PREFIX={self._ws_str()}", "install"],
-            component.name,
             "install",
             source_dir,
             env,
         )
-
-        if not result.success:
-            raise BuildError(component.name, "Install failed", log_file)
 
     def build_openssl(self, component: Component, source_dir: Path) -> None:
         """Build OpenSSL.
@@ -1304,33 +1327,26 @@ class FFmpegBuilder:
             if not result2.success:
                 raise BuildError(component.name, "configdata.pm regeneration failed")
 
-        result, log_file = self.executor.execute_make(
+        self._run_make(
+            component,
+            ComponentStatus.BUILDING,
+            f"make -j{self.num_jobs}",
+            "Build failed",
             source_dir,
             self.num_jobs,
             env,
-            component.name,
         )
 
-        if not result.success:
-            raise BuildError(component.name, "Build failed", log_file)
-
-        self.state_manager.mark_component_status(
-            component.name,
+        self._run_step(
+            component,
             ComponentStatus.INSTALLING,
-            component.version,
-        detail='make install_sw',
-        )
-
-        result, log_file = self.executor.execute_with_log(
+            "make install_sw",
+            "Install failed",
             ["make", "install_sw"],
-            component.name,
             "install",
             source_dir,
             env,
         )
-
-        if not result.success:
-            raise BuildError(component.name, "Install failed", log_file)
 
     def build_x264(self, component: Component, source_dir: Path) -> None:
         """Build x264.
@@ -1350,60 +1366,46 @@ class FFmpegBuilder:
         if self.platform == "linux":
             env["CXXFLAGS"] = f"-fPIC {env.get('CXXFLAGS', '')}"
 
-        result, log_file = self.executor.execute_with_log(
+        self._run_step(
+            component,
+            ComponentStatus.CONFIGURING,
+            "./configure",
+            "Configure failed",
             ["./configure"] + configure_args,
-            component.name,
             "configure",
             source_dir,
             env,
         )
 
-        if not result.success:
-            raise BuildError(component.name, "Configure failed", log_file)
-
-        self.state_manager.mark_component_status(
-            component.name,
+        self._run_make(
+            component,
             ComponentStatus.BUILDING,
-            component.version,
-            detail=f"make -j{self.num_jobs}",
-        )
-
-        result, log_file = self.executor.execute_make(
+            f"make -j{self.num_jobs}",
+            "Build failed",
             source_dir,
             self.num_jobs,
             env,
-            component.name,
         )
 
-        if not result.success:
-            raise BuildError(component.name, "Build failed", log_file)
-
-        self.state_manager.mark_component_status(
-            component.name,
+        self._run_install(
+            component,
             ComponentStatus.INSTALLING,
-            component.version,
-            detail="make install",
-        )
-
-        result, log_file = self.executor.execute_install(
+            "make install",
+            "Install failed",
             source_dir,
             env,
-            component.name,
         )
 
-        if not result.success:
-            raise BuildError(component.name, "Install failed", log_file)
-
-        result, log_file = self.executor.execute_with_log(
+        self._run_step(
+            component,
+            ComponentStatus.INSTALLING,
+            "make install-lib-static",
+            "Install lib-static failed",
             ["make", "install-lib-static"],
-            component.name,
             "install-lib",
             source_dir,
             env,
         )
-
-        if not result.success:
-            raise BuildError(component.name, "Install lib-static failed", log_file)
 
     def build_x265(self, component: Component, source_dir: Path) -> None:
         """Build x265 (multi-bitdepth).
@@ -1450,65 +1452,64 @@ class FFmpegBuilder:
             ]
 
             if bitdepth == "12bit":
-                cmake_args.extend([
-                    "-DHIGH_BIT_DEPTH=ON",
-                    "-DENABLE_HDR10_PLUS=ON",
-                    "-DEXPORT_C_API=OFF",
-                    "-DENABLE_CLI=OFF",
-                    "-DMAIN12=ON",
-                ])
+                cmake_args.extend(
+                    [
+                        "-DHIGH_BIT_DEPTH=ON",
+                        "-DENABLE_HDR10_PLUS=ON",
+                        "-DEXPORT_C_API=OFF",
+                        "-DENABLE_CLI=OFF",
+                        "-DMAIN12=ON",
+                    ]
+                )
             elif bitdepth == "10bit":
-                cmake_args.extend([
-                    "-DHIGH_BIT_DEPTH=ON",
-                    "-DENABLE_HDR10_PLUS=ON",
-                    "-DEXPORT_C_API=OFF",
-                    "-DENABLE_CLI=OFF",
-                ])
+                cmake_args.extend(
+                    [
+                        "-DHIGH_BIT_DEPTH=ON",
+                        "-DENABLE_HDR10_PLUS=ON",
+                        "-DEXPORT_C_API=OFF",
+                        "-DENABLE_CLI=OFF",
+                    ]
+                )
             else:
                 extra_libs = "x265_main10.a;x265_main12.a"
                 if self.platform == "linux":
                     extra_libs += ";-ldl"
-                cmake_args.extend([
-                    "-DENABLE_SHARED=OFF",
-                    "-DBUILD_SHARED_LIBS=OFF",
-                    f"-DEXTRA_LIB={extra_libs}",
-                    "-DEXTRA_LINK_FLAGS=-L.",
-                    "-DLINKED_10BIT=ON",
-                    "-DLINKED_12BIT=ON",
-                ])
+                cmake_args.extend(
+                    [
+                        "-DENABLE_SHARED=OFF",
+                        "-DBUILD_SHARED_LIBS=OFF",
+                        f"-DEXTRA_LIB={extra_libs}",
+                        "-DEXTRA_LINK_FLAGS=-L.",
+                        "-DLINKED_10BIT=ON",
+                        "-DLINKED_12BIT=ON",
+                    ]
+                )
 
                 # Copy 10bit and 12bit libraries into 8bit build dir before linking
                 shutil.copy(build_linux / "10bit" / "libx265.a", bitdepth_dir / "libx265_main10.a")
                 shutil.copy(build_linux / "12bit" / "libx265.a", bitdepth_dir / "libx265_main12.a")
 
-            result, log_file = self.executor.execute_with_log(
+            self._run_step(
+                component,
+                ComponentStatus.CONFIGURING,
+                f"cmake (configure-{bitdepth})",
+                f"Configure {bitdepth} failed",
                 ["cmake", "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"] + cmake_args + ["../../../source"],
-                component.name,
                 f"configure-{bitdepth}",
                 bitdepth_dir,
                 env,
             )
 
-            if not result.success:
-                raise BuildError(component.name, f"Configure {bitdepth} failed", log_file)
-
-            self.state_manager.mark_component_status(
-                component.name,
+            self._run_step(
+                component,
                 ComponentStatus.BUILDING,
-                component.version,
-                detail='cmake --build (multi-bitdepth)',
-            )
-
-            result, log_file = self.executor.execute_with_log(
+                "cmake --build (multi-bitdepth)",
+                f"Build {bitdepth} failed",
                 ["cmake", "--build", ".", "--parallel", str(self.num_jobs)],
-                component.name,
                 f"build-{bitdepth}",
                 bitdepth_dir,
                 env,
             )
-
-            if not result.success:
-                raise BuildError(component.name, f"Build {bitdepth} failed", log_file)
 
         eight_dir = build_linux / "8bit"
         lib_main = eight_dir / "libx265.a"
@@ -1527,7 +1528,6 @@ class FFmpegBuilder:
             # GNU libtool (glibtool) fails for this static archive merge.
             libtool = "libtool"
             if shutil.which("xcrun"):
-                import subprocess
                 xcrun_result = subprocess.run(
                     ["xcrun", "-f", "libtool"],
                     capture_output=True,
@@ -1542,44 +1542,47 @@ class FFmpegBuilder:
             if libtool == "libtool" and Path("/usr/bin/libtool").exists():
                 libtool = "/usr/bin/libtool"
 
-            result, log_file = self.executor.execute_with_log(
-                [libtool, "-static", "-o", "libx265.a", "libx265_main.a", "libx265_main10.a", "libx265_main12.a"],
-                component.name,
+            self._run_step(
+                component,
+                ComponentStatus.BUILDING,
+                "merge-libs",
+                "Merge libs failed",
+                [
+                    libtool,
+                    "-static",
+                    "-o",
+                    "libx265.a",
+                    "libx265_main.a",
+                    "libx265_main10.a",
+                    "libx265_main12.a",
+                ],
                 "merge-libs",
                 eight_dir,
                 env,
             )
         else:
             m_script = "CREATE libx265.a\nADDLIB libx265_main.a\nADDLIB libx265_main10.a\nADDLIB libx265_main12.a\nSAVE\nEND\n"
-            result, log_file = self.executor.execute_with_log(
+            self._run_step(
+                component,
+                ComponentStatus.BUILDING,
+                "merge-libs",
+                "Merge libs failed",
                 ["ar", "-M"],
-                component.name,
                 "merge-libs",
                 eight_dir,
                 env,
-                stdin=m_script,
             )
 
-        if not result.success:
-            raise BuildError(component.name, "Merge libs failed", log_file)
-
-        self.state_manager.mark_component_status(
-            component.name,
+        self._run_step(
+            component,
             ComponentStatus.INSTALLING,
-            component.version,
-            detail='cmake --install',
-        )
-
-        result, log_file = self.executor.execute_with_log(
+            "cmake --install",
+            "Install failed",
             ["cmake", "--install", "."],
-            component.name,
             "install",
             eight_dir,
             env,
         )
-
-        if not result.success:
-            raise BuildError(component.name, "Install failed", log_file)
 
         if self.config.full_static and self.platform == "linux":
             x265_pc = self.workspace / "lib" / "pkgconfig" / "x265.pc"
@@ -1602,10 +1605,16 @@ class FFmpegBuilder:
             if makefile.exists():
                 content = makefile.read_text()
                 content = content.replace(",--version-script", "")
-                content = content.replace("-Wl,--no-undefined -Wl,-soname", "-Wl,-undefined,error -Wl,-install_name")
+                content = content.replace(
+                    "-Wl,--no-undefined -Wl,-soname", "-Wl,-undefined,error -Wl,-install_name"
+                )
                 makefile.write_text(content)
 
-        result, log_file = self.executor.execute_with_log(
+        self._run_step(
+            component,
+            ComponentStatus.CONFIGURING,
+            "./configure",
+            "Configure failed",
             [
                 "./configure",
                 f"--prefix={self._ws_str()}",
@@ -1615,47 +1624,29 @@ class FFmpegBuilder:
                 "--as=yasm",
                 "--enable-vp9-highbitdepth",
             ],
-            component.name,
             "configure",
             source_dir,
             env,
         )
 
-        if not result.success:
-            raise BuildError(component.name, "Configure failed", log_file)
-
-        self.state_manager.mark_component_status(
-            component.name,
+        self._run_make(
+            component,
             ComponentStatus.BUILDING,
-            component.version,
-            detail=f"make -j{self.num_jobs}",
-        )
-
-        result, log_file = self.executor.execute_make(
+            f"make -j{self.num_jobs}",
+            "Build failed",
             source_dir,
             self.num_jobs,
             env,
-            component.name,
         )
 
-        if not result.success:
-            raise BuildError(component.name, "Build failed", log_file)
-
-        self.state_manager.mark_component_status(
-            component.name,
+        self._run_install(
+            component,
             ComponentStatus.INSTALLING,
-            component.version,
-            detail="make install",
-        )
-
-        result, log_file = self.executor.execute_install(
+            "make install",
+            "Install failed",
             source_dir,
             env,
-            component.name,
         )
-
-        if not result.success:
-            raise BuildError(component.name, "Install failed", log_file)
 
     def build_zimg(self, component: Component, source_dir: Path) -> None:
         """Build zimg.
@@ -1664,8 +1655,6 @@ class FFmpegBuilder:
             component: Component to build.
             source_dir: Source directory.
         """
-        import shutil
-
         env = self.get_build_env(component)
 
         def _resolve_tool_path(tool: str) -> Optional[str]:
@@ -1703,7 +1692,9 @@ class FFmpegBuilder:
             elif self._command_exists("glibtoolize"):
                 libtoolize = "glibtoolize"
         if libtoolize is None:
-            raise BuildError(component.name, "libtoolize not found (tried libtoolize and glibtoolize)")
+            raise BuildError(
+                component.name, "libtoolize not found (tried libtoolize and glibtoolize)"
+            )
 
         libtoolize_cmd = [libtoolize, "-i", "-f", "-q"]
         if self._is_windows_ucrt64_backend():
@@ -1714,71 +1705,57 @@ class FFmpegBuilder:
                 sh_path = _resolve_tool_path("sh") or "sh"
                 libtoolize_cmd = [sh_path, libtoolize, "-i", "-f", "-q"]
 
-        result, log_file = self.executor.execute_with_log(
+        self._run_step(
+            component,
+            ComponentStatus.CONFIGURING,
+            "libtoolize",
+            "Libtoolize failed",
             libtoolize_cmd,
-            component.name,
             "libtoolize",
             source_dir,
             env,
         )
 
-        if not result.success:
-            raise BuildError(component.name, "Libtoolize failed", log_file)
-
-        result, log_file = self.executor.execute_with_log(
+        self._run_step(
+            component,
+            ComponentStatus.CONFIGURING,
+            "./autogen.sh",
+            "Autogen failed",
             ["./autogen.sh", f"--prefix={self._ws_str()}"],
-            component.name,
             "autogen",
             source_dir,
             env,
         )
 
-        if not result.success:
-            raise BuildError(component.name, "Autogen failed", log_file)
-
-        result, log_file = self.executor.execute_with_log(
+        self._run_step(
+            component,
+            ComponentStatus.CONFIGURING,
+            "./configure",
+            "Configure failed",
             ["./configure", f"--prefix={self._ws_str()}", "--enable-static", "--disable-shared"],
-            component.name,
             "configure",
             source_dir,
             env,
         )
 
-        if not result.success:
-            raise BuildError(component.name, "Configure failed", log_file)
-
-        self.state_manager.mark_component_status(
-            component.name,
+        self._run_make(
+            component,
             ComponentStatus.BUILDING,
-            component.version,
-        detail='make -jself.num_jobs',
-        )
-
-        result, log_file = self.executor.execute_make(
+            f"make -j{self.num_jobs}",
+            "Build failed",
             source_dir,
             self.num_jobs,
             env,
-            component.name,
         )
 
-        if not result.success:
-            raise BuildError(component.name, "Build failed", log_file)
-
-        self.state_manager.mark_component_status(
-            component.name,
+        self._run_install(
+            component,
             ComponentStatus.INSTALLING,
-            component.version,
-        detail='make install',
-        )
-
-        result, log_file = self.executor.execute_install(
+            "make install",
+            "Install failed",
             source_dir,
             env,
-            component.name,
         )
-
-        if not result.success:
-            raise BuildError(component.name, "Install failed", log_file)
 
     def build_libvorbis(self, component: Component, source_dir: Path) -> None:
         """Build libvorbis.
@@ -1795,18 +1772,22 @@ class FFmpegBuilder:
             content = content.replace("-force_cpusubtype_ALL", "")
             configure_ac.write_text(content)
 
-        result, log_file = self.executor.execute_with_log(
+        self._run_step(
+            component,
+            ComponentStatus.CONFIGURING,
+            "./autogen.sh",
+            "Autogen failed",
             ["./autogen.sh", f"--prefix={self._ws_str()}"],
-            component.name,
             "autogen",
             source_dir,
             env,
         )
 
-        if not result.success:
-            raise BuildError(component.name, "Autogen failed", log_file)
-
-        result, log_file = self.executor.execute_with_log(
+        self._run_step(
+            component,
+            ComponentStatus.CONFIGURING,
+            "./configure",
+            "Configure failed",
             [
                 "./configure",
                 f"--prefix={self._ws_str()}",
@@ -1816,47 +1797,29 @@ class FFmpegBuilder:
                 "--disable-shared",
                 "--disable-oggtest",
             ],
-            component.name,
             "configure",
             source_dir,
             env,
         )
 
-        if not result.success:
-            raise BuildError(component.name, "Configure failed", log_file)
-
-        self.state_manager.mark_component_status(
-            component.name,
+        self._run_make(
+            component,
             ComponentStatus.BUILDING,
-            component.version,
-        detail='make -jself.num_jobs',
-        )
-
-        result, log_file = self.executor.execute_make(
+            f"make -j{self.num_jobs}",
+            "Build failed",
             source_dir,
             self.num_jobs,
             env,
-            component.name,
         )
 
-        if not result.success:
-            raise BuildError(component.name, "Build failed", log_file)
-
-        self.state_manager.mark_component_status(
-            component.name,
+        self._run_install(
+            component,
             ComponentStatus.INSTALLING,
-            component.version,
-        detail='make install',
-        )
-
-        result, log_file = self.executor.execute_install(
+            "make install",
+            "Install failed",
             source_dir,
             env,
-            component.name,
         )
-
-        if not result.success:
-            raise BuildError(component.name, "Install failed", log_file)
 
     def build_libjxl(self, component: Component, source_dir: Path) -> None:
         """Build libjxl.
@@ -1875,24 +1838,24 @@ class FFmpegBuilder:
             original = 'SELF=$(realpath "$0")'
             if original in content:
                 portable = (
-                    'if command -v realpath >/dev/null 2>&1; then\n'
+                    "if command -v realpath >/dev/null 2>&1; then\n"
                     '  SELF=$(realpath "$0")\n'
-                    'else\n'
+                    "else\n"
                     '  SELF=$(cd -- "$(dirname -- "$0")" && pwd -P)/$(basename -- "$0")\n'
-                    'fi'
+                    "fi"
                 )
                 deps_script.write_text(content.replace(original, portable, 1))
 
-        result, log_file = self.executor.execute_with_log(
+        self._run_step(
+            component,
+            ComponentStatus.CONFIGURING,
+            "./deps.sh",
+            "Deps failed",
             ["./deps.sh"],
-            component.name,
             "deps",
             source_dir,
             env,
         )
-
-        if not result.success:
-            raise BuildError(component.name, "Deps failed", log_file)
 
         cmake_args = [
             "-DBUILD_SHARED_LIBS=OFF",
@@ -1916,52 +1879,38 @@ class FFmpegBuilder:
             "-DJPEGXL_ENABLE_SKCMS=OFF",
         ]
 
-        result, log_file = self.executor.execute_with_log(
+        self._run_step(
+            component,
+            ComponentStatus.CONFIGURING,
+            "cmake .",
+            "Configure failed",
             ["cmake", "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"] + cmake_args + ["."],
-            component.name,
             "configure",
             source_dir,
             env,
         )
 
-        if not result.success:
-            raise BuildError(component.name, "Configure failed", log_file)
-
-        self.state_manager.mark_component_status(
-            component.name,
+        self._run_step(
+            component,
             ComponentStatus.BUILDING,
-            component.version,
-            detail=f'cmake --build . --parallel {self.num_jobs}',
-        )
-
-        result, log_file = self.executor.execute_with_log(
+            f"cmake --build . --parallel {self.num_jobs}",
+            "Build failed",
             ["cmake", "--build", ".", f"--parallel={self.num_jobs}"],
-            component.name,
             "build",
             source_dir,
             env,
         )
 
-        if not result.success:
-            raise BuildError(component.name, "Build failed", log_file)
-
-        self.state_manager.mark_component_status(
-            component.name,
+        self._run_step(
+            component,
             ComponentStatus.INSTALLING,
-            component.version,
-            detail='cmake --install .',
-        )
-
-        result, log_file = self.executor.execute_with_log(
+            "cmake --install .",
+            "Install failed",
             ["cmake", "--install", "."],
-            component.name,
             "install",
             source_dir,
             env,
         )
-
-        if not result.success:
-            raise BuildError(component.name, "Install failed", log_file)
 
     def build_libvmaf(self, component: Component, source_dir: Path) -> None:
         """Build libvmaf.
@@ -2003,7 +1952,9 @@ class FFmpegBuilder:
                 env["NVCC_PREPEND_FLAGS"] = " ".join([nvcc_flag, *nvcc_tokens]).strip()
 
         meson_args = [
-            "meson", "setup", "build",
+            "meson",
+            "setup",
+            "build",
             f"--prefix={self._ws_str()}",
             "--buildtype=release",
             "--default-library=static",
@@ -2012,52 +1963,38 @@ class FFmpegBuilder:
         if libvmaf_cuda_enabled:
             meson_args.append("-Denable_cuda=true")
 
-        result, log_file = self.executor.execute_with_log(
+        self._run_step(
+            component,
+            ComponentStatus.CONFIGURING,
+            "meson setup build",
+            "Configure failed",
             meson_args,
-            component.name,
             "configure",
             libvmaf_dir,
             env,
         )
 
-        if not result.success:
-            raise BuildError(component.name, "Configure failed", log_file)
-
-        self.state_manager.mark_component_status(
-            component.name,
+        self._run_step(
+            component,
             ComponentStatus.BUILDING,
-            component.version,
             "ninja -C build",
-        )
-
-        result, log_file = self.executor.execute_with_log(
+            "Build failed",
             ["ninja", "-C", "build"],
-            component.name,
             "build",
             libvmaf_dir,
             env,
         )
 
-        if not result.success:
-            raise BuildError(component.name, "Build failed", log_file)
-
-        self.state_manager.mark_component_status(
-            component.name,
+        self._run_step(
+            component,
             ComponentStatus.INSTALLING,
-            component.version,
             "ninja install",
-        )
-
-        result, log_file = self.executor.execute_with_log(
+            "Install failed",
             ["ninja", "-C", "build", "install"],
-            component.name,
             "install",
             libvmaf_dir,
             env,
         )
-
-        if not result.success:
-            raise BuildError(component.name, "Install failed", log_file)
 
     def build_srt(self, component: Component, source_dir: Path) -> None:
         """Build srt.
@@ -2082,52 +2019,38 @@ class FFmpegBuilder:
             "-DUSE_STATIC_LIBSTDCXX=ON",
         ]
 
-        result, log_file = self.executor.execute_with_log(
+        self._run_step(
+            component,
+            ComponentStatus.CONFIGURING,
+            "cmake .",
+            "Configure failed",
             ["cmake", "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"] + cmake_args + ["."],
-            component.name,
             "configure",
             source_dir,
             env,
         )
 
-        if not result.success:
-            raise BuildError(component.name, "Configure failed", log_file)
-
-        self.state_manager.mark_component_status(
-            component.name,
+        self._run_step(
+            component,
             ComponentStatus.BUILDING,
-            component.version,
-            detail="cmake --build",
-        )
-
-        result, log_file = self.executor.execute_with_log(
+            "cmake --build",
+            "Build failed",
             ["cmake", "--build", ".", "--parallel", str(self.num_jobs)],
-            component.name,
             "build",
             source_dir,
             env,
         )
 
-        if not result.success:
-            raise BuildError(component.name, "Build failed", log_file)
-
-        self.state_manager.mark_component_status(
-            component.name,
+        self._run_step(
+            component,
             ComponentStatus.INSTALLING,
-            component.version,
-            detail="cmake --install",
-        )
-
-        result, log_file = self.executor.execute_with_log(
+            "cmake --install",
+            "Install failed",
             ["cmake", "--install", "."],
-            component.name,
             "install",
             source_dir,
             env,
         )
-
-        if not result.success:
-            raise BuildError(component.name, "Install failed", log_file)
 
         if self.config.full_static and self.platform == "linux":
             srt_pc = self.workspace / "lib" / "pkgconfig" / "srt.pc"
@@ -2148,58 +2071,44 @@ class FFmpegBuilder:
         if self.platform == "darwin":
             env["XML_CATALOG_FILES"] = "/usr/local/etc/xml/catalog"
 
-        result, log_file = self.executor.execute_with_log(
+        self._run_step(
+            component,
+            ComponentStatus.CONFIGURING,
+            "./configure",
+            "Configure failed",
             ["./configure", f"--prefix={self._ws_str()}", "--disable-shared", "--enable-static"],
-            component.name,
             "configure",
             source_dir,
             env,
         )
-
-        if not result.success:
-            raise BuildError(component.name, "Configure failed", log_file)
 
         proxy_cpp = source_dir / "src" / "proxy.cpp"
         if proxy_cpp.exists():
             content = proxy_cpp.read_text()
             content = content.replace(
                 "stats_proxy stats = {0}",
-                "stats_proxy stats = {{{0, 0}, {0, 0}}, {{0, 0}, {0, 0}}}"
+                "stats_proxy stats = {{{0, 0}, {0, 0}}, {{0, 0}, {0, 0}}}",
             )
             proxy_cpp.write_text(content)
 
-        self.state_manager.mark_component_status(
-            component.name,
+        self._run_make(
+            component,
             ComponentStatus.BUILDING,
-            component.version,
             f"make -j{self.num_jobs}",
-        )
-
-        result, log_file = self.executor.execute_make(
+            "Build failed",
             source_dir,
             self.num_jobs,
             env,
-            component.name,
         )
 
-        if not result.success:
-            raise BuildError(component.name, "Build failed", log_file)
-
-        self.state_manager.mark_component_status(
-            component.name,
+        self._run_install(
+            component,
             ComponentStatus.INSTALLING,
-            component.version,
             "make install",
-        )
-
-        result, log_file = self.executor.execute_install(
+            "Install failed",
             source_dir,
             env,
-            component.name,
         )
-
-        if not result.success:
-            raise BuildError(component.name, "Install failed", log_file)
 
         # On Windows (UCRT64/MinGW), zmq.h uses __declspec(dllimport) by
         # default which causes undefined reference to __imp_* symbols when
@@ -2268,56 +2177,40 @@ class FFmpegBuilder:
         if self._is_windows_ucrt64_backend():
             env["PKG_CONFIG_PATH"] = f"{ws}/lib/pkgconfig;{ws}/lib64/pkgconfig"
 
-        meson_args = [
-            arg.replace("{workspace}", ws) for arg in component.configure_args
-        ]
+        meson_args = [arg.replace("{workspace}", ws) for arg in component.configure_args]
 
-        result, log_file = self.executor.execute_with_log(
+        self._run_step(
+            component,
+            ComponentStatus.CONFIGURING,
+            "meson setup build",
+            "Meson configure failed",
             ["meson", "setup", "build"] + meson_args,
-            component.name,
             "configure",
             source_dir,
             env,
         )
 
-        if not result.success:
-            raise BuildError(component.name, "Meson configure failed", log_file)
-
-        self.state_manager.mark_component_status(
-            component.name,
+        self._run_step(
+            component,
             ComponentStatus.BUILDING,
-            component.version,
-            detail="ninja -C build",
-        )
-
-        result, log_file = self.executor.execute_with_log(
+            "ninja -C build",
+            "Build failed",
             ["ninja", "-C", "build"],
-            component.name,
             "build",
             source_dir,
             env,
         )
 
-        if not result.success:
-            raise BuildError(component.name, "Build failed", log_file)
-
-        self.state_manager.mark_component_status(
-            component.name,
+        self._run_step(
+            component,
             ComponentStatus.INSTALLING,
-            component.version,
-            detail="ninja install",
-        )
-
-        result, log_file = self.executor.execute_with_log(
+            "ninja install",
+            "Install failed",
             ["ninja", "-C", "build", "install"],
-            component.name,
             "install",
             source_dir,
             env,
         )
-
-        if not result.success:
-            raise BuildError(component.name, "Install failed", log_file)
 
         self._patch_libplacebo_pc()
 
@@ -2334,9 +2227,7 @@ class FFmpegBuilder:
         ]
         multiarch = self.platform_detector.get_multiarch_dir()
         if multiarch:
-            pc_candidates.append(
-                self.workspace / "lib" / multiarch / "pkgconfig" / "libplacebo.pc"
-            )
+            pc_candidates.append(self.workspace / "lib" / multiarch / "pkgconfig" / "libplacebo.pc")
 
         for pc_file in pc_candidates:
             if not pc_file.exists():
@@ -2359,13 +2250,10 @@ class FFmpegBuilder:
             for i, line in enumerate(lines):
                 if not line.startswith("Libs: "):
                     continue
-                tokens = line[len("Libs: "):].split()
+                tokens = line[len("Libs: ") :].split()
                 if "-lglslang" not in tokens:
                     continue
-                tokens = [
-                    t for t in tokens
-                    if t not in ("-lSPIRV-Tools-opt", "-lSPIRV-Tools")
-                ]
+                tokens = [t for t in tokens if t not in ("-lSPIRV-Tools-opt", "-lSPIRV-Tools")]
                 insert_at = tokens.index("-lglslang") + 1
                 tokens[insert_at:insert_at] = ["-lSPIRV-Tools-opt", "-lSPIRV-Tools"]
                 lines[i] = "Libs: " + " ".join(tokens)
@@ -2400,52 +2288,38 @@ class FFmpegBuilder:
             f"-DCMAKE_INSTALL_PREFIX={self._ws_str()}",
         ]
 
-        result, log_file = self.executor.execute_with_log(
+        self._run_step(
+            component,
+            ComponentStatus.CONFIGURING,
+            "cmake .",
+            "Configure failed",
             ["cmake", "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"] + cmake_args + ["."],
-            component.name,
             "configure",
             source_dir,
             env,
         )
 
-        if not result.success:
-            raise BuildError(component.name, "Configure failed", log_file)
-
-        self.state_manager.mark_component_status(
-            component.name,
+        self._run_step(
+            component,
             ComponentStatus.BUILDING,
-            component.version,
-            detail="cmake --build",
-        )
-
-        result, log_file = self.executor.execute_with_log(
+            "cmake --build",
+            "Build failed",
             ["cmake", "--build", ".", "--parallel", str(self.num_jobs)],
-            component.name,
             "build",
             source_dir,
             env,
         )
 
-        if not result.success:
-            raise BuildError(component.name, "Build failed", log_file)
-
-        self.state_manager.mark_component_status(
-            component.name,
+        self._run_step(
+            component,
             ComponentStatus.INSTALLING,
-            component.version,
-            detail="cmake --install",
-        )
-
-        result, log_file = self.executor.execute_with_log(
+            "cmake --install",
+            "Install failed",
             ["cmake", "--install", "."],
-            component.name,
             "install",
             source_dir,
             env,
         )
-
-        if not result.success:
-            raise BuildError(component.name, "Install failed", log_file)
 
     def build_ninja(self, component: Component, source_dir: Path) -> None:
         """Build ninja build system from source.
@@ -2456,29 +2330,15 @@ class FFmpegBuilder:
         """
         env = self.get_build_env(component)
 
-        self.state_manager.mark_component_status(
-            component.name,
+        self._run_step(
+            component,
             ComponentStatus.BUILDING,
-            component.version,
-        detail='./configure.py --bootstrap',
-        )
-
-        result, log_file = self.executor.execute_with_log(
+            "./configure.py --bootstrap",
+            "Bootstrap failed",
             ["./configure.py", "--bootstrap"],
-            component.name,
             "bootstrap",
             source_dir,
             env,
-        )
-
-        if not result.success:
-            raise BuildError(component.name, "Bootstrap failed", log_file)
-
-        self.state_manager.mark_component_status(
-            component.name,
-            ComponentStatus.INSTALLING,
-            component.version,
-        detail='install ninja',
         )
 
         ninja_bin = source_dir / "ninja"
@@ -2496,7 +2356,8 @@ class FFmpegBuilder:
         env = self.get_build_env(component)
 
         built_components = [
-            name for name, state in self.state_manager.get().components.items()
+            name
+            for name, state in self.state_manager.get().components.items()
             if state.status in (ComponentStatus.COMPLETED, ComponentStatus.SYSTEM)
         ]
 
@@ -2619,52 +2480,38 @@ class FFmpegBuilder:
 
         configure_args.extend(configure_flags)
 
-        result, log_file = self.executor.execute_with_log(
+        self._run_step(
+            component,
+            ComponentStatus.CONFIGURING,
+            "./configure",
+            "Configure failed",
             ["./configure"] + configure_args,
-            component.name,
             "configure",
             source_dir,
             env,
         )
 
-        if not result.success:
-            raise BuildError(component.name, "Configure failed", log_file)
-
-        self.state_manager.mark_component_status(
-            component.name,
+        self._run_step(
+            component,
             ComponentStatus.BUILDING,
-            component.version,
-            detail='make -j{self.num_jobs}',
-        )
-
-        result, log_file = self.executor.execute_with_log(
+            f"make -j{self.num_jobs}",
+            "Build failed",
             ["make", f"-j{self.num_jobs}"],
-            component.name,
             "build",
             source_dir,
             env,
         )
 
-        if not result.success:
-            raise BuildError(component.name, "Build failed", log_file)
-
-        self.state_manager.mark_component_status(
-            component.name,
+        self._run_step(
+            component,
             ComponentStatus.INSTALLING,
-            component.version,
-            detail="make install",
-        )
-
-        result, log_file = self.executor.execute_with_log(
+            "make install",
+            "Install failed",
             ["make", "install"],
-            component.name,
             "install",
             source_dir,
             env,
         )
-
-        if not result.success:
-            raise BuildError(component.name, "Install failed", log_file)
 
     def make_release_bundle(self) -> Path:
         """Create a redistributable release directory for built FFmpeg binaries."""
@@ -2866,17 +2713,17 @@ class FFmpegBuilder:
     def _resolve_macos_dynamic_path(self, dep: str, binary_path: Path) -> Optional[Path]:
         """Resolve @loader_path/@executable_path/@rpath paths on macOS."""
         if dep.startswith("@loader_path/"):
-            candidate = binary_path.parent / dep[len("@loader_path/"):]
+            candidate = binary_path.parent / dep[len("@loader_path/") :]
             if candidate.exists():
                 return candidate
 
         if dep.startswith("@executable_path/"):
-            candidate = self.workspace / "bin" / dep[len("@executable_path/"):]
+            candidate = self.workspace / "bin" / dep[len("@executable_path/") :]
             if candidate.exists():
                 return candidate
 
         if dep.startswith("@rpath/"):
-            rel = dep[len("@rpath/"):]
+            rel = dep[len("@rpath/") :]
             for root in self._runtime_search_dirs(binary_path):
                 candidate = root / rel
                 if candidate.exists():
@@ -2896,17 +2743,21 @@ class FFmpegBuilder:
         if self.platform == "windows":
             msys_root = Path(self.config.windows.msys2_root)
             windows_root = Path(os.environ.get("WINDIR", r"C:\Windows"))
-            candidates.extend([
-                msys_root / "ucrt64" / "bin",
-                msys_root / "usr" / "bin",
-                windows_root / "System32",
-                windows_root / "SysWOW64",
-            ])
+            candidates.extend(
+                [
+                    msys_root / "ucrt64" / "bin",
+                    msys_root / "usr" / "bin",
+                    windows_root / "System32",
+                    windows_root / "SysWOW64",
+                ]
+            )
         elif self.platform == "darwin":
-            candidates.extend([
-                Path("/opt/local/lib"),
-                Path("/usr/local/lib"),
-            ])
+            candidates.extend(
+                [
+                    Path("/opt/local/lib"),
+                    Path("/usr/local/lib"),
+                ]
+            )
 
         unique: List[Path] = []
         seen: Set[str] = set()
@@ -2939,7 +2790,9 @@ class FFmpegBuilder:
             return False
 
         if self.platform == "darwin":
-            return self._is_under(path, Path("/usr/lib")) or self._is_under(path, Path("/System/Library"))
+            return self._is_under(path, Path("/usr/lib")) or self._is_under(
+                path, Path("/System/Library")
+            )
 
         return False
 
