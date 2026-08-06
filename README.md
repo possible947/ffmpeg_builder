@@ -187,6 +187,7 @@ From Terminal:
 sudo port selfupdate
 sudo port install \
   git git-lfs pkgconfig cmake meson ninja nasm yasm autoconf automake libtool gettext \
+  clang-17 libomp \
   python312 py312-pip py312-setuptools py312-wheel py312-rich py312-tqdm py312-yaml \
   py312-requests py312-packaging py312-psutil
 
@@ -213,6 +214,7 @@ macOS notes:
 - `third_party/sources` is Git LFS-backed; missing LFS pull/checkout leaves pointer files instead of source archives.
 - If multiple Python versions are installed, ensure `python3` points to a supported version (>= 3.8).
 - For best compatibility with this project’s defaults, keep the configured MacPorts clang toolchain (`macports-clang-17`) in `build_config.yaml`.
+- If `openmp: true` is enabled, install the OpenMP runtime package (`libomp`) for your toolchain.
 
 ## Quick Start
 

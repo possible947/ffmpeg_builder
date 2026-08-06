@@ -306,6 +306,34 @@ class FFmpegBuilder:
             return flags
         return " ".join(token for token in flags.split() if token != flag)
 
+    @staticmethod
+    def _resolve_darwin_openmp_runtime() -> Tuple[Optional[str], Optional[str]]:
+        """Resolve macOS OpenMP runtime library directory and linker flag.
+
+        Returns:
+            Tuple of (library_dir, linker_flag), for example
+            ("/opt/local/lib/libomp", "-lomp"). Returns (None, None) when no
+            compatible OpenMP runtime library is found in known locations.
+        """
+        runtime_candidates = [
+            ("libomp.dylib", "-lomp"),
+            ("libgomp.dylib", "-lgomp"),
+            ("libiomp5.dylib", "-liomp5"),
+        ]
+        search_dirs = [
+            Path("/opt/local/lib/libomp"),      # MacPorts libomp runtime
+            Path("/opt/local/lib"),             # MacPorts generic lib dir
+            Path("/opt/homebrew/opt/libomp/lib"),  # Homebrew on Apple Silicon
+            Path("/usr/local/opt/libomp/lib"),     # Homebrew on Intel
+        ]
+
+        for directory in search_dirs:
+            for library_name, linker_flag in runtime_candidates:
+                if (directory / library_name).exists():
+                    return str(directory), linker_flag
+
+        return None, None
+
     def _ws_str(self) -> str:
         """Return workspace path as a forward-slash string.
 
@@ -370,7 +398,14 @@ class FFmpegBuilder:
                 # not).  libomp is installed by MacPorts under /opt/local.
                 self.cflags += " -fopenmp"
                 self.cxxflags += " -fopenmp"
-                self.ldflags += " -L/opt/local/lib -lomp"
+                omp_lib_dir, omp_link_flag = self._resolve_darwin_openmp_runtime()
+                if omp_lib_dir is None or omp_link_flag is None:
+                    raise RuntimeError(
+                        "openmp=true on macOS but no OpenMP runtime library was found. "
+                        "Install libomp for your toolchain (e.g. `sudo port install libomp`) "
+                        "or disable OpenMP in build_config.yaml (`openmp: false`)."
+                    )
+                self.ldflags += f" -L{omp_lib_dir} -Wl,-rpath,{omp_lib_dir} {omp_link_flag}"
             else:
                 # GCC on Linux and MinGW/UCRT64: passing -fopenmp to the
                 # compiler and linker driver is sufficient; GCC automatically
@@ -440,10 +475,29 @@ class FFmpegBuilder:
             "LDEXEFLAGS": self.ldexeflags,
         }
 
-        if self.platform == "darwin" and self.platform_detector.platform_info.macports_clang:
-            clang_path = self.platform_detector.platform_info.macports_clang.path
-            self.env["CC"] = clang_path
-            self.env["CXX"] = clang_path.replace("clang", "clang++")
+        if self.platform == "darwin":
+            # Honour configured macOS compiler first; fallback to auto-detected
+            # MacPorts clang. This avoids FFmpeg defaulting to /usr/bin/gcc
+            # (Apple clang shim), which does not accept -fopenmp.
+            configured_cc = shutil.which(self.config.macos.clang)
+            detected = self.platform_detector.platform_info.macports_clang
+            clang_path = configured_cc or (detected.path if detected else None)
+            clangxx_path = None
+            if clang_path:
+                clangxx_path = clang_path.replace("clang", "clang++")
+                if not Path(clangxx_path).exists():
+                    clangxx_path = None
+
+            if clang_path and clangxx_path:
+                self.env["CC"] = clang_path
+                self.env["CXX"] = clangxx_path
+            elif self.config.openmp:
+                raise RuntimeError(
+                    "openmp=true on macOS requires a compiler with OpenMP support "
+                    f"(configured compiler '{self.config.macos.clang}' was not found). "
+                    "Install MacPorts clang (e.g. `sudo port install clang-17`) and "
+                    "set macos.clang accordingly, or disable OpenMP."
+                )
 
         # CUDA paths
         if self.platform_detector.platform_info.cuda_available:
@@ -1372,6 +1426,7 @@ class FFmpegBuilder:
             f"--prefix={self._ws_str()}",
             "--enable-static",
             "--enable-pic",
+            "--disable-cli",
         ]
 
         if self.platform == "linux":
@@ -2428,6 +2483,10 @@ class FFmpegBuilder:
             "--pkg-config-flags=--static",
             f"--prefix={self._ws_str()}",
         ]
+        if "CC" in env:
+            configure_args.append(f"--cc={env['CC']}")
+        if "CXX" in env:
+            configure_args.append(f"--cxx={env['CXX']}")
 
         # On UCRT64/MinGW, POSIX pthreads are not available as a system
         # library; use native Windows threads (w32threads) instead.

@@ -35,17 +35,49 @@ All notable changes to the FFmpeg Builder project.
 >
 > **Stage 3** — Add macOS as a supported platform (MoltenVK backend). Requires detecting MoltenVK/`VK_ICD_FILENAMES` at platform-detect time. Remove `linux_only` restriction; add macOS-specific configure overrides and link flags. Stage 1/2 full_static restriction does not apply on macOS (frameworks handle Vulkan).
 
+### Planned
+
+- **System giflib policy across all platforms** — Standardize on using the host/system `giflib` when available on Linux, macOS, Windows WSL2, and Windows MSYS2-UCRT64, instead of building `giflib` from source.
+
 ### Rules
 
 - **libplacebo + liblcms2 are always disabled when `full_static: true` (Linux)** — `libvulkan.so` (system Vulkan ICD loader) is a runtime shared library with no static archive; linking FFmpeg fully statically against it is not supported. When `full_static: true` the builder skips `libplacebo` (and `liblcms2` in Stage 2) even if `enable_libplacebo: true` and `vulkan_available: true`.
 
 ### Added
 
+- **`fast-float` v6.1.6 headers-only component (2026-08-01)** — New `HEADERS_ONLY` component added before `libplacebo` in the build graph. GitHub release tarballs for libplacebo ship with an empty `3rdparty/fast_float/` git submodule directory; without the headers, `src/convert.cc` fails to compile. The component downloads `fast_float-6.1.6.tar.gz` and `build_libplacebo()` copies the `include/` tree into the submodule directory before invoking meson. The archive is included in `thrid_party/sources/` for offline builds. `libplacebo` component `depends_on` updated to include `fast-float`. Component count on macOS: 55 → **56**.
+
+- **libplacebo build fully automated — no manual intervention required (2026-08-01)** — Three root-cause build failures fixed so libplacebo builds end-to-end without any patching outside the builder:
+  1. **SPIRV not found** — libplacebo meson requires `-Dvulkan-sdk=PATH` to populate `vulkan_lib_dirs`; without it `cxx.find_library('SPIRV', dirs: vulkan_lib_dirs)` always fails. `build_libplacebo()` now passes `-Dvulkan-sdk={workspace}` so both SPIRV and Vulkan headers resolve correctly.
+  2. **glslang not found (upstream inconsistency)** — `src/glsl/meson.build` line 62 calls `cxx.find_library('glslang')` without a `dirs:` argument (unlike the adjacent SPIRV call which has `dirs: vulkan_lib_dirs`). MacPorts clang reports only its own LLVM lib dir as the system search path, so glslang installed in the workspace is never found. Fix: `build_libplacebo()` patches the single line before running meson (idempotent; checks original text); reverts naturally when the build directory is cleaned.
+  3. **fast_float headers missing** — covered by the `fast-float` component above.
+
+- **libplacebo Stage 3 — macOS support + permanent component (2026-08-01)** — libplacebo is now always built on all platforms (Linux, macOS, Windows UCRT64); it is no longer opt-in. Vulkan GPU acceleration inside libplacebo is controlled separately by the new `enable_libplacebo_vulkan` config flag (default `false`). Changes:
+  - `components.py`: removed `linux_only=True` from `libplacebo` Component; removed `-Dvulkan=enabled` from static `configure_args` (now injected at build time by `build_libplacebo()`).
+  - `builder.py` `build_libplacebo()`: computes `use_vulkan` from `enable_libplacebo_vulkan` + `vulkan_available` + `full_static` gate; appends `-Dvulkan=enabled` or `-Dvulkan=disabled` to meson args. On macOS with Vulkan enabled, extends `LIBRARY_PATH` and `PKG_CONFIG_PATH` with LunarG SDK paths (`/usr/local/lib`, `/usr/local/lib/pkgconfig`) so `dependency('vulkan')` and `cxx.find_library('vulkan')` succeed in Meson.
+  - `builder.py` FFmpeg extralibs: on `darwin` with libplacebo+Vulkan adds `-L/usr/local/lib -lvulkan`; on `linux` keeps the existing `-lvulkan`.
+  - `config.py`: `enable_libplacebo: bool` replaced by `enable_libplacebo_vulkan: bool = False`.
+  - `system_report.py`: start-screen "libplacebo" row now always shows "Yes"; new "libplacebo Vulkan" row reflects `enable_libplacebo_vulkan`.
+  - `build_config.yaml`: key renamed to `enable_libplacebo_vulkan`.
+  - Component count on macOS: 52 (pre-detection-fix) → 54 (Vulkan detection fix) → **55** (libplacebo now permanent).
+
+- **macOS Vulkan + OpenCL detection fix** — `_check_vulkan()` and `_check_opencl()` were previously called only for Linux/Windows backends; on macOS they were silently skipped, leaving `vulkan_available` and `opencl_available` as `False` despite a working LunarG Vulkan SDK and `OpenCL.framework` being present. Fixed by moving both checks outside the Linux/Windows-only gate so they run on all platforms. Additionally:
+  - `_check_vulkan()` now searches `/opt/local/include/vulkan/vulkan.h` (MacPorts) and `/opt/homebrew/include/vulkan/vulkan.h` (Homebrew ARM) in addition to `/usr/local`.
+  - `_check_opencl()` now short-circuits to `True` on macOS when `/System/Library/Frameworks/OpenCL.framework` exists, bypassing the Linux `.so`/ICD-vendors logic that always fails on macOS. **Verified 2026-08-01** on macOS 15.5 / Intel Core i7-6950X / AMD Radeon RX Vega 64 / LunarG Vulkan SDK 1.4.350.1: both flags now resolve `True`.
+
+- **macOS FFmpeg 8.1 verified build — Intel i7-6950X / AMD Radeon RX Vega 64 (2026-08-01)** — End-to-end FFmpeg 8.1 build (`commit 4741d60`) completed successfully on **macOS 15.5 (Sequoia) / Intel Core i7-6950X / AMD Radeon RX Vega 64 8 GB / LunarG Vulkan SDK 1.4.350.1 / MacPorts clang-18**. Configuration flags confirmed in binary: `--enable-videotoolbox --enable-opencl`. Hardware acceleration methods reported by `ffmpeg -hwaccels`: `videotoolbox`, `opencl`, `vulkan`. Full filter list includes `*_opencl`, `*_vulkan`, and `*_vt` families. **Caveats:**
+  - At the time of the build, `vulkan_available` and `opencl_available` were incorrectly reported as `False` by the detector (macOS detection gate bug, fixed in this release); both were nevertheless included in the FFmpeg configure command via `--enable-opencl` (OpenCL is always enabled on macOS) and Vulkan support was compiled in through static library linking. The detection fix ensures the UI and component graph now accurately reflect the available capabilities.
+  - `videotoolbox` is always enabled unconditionally on macOS (no dedicated `PlatformInfo` flag); hardware-accelerated encode/decode via VideoToolbox (`h264_videotoolbox`, `hevc_videotoolbox`, `av1_videotoolbox`, `mpeg1/2/4_videotoolbox`, `vp9_videotoolbox`, `prores_videotoolbox`) confirmed present in built binary.
+  - CUDA / NVENC / NVDEC: not applicable (no NVIDIA GPU).
+  - AMF / VCE (AMD): not enabled — AMF detection is Linux/Windows-only in current builder; AMD Vulkan/OpenCL acceleration is available through Vulkan compute and `opencl` hwaccel instead.
+  - QSV (Intel): not applicable (no Intel integrated GPU).
+
 - **libplacebo Vulkan integration (Stage 1)** — New optional component `libplacebo` v7.360.1 (Meson). Enabled when `enable_libplacebo: true` (default `false`) **and** `vulkan_available` is detected at runtime. Disabled automatically when `full_static: true` on Linux. Supports Linux, Windows WSL2, and Windows MSYS2-UCRT64. Depends on `vulkan-headers` and `glslang` (already built). FFmpeg configure flag: `--enable-libplacebo`. Adds `BuildConfig.enable_libplacebo: bool = False`; ConfigScreen and start-screen config table expose the new option. On Linux, `-lvulkan` is appended to FFmpeg `extralibs` when libplacebo is in the build set (and `full_static` is off). Meson flags: `-Dopengl=disabled -Dd3d11=disabled -Dshaderc=disabled -Dlibdovi=disabled -Dlcms=disabled`. Requires Python `jinja2` for GLSL preprocessing (project dependency via `python -m pip install -e .`; MSYS2 package `mingw-w64-ucrt-x86_64-python-jinja` in Windows bootstrap). **Verified 2026-07-25** on Windows 11 + MSYS2 UCRT64 and **verified 2026-07-26** on Fedora Linux 44: end-to-end FFmpeg 8.1 build completes successfully with libplacebo enabled
 
 - **Cross-platform OpenMP support** — `BuildConfig.openmp: bool = True` (top-level, all platforms). When enabled, `-fopenmp` is added to `CFLAGS`/`CXXFLAGS`; the linker receives `-fopenmp` (GCC auto-links `libgomp`) on Linux and Windows UCRT64, or `-L/opt/local/lib -lomp` (MacPorts libomp) on macOS. `soxr`'s `-DWITH_OPENMP:bool=off` CMake flag is flipped to `on` automatically when `openmp` is enabled. `MacOSConfig.openmp` removed (replaced by top-level field). UI now shows and toggles the `OpenMP` setting
 
 - **Windows UCRT64 verified build** — End-to-end FFmpeg 8.1 build confirmed working on Windows 11 + MSYS2 UCRT64 (GCC 16.1.0). A test build was successfully completed on **Windows 11 / Intel Core i9-7980XE / Intel Arc A750 / NVIDIA TITAN V** with **OpenMP, CUDA, NVENC/NVDEC, Intel dec/enc, Vulkan, and OpenCL** enabled. All configured components build and link correctly. See **Verified Environments** in the README for the full feature list
+- **macOS verified build (current session)** — End-to-end FFmpeg 8.1 build now completes successfully on macOS after applying the OpenMP runtime linking and FFmpeg compiler-selection fixes (`gcc`/Apple clang fallback eliminated for OpenMP builds).
 
 - **Windows UCRT64 Intel QSV enablement** — Added QSV support path for `windows-msys2-ucrt64`: `onevpl` is now allowed by Windows HW-accel policy, QSV detection on UCRT64 requires Intel GPU plus pkg-config oneVPL module (`vpl`/`libvpl`), and FFmpeg configure now enables `libvpl` on supported UCRT64 setups instead of forcing `--disable-libvpl`
 - **Windows bootstrap QSV readiness check** — `scripts/setup_windows_msys2_ucrt64.ps1` now validates Intel GPU presence plus oneVPL pkg-config module (`vpl`/`libvpl`) and reports explicit QSV prerequisite status after environment setup
@@ -57,6 +89,20 @@ All notable changes to the FFmpeg Builder project.
 - **`--enable-pthreads` → `--enable-w32threads` on UCRT64** — POSIX pthreads are not a system library on MSYS2 UCRT64; the builder now passes `--enable-w32threads` to FFmpeg configure when the backend is `windows-msys2-ucrt64`. All other platforms continue to use `--enable-pthreads`
 
 ### Fixed
+
+- **Start screen shows configured compiler instead of auto-detected (2026-08-01)** — `system_report.py` previously displayed the highest-version MacPorts clang found on the system (e.g. clang-18), while the actual build uses the version configured in `build_config.yaml` (`macos.clang: macports-clang-17`). This matters because OpenMP support requires a specific MacPorts clang; the displayed version must match the compiler that will be used. Fix: `SystemReportGenerator` now accepts an optional `config` argument; `generate()` reads `config.macos.clang` and stores it in the new `SystemReport.configured_clang` field; `get_compiler_info()` resolves `macports-clang-N` → `clang-mp-N` (same logic as `builder.py`) and returns that version if resolvable, falling back to auto-detect otherwise.
+
+- **`macports-clang-N` config entry not resolved to actual binary (2026-08-01)** — `build_config.yaml` stores the compiler as `macports-clang-17` (human-readable), but the binary on disk is `clang-mp-17`. `shutil.which('macports-clang-17')` always returned `None`, causing the builder to silently fall back to auto-detected clang (highest installed version, e.g. clang-18) instead of the configured one. `builder.py` now translates `macports-clang-N` → `clang-mp-N` before calling `shutil.which()`.
+
+- **`_find_macports_clang()` returned non-deterministic version (2026-08-01)** — The function previously returned the first result from `Path.glob("clang-mp-[0-9]*")`, whose order depends on the filesystem. Now sorts candidates by version number (integer) and returns the highest, making auto-detection deterministic.
+
+- **HW accel display missing Vulkan on macOS start screen (2026-08-01)** — `system_report.py::get_hardware_acceleration_status()` macOS branch hardcoded `VideoToolbox=True, OpenCL=True` without checking `vulkan_available`. Fixed to use dynamic `vulkan_available` / `opencl_available` flags from `PlatformInfo` so the start screen correctly lists all detected accelerators including Vulkan.
+
+- **macOS OpenMP runtime linker resolution (`ld: library not found for -lomp`)** — OpenMP setup now resolves the runtime library location dynamically (`libomp`/`libgomp`/`libiomp5`) across common macOS toolchain paths (MacPorts/Homebrew), adds the matching `-L` and `-Wl,-rpath` flags, and surfaces a clear configuration error when no compatible runtime is installed.
+
+- **macOS x264 build failure in CLI path (GPAC `strcpy` macro conflict)** — x264 custom build now passes `--disable-cli` so the FFmpeg library build no longer pulls CLI-only GPAC/lavf code paths that fail on recent macOS GPAC headers.
+
+- **macOS FFmpeg configure compiler mismatch (`gcc is unable to create an executable file`)** — FFmpeg configure now receives explicit `--cc/--cxx` from builder environment and macOS compiler resolution now prefers configured/auto-detected MacPorts clang. This prevents fallback to `/usr/bin/gcc` (Apple clang shim without OpenMP), fixing the `C compiler test failed` path when `openmp: true`.
 
 - **MSYS2 bootstrap Git LFS package target** — `scripts/setup_windows_msys2_ucrt64.ps1` now installs `mingw-w64-ucrt-x86_64-git-lfs` instead of `git-lfs`, which is not a valid target in current MSYS2 repositories. This removes repeated bootstrap failures during `pacman -S --needed ...` with `error: target not found: git-lfs`
 
