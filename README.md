@@ -46,8 +46,7 @@ rich>=13.0.0
 tqdm>=4.65.0
 pyyaml>=6.0
 requests>=2.31.0
-packaging>=23.0
-psutil>=5.9.0
+jinja2>=3.1.0
 ```
 
 Install all dependencies:
@@ -61,6 +60,13 @@ Or use the environment check script:
 ```bash
 ./scripts/check_python_env.sh
 ```
+
+### System Requirements
+
+- **Python** >= 3.10 (code uses f-strings, kw-only dataclasses; runs on Python 3.12–3.14)
+- **OS**: macOS (11.0+), Linux (x86_64 / arm64), Windows 11 + MSYS2 UCRT64
+- **Disk Space**: ~10 GB for sources and build artifacts
+- **Recommended RAM**: 32+ GiB (full builds with parallel compilation)
 
 ## Windows 11 + MSYS2 UCRT64
 
@@ -438,6 +444,7 @@ The following environments have been verified to complete a full FFmpeg build:
 
 | Date | OS | Environment | Configuration | Result |
 |------|------|-------------|---------------|--------|
+| 2026-08-06 | Fedora Linux 44 (Workstation Edition) | x86_64, Intel Xeon E5-2697A v4 @ 2.60 GHz (dual socket, 128 threads), GCC 16, 188 GiB RAM | GPL + non-free, native build, openmp, libplacebo, AMF, OpenCL, `make_release: true` | Successful full build of FFmpeg 8.1 (`58/58` components) in **~20 minutes** (new record; previous best ~24 min). All video/audio codecs, openssl, libsrt, libzmq, vulkan+glslang+libplacebo, amf, opencl verified. Static libx265.a multi-bitdepth merge confirmed. 28 lib-based encoders + 20 lib-based decoders enabled. |
 | 2026-07-25 | Windows 11 + MSYS2 UCRT64 | x86_64, GCC 16.1.0, Intel Arc A750 + NVIDIA TITAN V (CUDA 12.2) | GPL + non-free, native build, openmp, **libplacebo**, `make_release: true` | Successful full build of FFmpeg 8.1 (`59/59` components) with all configured components including libplacebo 7.360.1; release bundle generated in `workspace/release` (`ffmpeg.exe`, `ffprobe.exe`, `ffplay.exe`, runtime DLL set, `manifest.json`) |
 | 2026-07-19 | Ubuntu 24.04 (WSL2) | x86_64, NVIDIA CUDA | GPL + non-free, native build | Successful build of FFmpeg 8.1 with all configured components enabled |
 | 2026-07-19 | Fedora Linux 44 | x86_64, dual AMD Instinct MI50, dual Intel Xeon Broadwell, GCC 16.1.1, glibc 2.43 | GPL + non-free, native build | Successful build of FFmpeg 8.1 (45/57 components; 12 LV2/OpenCL/Vulkan/AMF/VapourSynth items not built because the corresponding runtime libraries are not present on this system) |

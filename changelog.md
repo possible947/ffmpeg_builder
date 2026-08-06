@@ -54,3 +54,70 @@ packages/giflib-5.2.2/Makefile                ← правильно
 **Подтверждение:** Сборка x265 завершена успешно: configure/build для 12bit, 10bit, 8bit,
 merge-libs (`ar -M` → Return code: 0), install → все артефакты установлены (libx265.a,
 x265.h, x265.pc, бинарный x265).
+
+## Полная сборка FFmpeg 8.1 — успешна (Fedora Linux 44)
+
+**Дата:** 2026-08-06  
+**Среда:** Fedora Linux 44 Workstation Edition, x86_64  
+**CPU:** Intel Xeon E5-2697A v4 @ 2.60 GHz (dual socket), 128 cores/threads, gcc 16  
+**RAM:** 188 GiB total, ~177 GiB available  
+**Режим:** сборка с нуля (`build`, не resume)
+
+### Время сборки
+
+| Параметр | Значение |
+|----------|----------|
+| Полная сборка с нуля | **~20 минут** (рекорд; ранее было ~24 минуты) |
+| Предыдущий рекорд | 24+ минут |
+| Ускорение | ~17% быстрее |
+
+### Конфигурация сборки
+
+- `ffmpeg_version`: "8.1" (commit hash `34bd300`)
+- `gpl_enabled`: true, `make_release`: true, `native_build`: true
+- `full_static`: false, `openmp`: true
+- `enable_libvmaf`: true, `enable_libvmaf_cuda`: false
+- `enable_libplacebo`: true, `disable_lv2`: false
+- `num_jobs`: auto (64 parallel jobs), `async_downloads`: true
+- C standard: gnu11, CXX standard: c++17
+- Компилятор: GCC 16, x86_64
+
+### Результат
+
+Все компоненты собраны и установлены успешно. Артефакты в `workspace/`:
+
+| Тип | Файлы |
+|-----|-------|
+| Бинарники | `bin/ffmpeg`, `bin/ffprobe`, `bin/ffplay` |
+| Библиотеки | `lib/libx265.a` (27 MB merged multi-bitdepth), libdav1d, libsvtav1, librav1e, x264, и др. |
+| Заголовки | `include/x265.h`, `include/gif_lib.h`, и др. |
+| pkg-config | `lib/pkgconfig/` — все .pc файлы |
+| Логи | `logs/` — по одному файлу на каждый шаг каждого компонента |
+
+### Верификация FFmpeg
+
+```
+ffmpeg version 34bd300 Copyright (c) 2000-2026 the FFmpeg developers
+built with gcc 16 (GCC)
+configuration: --disable-debug --disable-shared --enable-static --enable-version3
+  ...
+License: nonfree and unredistributable
+```
+
+Включены библиотеки и кодеки:
+
+| Категория | Подтверждено |
+|-----------|-------------|
+| Видео кодеки | libdav1d, libsvtav1, librav1e, libx264, libx265, libvpx, libaom, xvidcore, zimg |
+| Аудио кодеки | libmp3lame, libopus, libvorbis, libtheora, libfdk-aac, libsoxr, lv2 stack |
+| Шифрование/сети | openssl, libsrt, libzmq |
+| GPU/HW accel | vulkan, libglslang, libplacebo, amf, opencl |
+| Image кодеки | libjxl, libwebp, libfreetype |
+
+Всего enabled encoders с `lib` префиксом: **28**, decoders с `lib` префиксом: **20**.
+
+### Замечания
+
+- Сборка с нуля заняла ~20 минут — новый рекорд для данной конфигурации
+- Все 58 buildable компонентов прошли успешно (system + source builds)
+- Двойная вложенность директорий при распаковке (giflib) и зависание ar -M (x265) устранены
