@@ -2,7 +2,7 @@
 
 ## Repo history: past merge (2026-08-09)
 
-- `master` previously diverged from `origin/master`; the merge was resolved keeping the YAML-driven `ComponentRegistry` (from `components.yaml`) and the `enable_libplacebo_vulkan` config key, while taking origin/master's macOS/libplacebo fixes (glslang meson patch, `-Dvulkan`/`-Dglslang` meson args, `_find_macports_clang` highest-version resolution, `clang-mp-N` fallback, `SystemReport.configured_clang`, giflib pkg-config aliases). The `fast-float` v6.1.6 component (origin-only) was added to `components.yaml`; its archive was re-fetched because origin had committed an LFS pointer.
+- `master` previously diverged from `origin/master`; the merge was resolved keeping the YAML-driven `ComponentRegistry` (from `components.yaml`) and the `enable_libplacebo_vulkan` config key, while taking origin/master's macOS/libplacebo fixes (glslang meson patch, `-Dvulkan`/`-Dglslang` meson args, `_find_macports_clang` highest-version resolution, `clang-mp-N` fallback, `SystemReport.configured_clang`, giflib pkg-config aliases). The `fast-float` v6.1.6 component (origin-only) was added to `components.yaml`; its archive was re-fetched because origin had committed an LFS pointer. The merged history was then rewritten with `git lfs migrate` so all `third_party/sources/` archives are Git LFS objects (the raw 170MB AMF blob exceeds GitHub's 100MB file limit) and force-pushed.
 
 ## Package layout (unusual)
 
@@ -29,7 +29,7 @@
 
 ## Gotchas
 
-- `third_party/sources` archives are Git LFS-tracked (README says run `git lfs pull` after clone), but the `.gitattributes` LFS rules use the misspelled `thrid_party/` prefix that does not match — LFS state is unreliable. Check that an archive is a real tarball, not a 3-line LFS pointer (`version https://git-lfs.github.com/spec/v1`), before debugging extraction failures.
+- `third_party/sources` archives are Git LFS-tracked (`.gitattributes`); run `git lfs pull` after clone. A 2026-08-09 migration converted the committed archives to LFS objects because plain blobs over GitHub's 100MB file limit (e.g. AMF-1.5.0.tar.gz, 170MB) are rejected. Check that an archive is a real tarball, not a 3-line LFS pointer (`version https://git-lfs.github.com/spec/v1`), before debugging extraction failures.
 - A full build is a long, hardware-dependent manual process (~20-60 min, ~10 GB, full toolchain). Verify code changes with unit tests; do not expect a CI build.
 - On component failure, inspect `workspace/logs/<component>_<step>.log` and the resume state in `workspace/build_state.json`.
 
