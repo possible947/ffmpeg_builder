@@ -678,6 +678,13 @@
   - python3
   custom_build_fn: build_glslang
   ffmpeg_configure_flag: --enable-libglslang
+- name: fast-float
+  version: 6.1.6
+  url: https://github.com/fastfloat/fast_float/archive/refs/tags/v{version}.tar.gz
+  category: hw_accel
+  build_system: headers_only
+  archive_filename: fast_float-{version}.tar.gz
+  archive_dirname: fast_float-{version}
 - name: libplacebo
   version: 7.360.1
   url: https://github.com/haasn/libplacebo/archive/refs/tags/v{version}.tar.gz
@@ -698,6 +705,7 @@
   depends_on:
   - vulkan-headers
   - glslang
+  - fast-float
   linux_only: true
   windows_ucrt64_supported: true
   custom_build_fn: build_libplacebo

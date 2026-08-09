@@ -109,7 +109,7 @@ From a Linux shell:
 ```bash
 # 1) System prerequisites (Debian/Ubuntu example)
 sudo apt update
-sudo apt install -y git git-lfs python3-venv python3-pip
+sudo apt install -y git git-lfs python3-venv python3-pip libgif-dev
 
 # 2) Clone repository + source archive mirror (Git LFS)
 git clone <repository-url> ffmpeg_builder
@@ -145,7 +145,7 @@ From your WSL2 Ubuntu shell:
 ```bash
 # 1) System prerequisites
 sudo apt update
-sudo apt install -y git git-lfs python3-venv python3-pip
+sudo apt install -y git git-lfs python3-venv python3-pip libgif-dev
 
 # 2) Clone repository + fetch LFS archives
 git clone <repository-url> ffmpeg_builder
@@ -170,7 +170,51 @@ WSL2 notes:
 - CUDA can work in WSL2 when NVIDIA drivers/toolkit are installed correctly; OpenCL is typically unavailable in WSL2.
 - If you use `/mnt/<drive>/...` paths for the repository, expect slower I/O than using the Linux filesystem (`~/...`).
 
-## Quick Start
+## macOS + MacPorts
+
+On macOS, use MacPorts for the build toolchain. **MacPorts clang is required** — the Apple-provided `/usr/bin/clang` shim does not support OpenMP and cannot be used for this project.
+
+From Terminal:
+
+```bash
+# 1) Install required MacPorts packages
+sudo port selfupdate
+sudo port install \
+  git git-lfs pkgconfig cmake meson ninja nasm yasm autoconf automake libtool gettext giflib \
+  clang-17 libomp \
+  python312 py312-pip py312-setuptools py312-wheel py312-rich py312-tqdm py312-yaml \
+  py312-requests py312-packaging py312-psutil
+
+# 2) Clone repository + fetch LFS archives
+git clone <repository-url> ffmpeg_builder
+cd ffmpeg_builder
+git lfs install --local
+git lfs pull
+git lfs checkout
+
+# 3) Create and activate Python environment
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -e .
+
+# 4) Configure the compiler in build_config.yaml
+#    Set macos.clang to the installed MacPorts clang version, e.g.:
+#      macos:
+#        clang: "macports-clang-17"
+
+# 5) Validate and run
+./scripts/check_python_env.sh
+python -m ffmpeg_builder
+```
+
+macOS notes:
+
+- **MacPorts clang is mandatory.** `openmp: true` (the default) requires a compiler with OpenMP support. MacPorts `clang-17` (or any other installed version) provides this; Apple's system clang does not. The builder will raise a clear error if no MacPorts clang is found when OpenMP is enabled.
+- **`macos.clang` must match an installed version.** The `build_config.yaml` entry `macports-clang-17` maps to the binary `clang-mp-17` installed by MacPorts. The start screen displays the configured version (not the highest detected one) so you can verify the correct compiler is selected before starting a build.
+- `third_party/sources` is Git LFS-backed; missing LFS pull/checkout leaves pointer files instead of source archives.
+- If multiple Python versions are installed via MacPorts, activate the matching venv explicitly (e.g. `python3.12 -m venv .venv`).
+- After modifying project source files, reinstall in the venv: `python -m pip install -e .`
 
 ```bash
 # Clone the repository
@@ -234,7 +278,7 @@ full_static: false
 openmp: true
 enable_libvmaf: true
 enable_libvmaf_cuda: true
-enable_libplacebo: false
+enable_libplacebo_vulkan: false
 disable_lv2: false
 num_jobs: "auto"
 async_downloads: true
@@ -244,11 +288,15 @@ allow_network_downloads: false
 
 macos:
   clang: "macports-clang-17"
+
+linux:
   c_standard: "gnu11"
   cxx_standard: "c++17"
 
 windows:
   backend: "msys2-ucrt64"
+  command_mode: "posix"
+  msys2_root: "C:\msys64"
   prefer_system_packages: true
 ```
 
@@ -298,7 +346,7 @@ libsdl, freetype, vapoursynth, libvmaf, srt (GPL), libzmq, giflib
 
 ### Hardware Acceleration
 
-vulkan-headers, glslang, libplacebo (optional, Vulkan GPU processing), nv-codec (Linux/Windows UCRT64), amf (Linux), opencl-headers (Linux/Windows UCRT64), opencl-icd-loader (Linux/Windows UCRT64), onevpl (Linux)
+vulkan-headers, glslang, fast-float (libplacebo dependency), libplacebo (always built, Vulkan GPU processing opt-in via `enable_libplacebo_vulkan`), nv-codec (Linux/Windows UCRT64), amf (Linux), opencl-headers (Linux/Windows UCRT64), opencl-icd-loader (Linux/Windows UCRT64), onevpl (Linux)
 
 ### Target
 
@@ -312,11 +360,11 @@ The builder automatically detects available hardware acceleration and configures
 |------------|----------|------------------|
 | **CUDA** | Linux/Windows | nvcc in PATH, then platform-specific default install paths |
 | **Vulkan** | Linux/macOS/Windows | pkg-config, headers, vulkaninfo |
-| **libplacebo** | Linux/Windows UCRT64/WSL2 | opt-in (`enable_libplacebo: true`) + `vulkan_available`; disabled on `full_static` Linux |
+| **libplacebo** | Linux/macOS/Windows UCRT64/WSL2 | always built; `enable_libplacebo_vulkan` controls Vulkan GPU backend; disabled on `full_static` Linux |
 | **VAAPI** | Linux | pkg-config libva |
 | **Intel QSV** | Linux/Windows UCRT64 | Linux: vainfo or PCI Intel GPU (requires VAAPI, disabled in WSL2). Windows UCRT64: Intel GPU + pkg-config oneVPL (`vpl`/`libvpl`) |
 | **AMF** | Linux | AMD GPU detected via `lspci` or DRM sysfs; AMF headers are downloaded from GPUOpen |
-| **OpenCL** | Linux/Windows UCRT64 | Headers + ICD vendor files |
+| **OpenCL** | Linux/macOS/Windows UCRT64 | Linux/Windows: headers + ICD vendor files. macOS: `OpenCL.framework` (always available) |
 | **VideoToolbox** | macOS | Always available |
 
 Windows phase-3 policy:
@@ -348,15 +396,16 @@ Windows phase-3 policy:
 
 ### libplacebo Notes
 
-- Optional GPU-accelerated video/image rendering and processing library (Vulkan backend)
-- Enable with `enable_libplacebo: true` in `build_config.yaml`; disabled by default
-- Requires `vulkan_available: true` (detected at runtime) — silently skipped otherwise
-- Disabled when `full_static: true` on Linux (system `libvulkan.so` cannot be bundled statically)
-- Supported platforms: Linux, Windows WSL2, Windows MSYS2-UCRT64; macOS planned (Stage 3)
+- GPU-accelerated video/image rendering and processing library (Vulkan backend)
+- **Always built** on all platforms (Linux, macOS, Windows UCRT64/WSL2) — no opt-in required
+- `enable_libplacebo_vulkan: true` in `build_config.yaml` enables Vulkan GPU acceleration inside libplacebo; software features (tone mapping, colour space conversion, scaling) are always available regardless
+- Disabled when `full_static: true` on Linux (system `libvulkan.so` cannot be bundled statically); on macOS `libvulkan.dylib` is linked normally
+- On macOS with Vulkan enabled, `LIBRARY_PATH` and `PKG_CONFIG_PATH` are extended with LunarG SDK paths (`/usr/local/lib`, `/usr/local/lib/pkgconfig`)
 - Adds `--enable-libplacebo` to FFmpeg configure; exposes the `libplacebo` filter (`N->V`)
 - Built with: `-Dopengl=disabled -Dd3d11=disabled -Dshaderc=disabled -Dlibdovi=disabled -Dlcms=disabled`
 - Requires Python `jinja2` for GLSL preprocessing; installed with project dependencies (`pip install -e .`) or via distro package `python3-jinja2`
 - Requires `mingw-w64-ucrt-x86_64-python-jinja` on MSYS2 UCRT64 (GLSL preprocessor); installed by the bootstrap script automatically
+- Depends on `fast-float` v6.1.6 headers (GitHub release tarballs omit this git submodule; the builder provides it as a separate `HEADERS_ONLY` component)
 - Version: 7.360.1
 
 ### Intel QSV Notes
@@ -400,6 +449,8 @@ The following environments have been verified to complete a full FFmpeg build:
 
 | Date | OS | Environment | Configuration | Result |
 |------|------|-------------|---------------|--------|
+| 2026-08-02 | macOS 15.5 (Sequoia) | x86_64, Intel Core i7-6950X, AMD Radeon RX Vega 64 8 GB, LunarG Vulkan SDK 1.4.350.1, MacPorts clang-17 | GPL + non-free, native build, openmp, **libplacebo + Vulkan** (`enable_libplacebo_vulkan: true`) | Successful full build of FFmpeg 8.1 (`56/56` components). HW accels: `videotoolbox`, `opencl`, `vulkan`. libplacebo 7.360.1 with Vulkan GPU backend compiled in. VideoToolbox encode/decode, OpenCL filters, Vulkan filters, libplacebo filter all confirmed present. |
+| 2026-08-01 | macOS 15.5 (Sequoia) | x86_64, Intel Core i7-6950X, AMD Radeon RX Vega 64, LunarG Vulkan SDK 1.4.350.1, MacPorts clang-17 | GPL + non-free, native build, openmp, `make_release: false` | Successful full build of FFmpeg 8.1 (`52/52` buildable components without libplacebo/Vulkan). HW accels confirmed: `videotoolbox`, `opencl`, `vulkan`. |
 | 2026-07-25 | Windows 11 + MSYS2 UCRT64 | x86_64, GCC 16.1.0, Intel Arc A750 + NVIDIA TITAN V (CUDA 12.2) | GPL + non-free, native build, openmp, **libplacebo**, `make_release: true` | Successful full build of FFmpeg 8.1 (`59/59` components) with all configured components including libplacebo 7.360.1; release bundle generated in `workspace/release` (`ffmpeg.exe`, `ffprobe.exe`, `ffplay.exe`, runtime DLL set, `manifest.json`) |
 | 2026-07-19 | Ubuntu 24.04 (WSL2) | x86_64, NVIDIA CUDA | GPL + non-free, native build | Successful build of FFmpeg 8.1 with all configured components enabled |
 | 2026-07-19 | Fedora Linux 44 | x86_64, dual AMD Instinct MI50, dual Intel Xeon Broadwell, GCC 16.1.1, glibc 2.43 | GPL + non-free, native build | Successful build of FFmpeg 8.1 (45/57 components; 12 LV2/OpenCL/Vulkan/AMF/VapourSynth items not built because the corresponding runtime libraries are not present on this system) |
@@ -415,7 +466,7 @@ make_release: true
 openmp: true
 enable_libvmaf: true
 enable_libvmaf_cuda: true
-enable_libplacebo: true
+enable_libplacebo_vulkan: false
 disable_lv2: false
 num_jobs: auto
 ```

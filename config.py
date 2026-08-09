@@ -43,7 +43,7 @@ class BuildConfig:
     full_static: bool = False
     enable_libvmaf: bool = True
     enable_libvmaf_cuda: bool = True
-    enable_libplacebo: bool = False
+    enable_libplacebo_vulkan: bool = False
     disable_lv2: bool = False
     openmp: bool = True
     num_jobs: str = "auto"

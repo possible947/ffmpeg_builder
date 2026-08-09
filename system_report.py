@@ -1,7 +1,10 @@
 """System report generation."""
 
+import shutil
+from pathlib import Path
+from typing import Any, Dict, Optional
+
 from dataclasses import dataclass, field
-from typing import Any, Dict
 
 from .platform_detect import PlatformInfo, SystemInfo, ToolInfo
 
@@ -14,6 +17,11 @@ class SystemReport:
     platform_info: PlatformInfo = field(default_factory=PlatformInfo)
     tools: Dict[str, ToolInfo] = field(default_factory=dict)
     build_environment: Dict[str, str] = field(default_factory=dict)
+    # Configured compiler name from build_config.yaml (e.g. "macports-clang-17").
+    # Set by SystemReportGenerator when a BuildConfig is provided so the start
+    # screen displays the compiler that will actually be used, not the highest
+    # auto-detected one.
+    configured_clang: Optional[str] = field(default=None)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -81,7 +89,8 @@ class SystemReport:
 
         if self.platform_info.is_macos:
             status["VideoToolbox"] = True  # Always available on macOS
-            status["OpenCL"] = True  # Always available on macOS
+            status["Vulkan"] = self.platform_info.vulkan_available
+            status["OpenCL"] = self.platform_info.opencl_available
         elif self.platform_info.is_linux or self.platform_info.is_windows:
             status["CUDA"] = self.platform_info.cuda_available
             status["libvmaf_cuda"] = self.platform_info.libvmaf_cuda_supported
@@ -97,10 +106,40 @@ class SystemReport:
     def get_compiler_info(self) -> Dict[str, str]:
         """Get compiler information.
 
+        On macOS, ``configured_clang`` (populated from build_config.yaml by
+        SystemReportGenerator) is resolved first so the start screen shows the
+        compiler that will actually be used for the build, not just the highest
+        auto-detected MacPorts version.
+
+        Returns:
+            Dictionary with compiler name and version.
+        """
+        return self._resolve_compiler_info(self.configured_clang)
+
+    def _resolve_compiler_info(self, configured_clang: Optional[str] = None) -> Dict[str, str]:
+        """Resolve and return compiler display info.
+
+        Args:
+            configured_clang: Value of ``macos.clang`` from BuildConfig, e.g.
+                ``"macports-clang-17"``.  If None, falls back to auto-detect.
+
         Returns:
             Dictionary with compiler name and version.
         """
         if self.platform_info.is_macos:
+            # Try to resolve the configured compiler first (mirrors builder.py logic)
+            if configured_clang:
+                resolved = shutil.which(configured_clang)
+                if not resolved and configured_clang.startswith("macports-clang-"):
+                    ver = configured_clang.removeprefix("macports-clang-")
+                    resolved = shutil.which(f"clang-mp-{ver}")
+                if resolved:
+                    return {
+                        "compiler": "Macports Clang",
+                        "version": configured_clang.removeprefix("macports-clang-"),
+                        "path": resolved,
+                    }
+
             if self.platform_info.macports_clang and self.platform_info.macports_clang.available:
                 return {
                     "compiler": "Macports Clang",
@@ -122,7 +161,11 @@ class SystemReportGenerator:
     """Generates system reports."""
 
     def __init__(
-        self, system_info: SystemInfo, platform_info: PlatformInfo, tools: Dict[str, ToolInfo]
+        self,
+        system_info: SystemInfo,
+        platform_info: PlatformInfo,
+        tools: Dict[str, ToolInfo],
+        config: Optional[Any] = None,
     ):
         """Initialize report generator.
 
@@ -130,10 +173,15 @@ class SystemReportGenerator:
             system_info: System information.
             platform_info: Platform information.
             tools: Dictionary of detected tools.
+            config: BuildConfig instance (optional).  When provided, the
+                ``macos.clang`` setting is used to display the compiler that
+                will actually be used for the build instead of the highest
+                auto-detected MacPorts clang version.
         """
         self.system_info = system_info
         self.platform_info = platform_info
         self.tools = tools
+        self.config = config
 
     def generate(self) -> SystemReport:
         """Generate system report.
@@ -141,13 +189,22 @@ class SystemReportGenerator:
         Returns:
             SystemReport instance.
         """
+        import os
+
+        configured_clang: Optional[str] = None
+        if self.config is not None and self.platform_info.is_macos:
+            macos_cfg = getattr(self.config, "macos", None)
+            if macos_cfg is not None:
+                configured_clang = getattr(macos_cfg, "clang", None) or None
+
         report = SystemReport(
-            system_info=self.system_info, platform_info=self.platform_info, tools=self.tools
+            system_info=self.system_info,
+            platform_info=self.platform_info,
+            tools=self.tools,
+            configured_clang=configured_clang,
         )
 
         # Add build environment info
-        import os
-
         report.build_environment = {
             "PATH": os.environ.get("PATH", ""),
             "PKG_CONFIG_PATH": os.environ.get("PKG_CONFIG_PATH", ""),

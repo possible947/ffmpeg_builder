@@ -275,7 +275,6 @@ class ComponentRegistry:
         disable_lv2: bool = False,
         enable_libvmaf: bool = True,
         platform_info: Optional[Any] = None,
-        enable_libplacebo: bool = False,
         full_static: bool = False,
     ) -> List[Component]:
         """Get list of components that should be built.
@@ -331,15 +330,13 @@ class ComponentRegistry:
                 if comp.name == "onevpl" and not platform_info.qsv_available:
                     continue
 
-            # libplacebo: opt-in, requires Vulkan, disabled on full_static Linux
+            # libplacebo: permanent component; Vulkan acceleration is opt-in.
+            # On Linux full_static, Vulkan must be disabled (no static libvulkan.so).
+            # On all other platforms (macOS, Windows UCRT64), Vulkan follows
+            # enable_libplacebo_vulkan + vulkan_available.
             if comp.name == "libplacebo":
-                if not enable_libplacebo:
-                    continue
-                vulkan_ok = platform_info is not None and platform_info.vulkan_available
-                if not vulkan_ok:
-                    continue
-                if full_static and platform == "linux":
-                    continue
+                # Always include; -Dvulkan= flag is resolved in build_libplacebo()
+                pass
 
             result.append(comp)
 

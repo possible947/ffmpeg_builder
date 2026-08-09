@@ -29,11 +29,11 @@ All notable changes to the FFmpeg Builder project.
 
 ### Planned — libplacebo Vulkan integration (3 phases)
 
-> **Stage 1 ✅ released 2026-07-25** — Linux + Windows WSL2 + Windows MSYS2-UCRT64. No lcms2 colour-management. libplacebo is disabled by default (`enable_libplacebo: false`). Only activates when `vulkan_available` is detected at runtime. Disabled automatically when `full_static: true` on Linux (system `libvulkan.so` is required at link time and cannot be bundled statically). Verified: Windows 11 + MSYS2 UCRT64 / GCC 16.1.0 / Intel Arc A750 + NVIDIA TITAN V.
+> **Stage 1 ✅ released 2026-07-25** — Linux + Windows WSL2 + Windows MSYS2-UCRT64. libplacebo disabled by default. Only activates when `vulkan_available` is detected at runtime. Disabled automatically when `full_static: true` on Linux. Verified: Windows 11 + MSYS2 UCRT64 / GCC 16.1.0 / Intel Arc A750 + NVIDIA TITAN V.
 >
-> **Stage 2 (next)** — Same platform set, plus `liblcms2` as a build component providing colour-space conversion inside libplacebo. Adds `liblcms2` component (Meson/autotools), `-Dlcms=enabled` in libplacebo configure, and `-llcms2` extralibs pass through to FFmpeg. Stage 1 full_static restriction carries over.
+> **Stage 2 (next)** — Same platform set plus `liblcms2` build component providing colour-space conversion inside libplacebo. Adds `liblcms2` component (Meson/autotools), `-Dlcms=enabled` in libplacebo configure, and `-llcms2` extralibs pass through to FFmpeg. Stage 1 full_static restriction carries over.
 >
-> **Stage 3** — Add macOS as a supported platform (MoltenVK backend). Requires detecting MoltenVK/`VK_ICD_FILENAMES` at platform-detect time. Remove `linux_only` restriction; add macOS-specific configure overrides and link flags. Stage 1/2 full_static restriction does not apply on macOS (frameworks handle Vulkan).
+> **Stage 3 ✅ released 2026-08-01** — macOS support added. libplacebo is now a permanent component (always built). Vulkan GPU acceleration is opt-in via `enable_libplacebo_vulkan`. System Vulkan ICD loader (`libvulkan.dylib`, LunarG SDK `/usr/local/lib/`) is used on macOS; no `full_static` restriction applies. Removes `linux_only` restriction from the libplacebo component.
 
 ### Planned
 
@@ -41,7 +41,8 @@ All notable changes to the FFmpeg Builder project.
 
 ### Rules
 
-- **libplacebo + liblcms2 are always disabled when `full_static: true` (Linux)** — `libvulkan.so` (system Vulkan ICD loader) is a runtime shared library with no static archive; linking FFmpeg fully statically against it is not supported. When `full_static: true` the builder skips `libplacebo` (and `liblcms2` in Stage 2) even if `enable_libplacebo: true` and `vulkan_available: true`.
+- **libplacebo Vulkan path is disabled when `full_static: true` (Linux)** — `libvulkan.so` (system Vulkan ICD loader) is a runtime shared library with no static archive; `-Dvulkan=disabled` is passed to meson in this case. On macOS `libvulkan.dylib` is linked normally, so no restriction applies.
+- **libplacebo is now always built** — `enable_libplacebo_vulkan` controls only whether Vulkan GPU acceleration is compiled in (`-Dvulkan=enabled/disabled`). Software-side libplacebo features (tone mapping, colour space conversion, scaling) are always available.
 
 ### Added
 
@@ -87,8 +88,11 @@ All notable changes to the FFmpeg Builder project.
 
 - **Build orchestration refactor (Fix #6)** — Extracted 4 private helper methods (`_execute_configure()`, `_execute_build_command()`, `_execute_make()`, `_execute_install()`) to eliminate ~100 lines of duplicated execute→check→mark logic across all custom build functions. Each custom build method now delegates the repeated state management, execution, success checking, and error-raising to these helpers. Remaining `if not result.success:` patterns are in legitimate non-standard cases (inside helpers, special post-install `sh -c`, version detection, OpenSSL configdata.pm patching, runtime dependency readers)
 - **`--enable-pthreads` → `--enable-w32threads` on UCRT64** — POSIX pthreads are not a system library on MSYS2 UCRT64; the builder now passes `--enable-w32threads` to FFmpeg configure when the backend is `windows-msys2-ucrt64`. All other platforms continue to use `--enable-pthreads`
+- **System giflib policy across all platforms** — `giflib` is now treated as a required system-provided component across Linux, macOS, Windows WSL2, and Windows MSYS2-UCRT64. Source-download/build fallback for giflib is removed.
 
 ### Fixed
+
+- **macOS FFmpeg configure crash with Vulkan — `@rpath/libvulkan.1.dylib` not found (2026-08-02)** — When `enable_libplacebo_vulkan: true` on macOS, FFmpeg `./configure` ran its C compiler test with `-L/usr/local/lib -lvulkan` in `extra-libs` but no matching rpath. `libvulkan.dylib` (LunarG SDK) uses the install name `@rpath/libvulkan.1.dylib`; the only rpath in `--extra-ldflags` was `/opt/local/lib/libomp` (OpenMP), so `dyld` aborted with `Library not loaded: @rpath/libvulkan.1.dylib`, causing `configure` to report `C compiler test failed`. Fix: `builder.py` now appends `-Wl,-rpath,/usr/local/lib` to `self.ldflags` on darwin when `placebo_vulkan` is true. **Verified 2026-08-02**: FFmpeg 8.1 configure and build complete successfully on macOS 15.5 / Intel Core i7-6950X / AMD Radeon RX Vega 64 / LunarG Vulkan SDK 1.4.350.1 / MacPorts clang-17 with `enable_libplacebo_vulkan: true`.
 
 - **Start screen shows configured compiler instead of auto-detected (2026-08-01)** — `system_report.py` previously displayed the highest-version MacPorts clang found on the system (e.g. clang-18), while the actual build uses the version configured in `build_config.yaml` (`macos.clang: macports-clang-17`). This matters because OpenMP support requires a specific MacPorts clang; the displayed version must match the compiler that will be used. Fix: `SystemReportGenerator` now accepts an optional `config` argument; `generate()` reads `config.macos.clang` and stores it in the new `SystemReport.configured_clang` field; `get_compiler_info()` resolves `macports-clang-N` → `clang-mp-N` (same logic as `builder.py`) and returns that version if resolvable, falling back to auto-detect otherwise.
 
@@ -103,6 +107,8 @@ All notable changes to the FFmpeg Builder project.
 - **macOS x264 build failure in CLI path (GPAC `strcpy` macro conflict)** — x264 custom build now passes `--disable-cli` so the FFmpeg library build no longer pulls CLI-only GPAC/lavf code paths that fail on recent macOS GPAC headers.
 
 - **macOS FFmpeg configure compiler mismatch (`gcc is unable to create an executable file`)** — FFmpeg configure now receives explicit `--cc/--cxx` from builder environment and macOS compiler resolution now prefers configured/auto-detected MacPorts clang. This prevents fallback to `/usr/bin/gcc` (Apple clang shim without OpenMP), fixing the `C compiler test failed` path when `openmp: true`.
+
+- **giflib system detection on macOS/MSYS2 paths** — System-component probing now recognizes giflib from common non-`/usr/include` prefixes and pkg-config variants (`giflib`, `gif`), plus MSYS2 UCRT64 include/lib locations, preventing false “missing giflib” detection on valid setups.
 
 - **MSYS2 bootstrap Git LFS package target** — `scripts/setup_windows_msys2_ucrt64.ps1` now installs `mingw-w64-ucrt-x86_64-git-lfs` instead of `git-lfs`, which is not a valid target in current MSYS2 repositories. This removes repeated bootstrap failures during `pacman -S --needed ...` with `error: target not found: git-lfs`
 

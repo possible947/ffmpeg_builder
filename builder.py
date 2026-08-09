@@ -321,10 +321,10 @@ class FFmpegBuilder:
             ("libiomp5.dylib", "-liomp5"),
         ]
         search_dirs = [
-            Path("/opt/local/lib/libomp"),      # MacPorts libomp runtime
-            Path("/opt/local/lib"),             # MacPorts generic lib dir
+            Path("/opt/local/lib/libomp"),  # MacPorts libomp runtime
+            Path("/opt/local/lib"),  # MacPorts generic lib dir
             Path("/opt/homebrew/opt/libomp/lib"),  # Homebrew on Apple Silicon
-            Path("/usr/local/opt/libomp/lib"),     # Homebrew on Intel
+            Path("/usr/local/opt/libomp/lib"),  # Homebrew on Intel
         ]
 
         for directory in search_dirs:
@@ -479,7 +479,16 @@ class FFmpegBuilder:
             # Honour configured macOS compiler first; fallback to auto-detected
             # MacPorts clang. This avoids FFmpeg defaulting to /usr/bin/gcc
             # (Apple clang shim), which does not accept -fopenmp.
-            configured_cc = shutil.which(self.config.macos.clang)
+            #
+            # MacPorts names the binary clang-mp-N, but build_config.yaml
+            # stores it as macports-clang-N (human-readable alias).  Translate
+            # both forms so that shutil.which() can resolve the path.
+            configured_name = self.config.macos.clang
+            configured_cc = shutil.which(configured_name)
+            if not configured_cc and configured_name.startswith("macports-clang-"):
+                ver = configured_name.removeprefix("macports-clang-")
+                configured_cc = shutil.which(f"clang-mp-{ver}")
+
             detected = self.platform_detector.platform_info.macports_clang
             clang_path = configured_cc or (detected.path if detected else None)
             clangxx_path = None
@@ -602,6 +611,9 @@ class FFmpegBuilder:
         for component in components:
             if self.state_manager.is_component_completed(component.name, component.version):
                 continue
+            if component.name == "giflib":
+                # giflib is now always system-provided on all platforms.
+                continue
             if self._should_use_system_component(component) and self._prefer_system_packages():
                 continue
             if self._should_use_system_component(component):
@@ -685,6 +697,25 @@ class FFmpegBuilder:
         """
         if self.state_manager.is_component_completed(component.name, component.version):
             return
+
+        if component.name == "giflib":
+            tool = component.system_tool_name or component.name
+            if self._is_system_component_available(tool):
+                self.state_manager.mark_component_status(
+                    component.name,
+                    ComponentStatus.SYSTEM,
+                    component.version,
+                )
+                return
+            raise BuildError(
+                component.name,
+                (
+                    "Required system component 'giflib' is not available. "
+                    "Install giflib development/runtime packages for your platform "
+                    "(for example: libgif-dev on Debian/Ubuntu, giflib on MacPorts, "
+                    "or mingw-w64-ucrt-x86_64-giflib on MSYS2 UCRT64)."
+                ),
+            )
 
         # System-package mode for Windows MSYS2/UCRT64: do not fallback to
         # source downloads for declared system components.
@@ -831,23 +862,32 @@ class FFmpegBuilder:
             if self._command_exists(candidate):
                 return True
 
-        # Check via pkg-config for libraries
-        try:
-            result = subprocess.run(
-                ["pkg-config", "--exists", tool_name], capture_output=True, timeout=5
-            )
-            if result.returncode == 0:
-                return True
-        except Exception:
-            pass
+        pkg_names = [tool_name]
+        if tool_name == "giflib":
+            pkg_names = ["giflib", "gif"]
+        for pkg_name in pkg_names:
+            try:
+                result = subprocess.run(
+                    ["pkg-config", "--exists", pkg_name], capture_output=True, timeout=5
+                )
+                if result.returncode == 0:
+                    return True
+            except Exception:
+                pass
 
         # Check for common library headers
-        lib_headers = [Path("/usr/include")]
+        lib_headers = [
+            Path("/usr/include"),
+            Path("/usr/local/include"),
+            Path("/opt/local/include"),
+            Path("/opt/homebrew/include"),
+        ]
         mingw_prefix = os.environ.get("MINGW_PREFIX")
         if mingw_prefix:
             lib_headers.append(Path(mingw_prefix) / "include")
         if self._is_windows_ucrt64_backend():
             lib_headers.append(Path(self.config.windows.msys2_root) / "ucrt64" / "include")
+            lib_headers.append(Path("/ucrt64/include"))
 
         header_by_tool = {
             "giflib": "gif_lib.h",
@@ -859,6 +899,23 @@ class FFmpegBuilder:
             for include_root in lib_headers:
                 if (Path(include_root) / header_name).exists():
                     return True
+
+        if tool_name == "giflib":
+            lib_roots = [
+                Path("/usr/lib"),
+                Path("/usr/local/lib"),
+                Path("/opt/local/lib"),
+                Path("/opt/homebrew/lib"),
+            ]
+            if mingw_prefix:
+                lib_roots.append(Path(mingw_prefix) / "lib")
+            if self._is_windows_ucrt64_backend():
+                lib_roots.append(Path(self.config.windows.msys2_root) / "ucrt64" / "lib")
+                lib_roots.append(Path("/ucrt64/lib"))
+            for root in lib_roots:
+                for name in ("libgif.a", "libgif.so", "libgif.dylib", "libgif.dll.a"):
+                    if (root / name).exists():
+                        return True
 
         return False
 
@@ -1290,6 +1347,18 @@ class FFmpegBuilder:
                         shutil.copy2(item, dest_item)
                     elif item.is_dir():
                         shutil.copytree(item, dest_item, dirs_exist_ok=True)
+
+        elif component.name == "fast-float":
+            # fast_float is a header-only library used by libplacebo.
+            # Install include/fast_float/ to workspace/include/fast_float/ so
+            # build_libplacebo() can populate the libplacebo submodule dir.
+            dest = self.workspace / "include" / "fast_float"
+            dest.mkdir(parents=True, exist_ok=True)
+            src = source_dir / "include" / "fast_float"
+            if src.exists():
+                for item in src.iterdir():
+                    dest_item = dest / item.name
+                    shutil.copy2(item, dest_item)
 
         elif component.name == "amf":
             dest = self.workspace / "include" / "AMF"
@@ -2200,7 +2269,17 @@ class FFmpegBuilder:
                 pc_file.write_text(text)
 
     def build_libplacebo(self, component: Component, source_dir: Path) -> None:
-        """Build libplacebo with Vulkan and glslang support.
+        """Build libplacebo with optional Vulkan acceleration.
+
+        Vulkan support is enabled when all three conditions hold:
+          - config.enable_libplacebo_vulkan is True
+          - platform_info.vulkan_available is True
+          - NOT (full_static AND Linux) — no static libvulkan.so exists on Linux
+
+        On macOS the system Vulkan ICD loader (libvulkan.dylib from the LunarG
+        SDK) is used; no static restriction applies.  LIBRARY_PATH and
+        PKG_CONFIG_PATH are extended to include system Vulkan locations so that
+        Meson's dependency('vulkan') probe succeeds.
 
         Uses a custom build path to set LIBRARY_PATH so Meson's
         cxx.find_library() prefers the workspace-built static glslang/SPIRV
@@ -2233,18 +2312,93 @@ class FFmpegBuilder:
                 log_file,
             )
 
-        # Make workspace static libs take priority over system libs for
-        # cxx.find_library() calls inside libplacebo's meson.build.
-        # GCC respects LIBRARY_PATH when resolving library names.
+        # Determine whether to enable Vulkan inside libplacebo.
+        pi = self.platform_detector.platform_info
+        vulkan_ok = (
+            self.config.enable_libplacebo_vulkan
+            and pi.vulkan_available
+            and not (self.config.full_static and self.platform == "linux")
+        )
+
         ws = self._ws_str()
+
+        # libplacebo's tarball (GitHub archive) does not include git submodules,
+        # so 3rdparty/fast_float/include/ is an empty directory.  Populate it
+        # from workspace/include/fast_float/ (installed by the fast-float
+        # component) before calling meson, so that meson's fs.is_dir() check
+        # in src/meson.build succeeds and the header is added to inc_dirs.
+        fast_float_submod = source_dir / "3rdparty" / "fast_float" / "include" / "fast_float"
+        fast_float_ws = self.workspace / "include" / "fast_float"
+        if fast_float_ws.exists() and not any(
+            fast_float_submod.iterdir() if fast_float_submod.exists() else iter([])
+        ):
+            fast_float_submod.mkdir(parents=True, exist_ok=True)
+            for item in fast_float_ws.iterdir():
+                dest = fast_float_submod / item.name
+                if not dest.exists():
+                    shutil.copy2(item, dest)
+
         existing_lp = env.get("LIBRARY_PATH", "")
         new_lp = f"{ws}/lib:{ws}/lib64"
         env["LIBRARY_PATH"] = f"{new_lp}:{existing_lp}" if existing_lp else new_lp
 
+        if self.platform == "darwin" and vulkan_ok:
+            # LunarG SDK installs to /usr/local/lib; extend PKG_CONFIG_PATH so
+            # meson's dependency('vulkan') probe via pkg-config succeeds.
+            existing_pkgcp = env.get("PKG_CONFIG_PATH", "")
+            vulkan_pkgcp = "/usr/local/lib/pkgconfig"
+            env["PKG_CONFIG_PATH"] = f"{ws}/lib/pkgconfig:{ws}/lib64/pkgconfig:{vulkan_pkgcp}" + (
+                f":{existing_pkgcp}" if existing_pkgcp else ""
+            )
+
         if self._is_windows_ucrt64_backend():
             env["PKG_CONFIG_PATH"] = f"{ws}/lib/pkgconfig;{ws}/lib64/pkgconfig"
 
+        if vulkan_ok:
+            # Patch libplacebo's src/glsl/meson.build so that glslang is found
+            # reliably regardless of platform or compiler toolchain.
+            #
+            # Root cause: meson's find_library() with static:true performs a
+            # FILE SEARCH (not a linker test).  It searches only dirs: param +
+            # compiler system dirs (from clang -print-search-dirs).  LDFLAGS,
+            # LIBRARY_PATH and cpp_link_args are completely ignored for static
+            # library detection.
+            #
+            # libplacebo passes dirs:vulkan_lib_dirs to find_library('SPIRV')
+            # (which is why SPIRV is found when -Dvulkan-sdk={workspace} is set),
+            # but the immediately following find_library('glslang') call is
+            # missing dirs: -- an oversight in the upstream meson.build.
+            #
+            # The fix: add dirs:vulkan_lib_dirs to the glslang call, mirroring
+            # the SPIRV call on the preceding line.  This is the same variable
+            # already defined in the file; no new logic is introduced.
+            #
+            # The patch is applied to the source tree before meson runs and is
+            # idempotent (guarded by checking that the original text is present).
+            glsl_meson = source_dir / "src" / "glsl" / "meson.build"
+            if glsl_meson.exists():
+                original = "cxx.find_library('glslang', required: required, static: static)"
+                patched = "cxx.find_library('glslang', required: required, static: static, dirs: vulkan_lib_dirs)"
+                text = glsl_meson.read_text(encoding="utf-8")
+                if original in text:
+                    glsl_meson.write_text(text.replace(original, patched, 1), encoding="utf-8")
+
         meson_args = [arg.replace("{workspace}", ws) for arg in component.configure_args]
+
+        if vulkan_ok:
+            # -Dvulkan-sdk tells libplacebo where to find SPIRV/glslang static
+            # libs; vulkan_lib_dirs = [vulkan-sdk/lib] is added to dirs: in the
+            # find_library() searches.  -Dglslang is only meaningful with Vulkan.
+            meson_args += [
+                "-Dvulkan=enabled",
+                f"-Dvulkan-sdk={ws}",
+                "-Dglslang=enabled",
+            ]
+        else:
+            meson_args += [
+                "-Dvulkan=disabled",
+                "-Dglslang=disabled",
+            ]
 
         self._run_step(
             component,
@@ -2454,10 +2608,27 @@ class FFmpegBuilder:
         # libplacebo links against the system Vulkan ICD loader at runtime.
         # On Linux the loader is libvulkan.so; it must appear in extralibs so
         # the static FFmpeg binary resolves Vulkan symbols at link time.
+        # On macOS the loader is libvulkan.dylib (LunarG SDK in /usr/local/lib);
+        # -L/usr/local/lib is added so the linker finds it.
         # On Windows UCRT64 the loader (vulkan-1.dll) is auto-discovered via
         # pkg-config Libs, so no extra flag is needed there.
-        if "libplacebo" in built_components and self.platform == "linux":
-            self.extralibs += " -lvulkan"
+        if "libplacebo" in built_components:
+            pi = self.platform_detector.platform_info
+            placebo_vulkan = (
+                self.config.enable_libplacebo_vulkan
+                and pi.vulkan_available
+                and not (self.config.full_static and self.platform == "linux")
+            )
+            if placebo_vulkan:
+                if self.platform == "linux":
+                    self.extralibs += " -lvulkan"
+                elif self.platform == "darwin":
+                    self.extralibs += " -L/usr/local/lib -lvulkan"
+                    # libvulkan.1.dylib is a shared library; dyld must be able
+                    # to find it at runtime via @rpath.  Add the LunarG SDK lib
+                    # directory so the compiler test executable doesn't crash
+                    # with "Library not loaded: @rpath/libvulkan.1.dylib".
+                    self.ldflags += " -Wl,-rpath,/usr/local/lib"
 
         # Strip leading/trailing whitespace that accumulates when starting from "".
         self.extralibs = self.extralibs.strip()

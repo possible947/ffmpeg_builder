@@ -23,7 +23,7 @@ class TestBuildConfigDefaults:
         assert cfg.full_static is False
         assert cfg.enable_libvmaf is True
         assert cfg.enable_libvmaf_cuda is True
-        assert cfg.enable_libplacebo is False
+        assert cfg.enable_libplacebo_vulkan is False
         assert cfg.disable_lv2 is False
         assert cfg.openmp is True
         assert cfg.num_jobs == "auto"

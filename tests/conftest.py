@@ -29,7 +29,7 @@ def sample_config_dict() -> Dict[str, Any]:
         "full_static": False,
         "enable_libvmaf": True,
         "enable_libvmaf_cuda": True,
-        "enable_libplacebo": False,
+        "enable_libplacebo_vulkan": False,
         "disable_lv2": False,
         "openmp": True,
         "num_jobs": "auto",

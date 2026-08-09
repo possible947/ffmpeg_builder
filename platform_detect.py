@@ -426,13 +426,14 @@ class PlatformDetector:
         if self.platform_info.is_macos:
             self.platform_info.macports_clang = self._find_macports_clang()
 
-        # Detect CUDA on Linux
+        # Detect CUDA on Linux/Windows
         if self.platform_info.is_linux or self.platform_info.is_windows:
             self._detect_cuda()
             self._detect_libvmaf_cuda_support()
             self.platform_info.qsv_available = self._check_qsv()
-            self.platform_info.vulkan_available = self._check_vulkan()
-            self.platform_info.opencl_available = self._check_opencl()
+        # Vulkan and OpenCL are available on all platforms (including macOS via LunarG SDK / OpenCL.framework)
+        self.platform_info.vulkan_available = self._check_vulkan()
+        self.platform_info.opencl_available = self._check_opencl()
         self.platform_info.vaapi_available = self._check_vaapi()
 
     def _detect_msys2_mode(self) -> None:
@@ -658,24 +659,36 @@ class PlatformDetector:
         return False
 
     def _find_macports_clang(self) -> Optional[ToolInfo]:
-        """Find macports clang.
+        """Find the highest-version MacPorts clang available.
+
+        MacPorts installs clang as clang-mp-N (e.g. clang-mp-17, clang-mp-18).
+        The builder config stores the preferred version as macports-clang-N;
+        this method returns the highest installed version as the auto-detect
+        fallback when the configured name does not resolve directly.
 
         Returns:
-            ToolInfo for macports clang or None.
+            ToolInfo for the highest-version MacPorts clang, or None.
         """
         macports_bin = Path("/opt/local/bin")
+        best: Optional[tuple] = None  # (version_int, path)
+        for clang_path in macports_bin.glob("clang-mp-[0-9]*"):
+            ver_str = clang_path.name.replace("clang-mp-", "")
+            try:
+                ver_int = int(ver_str)
+            except ValueError:
+                continue
+            if best is None or ver_int > best[0]:
+                best = (ver_int, clang_path)
 
-        # Look for clang-mp-*
-        for clang_path in macports_bin.glob("clang-mp-*"):
-            version = clang_path.name.replace("clang-mp-", "")
-            return ToolInfo(
-                name=f"macports-clang-{version}",
-                path=str(clang_path),
-                version=version,
-                available=True,
-            )
-
-        return None
+        if best is None:
+            return None
+        ver_int, clang_path = best
+        return ToolInfo(
+            name=f"macports-clang-{ver_int}",
+            path=str(clang_path),
+            version=str(ver_int),
+            available=True,
+        )
 
     def _check_vaapi(self) -> bool:
         """Check if VAAPI is available.
@@ -733,6 +746,8 @@ class PlatformDetector:
         vulkan_header_paths = [
             Path("/usr/include/vulkan/vulkan.h"),
             Path("/usr/local/include/vulkan/vulkan.h"),
+            Path("/opt/local/include/vulkan/vulkan.h"),  # MacPorts
+            Path("/opt/homebrew/include/vulkan/vulkan.h"),  # Homebrew ARM
         ]
         if self.platform_info.is_windows:
             vulkan_header_paths.extend(
@@ -776,6 +791,8 @@ class PlatformDetector:
         opencl_header_paths = [
             Path("/usr/include/CL/cl.h"),
             Path("/usr/local/include/CL/cl.h"),
+            Path("/opt/local/include/CL/cl.h"),  # MacPorts
+            Path("/opt/homebrew/include/CL/cl.h"),  # Homebrew ARM
         ]
         if self.platform_info.is_windows:
             opencl_header_paths.extend(
@@ -784,6 +801,12 @@ class PlatformDetector:
                     Path("C:/msys64/ucrt64/include/CL/cl.h"),
                 ]
             )
+
+        # On macOS, OpenCL is provided as a system framework — no separate header install needed
+        if self.platform_info.is_macos:
+            opencl_framework = Path("/System/Library/Frameworks/OpenCL.framework")
+            if opencl_framework.exists():
+                return True
 
         has_headers = any(path.exists() for path in opencl_header_paths)
         if not has_headers:
