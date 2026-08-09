@@ -22,7 +22,7 @@ FFmpeg Builder replaces the traditional bash `build-ffmpeg` script with a modern
 
 ### System
 
-- **Python** >= 3.8
+- **Python** >= 3.10 (code uses f-strings, kw-only dataclasses; runs on Python 3.12–3.14)
 - **OS**: macOS (11.0+) or Linux (x86_64 / arm64)
 - **Disk Space**: ~10 GB for sources and build artifacts
 
@@ -189,7 +189,7 @@ sudo port install \
   git git-lfs pkgconfig cmake meson ninja nasm yasm autoconf automake libtool gettext giflib \
   clang-17 libomp \
   python312 py312-pip py312-setuptools py312-wheel py312-rich py312-tqdm py312-yaml \
-  py312-requests py312-packaging py312-psutil
+  py312-requests
 
 # 2) Clone repository + fetch LFS archives
 git clone <repository-url> ffmpeg_builder

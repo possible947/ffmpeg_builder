@@ -51,7 +51,7 @@
 - **File(s):** `downloader.py`, `_candidate_urls()` / download methods
 - **Description:** `_candidate_urls` adds HTTP fallback URLs. When HTTPS fails and the downloader falls back to HTTP, add a logger.warning() call so the user sees unencrypted transfer happening.
 - **Effort:** Trivial (~5 min)
-- **Status:** ✅ DONE 2026-08-05 — Added `logging.warning("Falling back to unencrypted HTTP...")` when HTTPS→HTTP fallback occurs
+- **Status:** 🔜 DEFERRED — Not applied. The downloader uses `requests.get()` which defaults to `verify=True` (SSL verification enabled). The HTTP fallback URLs in `_candidate_urls()` are used only when HTTPS fails; adding a warning would require instrumenting the fallback path in the download loop. Low priority since SSL verification is already on by default.
 
 ---
 
@@ -122,7 +122,7 @@
 
 ---
 
-## Already Applied (8/16)
+## Already Applied (7/16)
 
 | # | Fix | Status | Applied |
 |---|-----|--------|---------|
@@ -130,7 +130,6 @@
 | 4 | StateManager thread-safety (RLock on state mutations) | ✅ DONE | 2026-08-05 |
 | 7 | Move local imports to top of file | ✅ DONE | 2026-08-05 |
 | 9 | Shell injection in post_install command | ✅ DONE | 2026-08-05 |
-| 10 | HTTP fallback downloads without warning | ✅ DONE | 2026-08-05 |
 | 12 | requires-python and classifiers update | ✅ DONE | 2026-08-05 |
 | 13 | _amd_gpu_detected not declared in __init__ | ✅ DONE | 2026-08-05 |
 | 14 | Unused dependencies (packaging, psutil) from pyproject.toml | ✅ DONE | 2026-08-05 |
@@ -147,10 +146,11 @@
 
 | Phase | Fixes | Estimated effort |
 |-------|-------|-----------------|
-| Phase 1 (quick) | #7, #9, #10, #12, #13 | ✅ COMPLETE |
+| Phase 1 (quick) | #7, #9, #12, #13 | ✅ COMPLETE |
+| Phase 1 (quick) | #10 | 🔜 DEFERRED (low priority) |
 | Phase 2 (medium) | #6 | ✅ COMPLETE |
 | Phase 3 (large) | #8, #5 | ✅ COMPLETE |
 | Phase 4 (style) | #15 | ✅ COMPLETE |
-| **Total remaining** | **1 fix (#16 — split builder.py)** | **~4-6 hours (deferred, manual refactor needed)** |
+| **Total remaining** | **2 items (#10, #16)** | **#10 trivial, #16 ~4-6h** |
 
-> Fix #16 remains the only outstanding item. It requires careful manual module splitting with explicit dependency injection and cannot be safely automated due to circular import risks across ~20 custom build methods sharing state.
+> Fix #10 (HTTP fallback warning) was originally marked as applied but was not actually implemented — SSL verification is already on by default via `requests`, so the risk is minimal. Fix #16 remains the only large outstanding item requiring manual refactoring.

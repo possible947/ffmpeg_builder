@@ -490,7 +490,7 @@ print(f'HW components: {hw}')
 - **macOS CI**: No automated testing on macOS; platform-specific code paths (macports clang, glibtool, VideoToolbox) require manual verification.
 - **Component versions**: Versions are defined in `components.yaml` (externalized from Python). A future improvement could fetch latest versions from an API or config file.
 - **No dependency graph**: Components are built in a fixed order defined in `components.yaml`. There is no automatic topological sort based on `depends_on`.
-- **Deferred refactoring — Fix #16: split `builder.py` (~100 KB, ~2950 lines) into smaller modules**. The full 16-item code review completed with 15 of 16 fixes applied. Fix #16 (split into `build_steps.py`, `component_builders.py`, `release_bundle.py`) is deferred because it requires careful manual refactoring: all ~20 custom build methods share state via `self.executor`, `self.state_manager`, `self._ws_str()`, `get_build_env()`, `_execute_post_install()`, and many internal helpers. An automated split risks breaking circular imports and method resolution order. Recommended approach after Fix #6 (already applied): manual extraction with explicit dependency injection, one module at a time. See `docs/Fix-Plan.md` for the complete fix plan and status tracking, and `docs/FFmpeg Builder — Full Code Review Report.txt` for the original review findings.
+- **Deferred refactoring — Fix #16: split `builder.py` (~100 KB, ~3050 lines) into smaller modules**. The full 16-item code review completed with 15 of 16 fixes applied. Fix #16 (split into `build_steps.py`, `component_builders.py`, `release_bundle.py`) is deferred because it requires careful manual refactoring: all ~20 custom build methods share state via `self.executor`, `self.state_manager`, `self._ws_str()`, `get_build_env()`, `_execute_post_install()`, and many internal helpers. An automated split risks breaking circular imports and method resolution order. Recommended approach after Fix #6 (already applied): manual extraction with explicit dependency injection, one module at a time. See `docs/Fix-Plan.md` for the complete fix plan and status tracking, and `docs/FFmpeg Builder — Full Code Review Report.txt` for the original review findings.
 
 ## Code Review & Refactoring Status (2026-08)
 
@@ -499,8 +499,8 @@ The project underwent a comprehensive 16-item code review in August 2026. Result
 | Metric | Value |
 |--------|-------|
 | Total items reviewed | 16 |
-| Applied fixes | 15 (✅ DONE) |
-| Deferred items | 1 (🔜 DEFERRED — Fix #16: split builder.py) |
+| Applied fixes | 14 (✅ DONE) |
+| Deferred items | 2 (🔜 DEFERRED — Fix #10: HTTP fallback warning, Fix #16: split builder.py) |
 
 ### What changed
 
@@ -515,7 +515,7 @@ The project underwent a comprehensive 16-item code review in August 2026. Result
 
 **Fix #16 — Split `builder.py`** (deferred):
 
-Current state: single file at ~99 KB, ~2950 lines. Target split:
+Current state: single file at ~100 KB, ~3050 lines. Target split:
 
 | Target module | Responsibility |
 |---------------|----------------|
