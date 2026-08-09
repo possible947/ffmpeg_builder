@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-08-10 — Successful full build on Fedora Linux 44 (Python 3.14)
+
+**Среда:** Fedora Linux 44, x86_64, GCC 16, Python 3.14 (system)
+**Режим:** полная сборка с нуля, свежий Python venv, свежая конфигурация
+
+### Результат
+
+Все компоненты собраны и установлены успешно. Полная сборка FFmpeg 8.1 (`58/58` компонентов) за **20.5 минут**.
+
+### Конфигурация
+
+- `gpl_enabled`: true, `make_release`: true, `native_build`: true
+- `full_static`: false, `openmp`: true
+- `enable_libvmaf`: true, `enable_libvmaf_cuda`: true
+- `enable_libplacebo_vulkan`: true, `disable_lv2`: false
+- `num_jobs`: auto, `async_downloads`: true
+- **Полный стек аппаратного ускорения** — CUDA, Vulkan, OpenCL, AMF, libplacebo
+
+---
+
 ## 2026-08-06 — Post-refactor debugging session
 
 ### Bug: `archive_strip_components=1` создаёт двойную вложенность директорий при распаковке

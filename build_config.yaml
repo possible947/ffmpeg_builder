@@ -4,8 +4,8 @@ make_release: true
 native_build: true
 full_static: false
 enable_libvmaf: true
-enable_libvmaf_cuda: true
-enable_libplacebo_vulkan: false
+enable_libvmaf_cuda: false
+enable_libplacebo_vulkan: true
 disable_lv2: false
 openmp: true
 num_jobs: auto
