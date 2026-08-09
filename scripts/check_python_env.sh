@@ -174,8 +174,8 @@ echo ""
 printf "  ${BOLD}Python Interpreter${NC}\n"
 printf "    %-14s ${G}%s${NC}  (%s)\n" "python3:" "$PYTHON_VER" "$PYTHON_BIN"
 
-if (( PYTHON_MAJOR < 3 || (PYTHON_MAJOR == 3 && PYTHON_MINOR < 8) )); then
-    printf "    ${R}⚠ Python >= 3.8 required (found %s)${NC}\n" "$PYTHON_VER"
+if (( PYTHON_MAJOR < 3 || (PYTHON_MAJOR == 3 && PYTHON_MINOR < 10) )); then
+    printf "    ${R}⚠ Python >= 3.10 required (found %s)${NC}\n" "$PYTHON_VER"
 fi
 
 # ── Platform ──

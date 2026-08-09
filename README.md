@@ -84,7 +84,7 @@ What it does:
 - installs required MSYS2/UCRT64 toolchain and build packages,
 - installs hardware acceleration dependency packages (ffnvcodec, oneVPL/libvpl, Vulkan, OpenCL),
 - installs OpenMP runtime support package (`mingw-w64-ucrt-x86_64-llvm-openmp`),
-- installs Python runtime dependencies (`rich`, `tqdm`, `pyyaml`, `requests`, `packaging`, `psutil`) from MSYS2 packages,
+- installs Python runtime dependencies (`rich`, `tqdm`, `pyyaml`, `requests`) from MSYS2 packages,
 - creates `.venv-msys2-ucrt64` in the repository (with `--system-site-packages`) if missing,
 - installs project package in editable mode (`pip install -e . --no-deps`) into that venv,
 - runs `scripts/check_python_env.sh`,
