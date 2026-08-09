@@ -32,8 +32,6 @@ DEPS=(
     "tqdm           4.65.0        tqdm            python3-tqdm        python3-tqdm         python-tqdm         python3-tqdm"
     "pyyaml         6.0           yaml            python3-yaml        python3-pyyaml       python-yaml         python3-PyYAML"
     "requests       2.31.0        requests        python3-requests    python3-requests     python-requests     python3-requests"
-    "packaging      23.0          packaging       python3-packaging   python3-packaging    python-packaging    python3-packaging"
-    "psutil         5.9.0         psutil          python3-psutil      python3-psutil       python-psutil       python3-psutil"
     "jinja2         3.1.0         jinja2          python3-jinja2      python3-jinja2       python-jinja        python3-Jinja2"
 )
 

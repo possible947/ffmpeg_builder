@@ -127,8 +127,6 @@ if (-not $SkipPackageInstall) {
         "mingw-w64-ucrt-x86_64-python-tqdm"
         "mingw-w64-ucrt-x86_64-python-yaml"
         "mingw-w64-ucrt-x86_64-python-requests"
-        "mingw-w64-ucrt-x86_64-python-packaging"
-        "mingw-w64-ucrt-x86_64-python-psutil"
         "mingw-w64-ucrt-x86_64-cmake"
         "mingw-w64-ucrt-x86_64-meson"
         "mingw-w64-ucrt-x86_64-ninja"
