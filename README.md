@@ -243,6 +243,41 @@ python -m ffmpeg_builder
 
 ## Usage
 
+## Builder Architecture
+
+The build engine is now split into a small set of focused modules instead of keeping all orchestration details in `builder.py`.
+
+### High-level flow
+
+```text
+python -m ffmpeg_builder
+  -> __main__.py
+  -> app.py (FFmpegBuilderApp)
+  -> builder.py (FFmpegBuilder)
+     -> build_steps.py
+     -> component_builders.py
+     -> release_bundle.py
+     -> executor.py / downloader.py / state.py / components.py / platform_detect.py
+```
+
+### Module responsibilities
+
+| Module | Responsibility |
+|--------|----------------|
+| `builder.py` | Main orchestration entry point. Owns environment setup, system-component checks, download/extract flow, generic build-system dispatch, and coordination between helper modules. |
+| `build_types.py` | Shared builder exception types: `BuildError` and `SkipComponent`. |
+| `build_steps.py` | Shared command execution helpers for the common status -> execute -> check -> raise lifecycle used during configure/build/install steps. |
+| `component_builders.py` | Explicit registry for `custom_build_fn` dispatch. Keeps custom builder lookup centralized and avoids stringly `getattr()` dispatch. |
+| `release_bundle.py` | Release bundle creation plus recursive runtime dependency discovery and copying for portable `workspace/release/` output. |
+
+### Why this split matters
+
+- keeps `FFmpegBuilder` as the public API used by `app.py`
+- makes builder exceptions reusable across modules without circular imports
+- centralizes custom component dispatch in one place
+- isolates release-bundle logic from the main build orchestration path
+- makes future extraction of large per-component custom build bodies lower-risk
+
 ### Interactive Mode
 
 ```bash
@@ -492,14 +527,18 @@ Verified FFmpeg capabilities included:
 ffmpeg_builder/
     __main__.py              Entry point
     app.py                   Main application class, screen orchestration
+    build_types.py           Shared builder exceptions
+    build_steps.py           Shared configure/build/install step helpers
     config.py                YAML configuration management
     state.py                 JSON build state management
     system_report.py         Environment report generation
     components.py            Component registry (~50 components)
-    builder.py               Build engine: download, configure, make, install
+    builder.py               Build orchestration entry point
+    component_builders.py    Explicit custom builder dispatch registry
     platform_detect.py       OS, architecture, tools, HW acceleration detection
     executor.py              Subprocess wrapper with logging
     downloader.py            File downloads with progress (requests + tqdm)
+    release_bundle.py        Release bundle packaging and runtime dependency collection
     ui/
         screens.py           TUI screens: system report, config, info, final
         dashboard.py         Live build dashboard (header / table / messages)
