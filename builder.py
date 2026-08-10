@@ -1,7 +1,6 @@
 """Build orchestration engine."""
 
 import importlib.util
-import json
 import os
 import re
 import shlex
@@ -9,17 +8,20 @@ import shutil
 import stat
 import subprocess
 import tarfile
-from datetime import datetime
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Set, Tuple, Union
+from typing import Callable, Dict, List, Optional, Tuple, Union
 
 from tqdm import tqdm
 
+from .build_steps import run_install, run_make, run_step
+from .build_types import BuildError, SkipComponent
+from .component_builders import get_custom_builder
 from .components import BuildSystem, Component, ComponentRegistry
 from .config import BuildConfig
 from .downloader import AsyncDownloadManager, Downloader
 from .executor import CommandExecutor, ExecutionResult
 from .platform_detect import PlatformDetector
+from .release_bundle import make_release_bundle as create_release_bundle
 from .state import ComponentStatus, StateManager
 
 
@@ -39,37 +41,6 @@ def _rmtree(path: Path) -> None:
             pass  # Best-effort; ignore secondary failures.
 
     shutil.rmtree(path, onerror=_on_error)
-
-
-class BuildError(Exception):
-    """Build error with component context."""
-
-    def __init__(self, component: str, message: str, log_file: Optional[Path] = None):
-        """Initialize build error.
-
-        Args:
-            component: Component name.
-            message: Error message.
-            log_file: Path to log file.
-        """
-        super().__init__(f"{component}: {message}")
-        self.component = component
-        self.log_file = log_file
-
-
-class SkipComponent(Exception):
-    """Raised when a component should be skipped (not failed)."""
-
-    def __init__(self, component: str, message: str):
-        """Initialize skip exception.
-
-        Args:
-            component: Component name.
-            message: Skip reason.
-        """
-        super().__init__(f"{component}: {message}")
-        self.component = component
-        self.message = message
 
 
 class FFmpegBuilder:
@@ -132,6 +103,10 @@ class FFmpegBuilder:
 
         self._setup_environment()
 
+    @staticmethod
+    def _rmtree(path: Path) -> None:
+        _rmtree(path)
+
     # ------------------------------------------------------------------
     # Build-step orchestration helpers (Fix #6)
     # ------------------------------------------------------------------
@@ -175,15 +150,9 @@ class FFmpegBuilder:
         Raises:
             BuildError: When the command fails (non-zero exit code).
         """
-        self.state_manager.mark_component_status(
-            component.name, status, component.version, detail=detail
+        return run_step(
+            self, component, status, detail, error_msg, command, step_name, work_dir, env, stdin
         )
-        result, log_file = self.executor.execute_with_log(
-            command, component.name, step_name, work_dir, env, stdin=stdin
-        )
-        if not result.success:
-            raise BuildError(component.name, error_msg, log_file)
-        return result, log_file
 
     def _run_make(
         self,
@@ -203,13 +172,7 @@ class FFmpegBuilder:
         Returns ``(result, log_file)`` on success; raises ``BuildError``
         otherwise.
         """
-        self.state_manager.mark_component_status(
-            component.name, status, component.version, detail=detail
-        )
-        result, log_file = self.executor.execute_make(work_dir, jobs, env, component.name)
-        if not result.success:
-            raise BuildError(component.name, error_msg, log_file)
-        return result, log_file
+        return run_make(self, component, status, detail, error_msg, work_dir, jobs, env)
 
     def _run_install(
         self,
@@ -228,13 +191,7 @@ class FFmpegBuilder:
         Returns ``(result, log_file)`` on success; raises ``BuildError``
         otherwise.
         """
-        self.state_manager.mark_component_status(
-            component.name, status, component.version, detail=detail
-        )
-        result, log_file = self.executor.execute_install(work_dir, env, component.name)
-        if not result.success:
-            raise BuildError(component.name, error_msg, log_file)
-        return result, log_file
+        return run_install(self, component, status, detail, error_msg, work_dir, env)
 
     def _is_windows_ucrt64_backend(self) -> bool:
         """Return True only for Windows + MSYS2 UCRT64 backend."""
@@ -777,9 +734,9 @@ class FFmpegBuilder:
         )
 
         if component.custom_build_fn:
-            build_fn = getattr(self, component.custom_build_fn, None)
+            build_fn = get_custom_builder(component.custom_build_fn)
             if build_fn:
-                build_fn(component, source_dir)
+                build_fn(self, component, source_dir)
                 self._execute_post_install(component, source_dir)
                 return
 
@@ -2757,294 +2714,4 @@ class FFmpegBuilder:
 
     def make_release_bundle(self) -> Path:
         """Create a redistributable release directory for built FFmpeg binaries."""
-        backend = self.platform_detector.get_build_backend_name()
-        release_dir = self.workspace / "release"
-
-        if release_dir.exists():
-            _rmtree(release_dir)
-
-        release_dir.mkdir(parents=True, exist_ok=True)
-
-        source_bin = self.workspace / "bin"
-        source_binaries: List[Path] = []
-        copied_binaries: List[str] = []
-        missing_binaries: List[str] = []
-
-        for name in ("ffmpeg", "ffprobe", "ffplay"):
-            candidates = [source_bin / name]
-            if self.platform == "windows":
-                candidates.insert(0, source_bin / f"{name}.exe")
-
-            source = next((candidate for candidate in candidates if candidate.exists()), None)
-            if source is None:
-                missing_binaries.append(name)
-                continue
-
-            destination = release_dir / source.name
-            shutil.copy2(source, destination)
-            source_binaries.append(source)
-            copied_binaries.append(str(destination))
-
-        if not source_binaries:
-            raise BuildError("release", f"No FFmpeg binaries found in {source_bin}")
-
-        dependencies, missing_dependencies = self._collect_runtime_dependencies(source_binaries)
-        copied_dependencies: List[str] = []
-
-        for dep in sorted(dependencies, key=lambda item: item.name.lower()):
-            destination = release_dir / dep.name
-            if destination.exists():
-                continue
-            shutil.copy2(dep, destination)
-            copied_dependencies.append(str(destination))
-
-        manifest = {
-            "generated_at": datetime.now().isoformat(),
-            "platform": self.platform,
-            "build_backend": backend,
-            "ffmpeg_version": self.config.ffmpeg_version,
-            "binaries": copied_binaries,
-            "missing_binaries": sorted(missing_binaries),
-            "dependencies": copied_dependencies,
-            "missing_dependencies": sorted(missing_dependencies),
-        }
-        (release_dir / "manifest.json").write_text(
-            json.dumps(manifest, indent=2),
-            encoding="utf-8",
-        )
-
-        return release_dir
-
-    def _collect_runtime_dependencies(self, binaries: List[Path]) -> Tuple[Set[Path], Set[str]]:
-        """Collect recursive runtime dependencies for provided binaries."""
-        queue = list(binaries)
-        visited: Set[str] = set()
-        collected: Set[Path] = set()
-        collected_keys: Set[str] = set()
-        missing: Set[str] = set()
-
-        while queue:
-            current = queue.pop(0).resolve()
-            current_key = self._path_key(current)
-            if current_key in visited:
-                continue
-            visited.add(current_key)
-
-            for dep in self._read_runtime_dependencies(current):
-                resolved = self._resolve_runtime_dependency(dep, current)
-                if resolved is None:
-                    missing.add(dep)
-                    continue
-
-                resolved = resolved.resolve()
-                resolved_key = self._path_key(resolved)
-                if self._is_system_runtime_library(resolved):
-                    visited.add(resolved_key)
-                    continue
-
-                if resolved_key in collected_keys:
-                    continue
-
-                collected.add(resolved)
-                collected_keys.add(resolved_key)
-                queue.append(resolved)
-
-        return collected, missing
-
-    def _read_runtime_dependencies(self, binary_path: Path) -> List[str]:
-        """Read direct runtime dependencies for a binary/library."""
-        if self.platform == "windows":
-            return self._read_windows_dependencies(binary_path)
-        if self.platform == "darwin":
-            return self._read_macos_dependencies(binary_path)
-        return self._read_linux_dependencies(binary_path)
-
-    def _read_windows_dependencies(self, binary_path: Path) -> List[str]:
-        """Read runtime dependency DLL names using objdump."""
-        result = self.executor.execute(
-            ["objdump", "-p", str(binary_path)],
-            env=self.get_build_env(),
-        )
-        if not result.success:
-            raise BuildError(
-                "release",
-                f"Failed to inspect dependencies for {binary_path.name}: {result.stderr.strip()}",
-            )
-
-        dependencies: List[str] = []
-        for line in result.stdout.splitlines():
-            match = re.search(r"DLL Name:\s*(\S+)", line)
-            if match:
-                dependencies.append(match.group(1).strip())
-        return dependencies
-
-    def _read_linux_dependencies(self, binary_path: Path) -> List[str]:
-        """Read runtime dependencies using ldd output."""
-        result = self.executor.execute(
-            ["ldd", str(binary_path)],
-            env=self.get_build_env(),
-        )
-        if not result.success:
-            raise BuildError(
-                "release",
-                f"Failed to inspect dependencies for {binary_path.name}: {result.stderr.strip()}",
-            )
-
-        dependencies: List[str] = []
-        for raw_line in result.stdout.splitlines():
-            line = raw_line.strip()
-            if not line or line.startswith("linux-vdso"):
-                continue
-            if "=> not found" in line:
-                dependencies.append(line.split("=>", 1)[0].strip())
-                continue
-            if "=>" in line:
-                path = line.split("=>", 1)[1].strip().split(" ", 1)[0].strip()
-                if path and path != "not":
-                    dependencies.append(path)
-                continue
-            if line.startswith("/"):
-                dependencies.append(line.split(" ", 1)[0].strip())
-
-        return dependencies
-
-    def _read_macos_dependencies(self, binary_path: Path) -> List[str]:
-        """Read runtime dependencies using otool -L output."""
-        result = self.executor.execute(
-            ["otool", "-L", str(binary_path)],
-            env=self.get_build_env(),
-        )
-        if not result.success:
-            raise BuildError(
-                "release",
-                f"Failed to inspect dependencies for {binary_path.name}: {result.stderr.strip()}",
-            )
-
-        dependencies: List[str] = []
-        for index, raw_line in enumerate(result.stdout.splitlines()):
-            if index == 0:
-                continue
-            dep = raw_line.strip().split(" (", 1)[0].strip()
-            if dep:
-                dependencies.append(dep)
-
-        return dependencies
-
-    def _resolve_runtime_dependency(self, dep: str, binary_path: Path) -> Optional[Path]:
-        """Resolve dependency identifier to a concrete file path."""
-        if dep.startswith("@"):
-            return self._resolve_macos_dynamic_path(dep, binary_path)
-
-        dep_path = Path(dep)
-        if dep_path.is_absolute() and dep_path.exists():
-            return dep_path
-
-        if dep_path.parts and not dep_path.is_absolute():
-            candidate = (binary_path.parent / dep_path).resolve()
-            if candidate.exists():
-                return candidate
-
-        dep_name = dep_path.name if dep_path.name else dep
-        for root in self._runtime_search_dirs(binary_path):
-            candidate = root / dep_name
-            if candidate.exists():
-                return candidate
-
-        return None
-
-    def _resolve_macos_dynamic_path(self, dep: str, binary_path: Path) -> Optional[Path]:
-        """Resolve @loader_path/@executable_path/@rpath paths on macOS."""
-        if dep.startswith("@loader_path/"):
-            candidate = binary_path.parent / dep[len("@loader_path/") :]
-            if candidate.exists():
-                return candidate
-
-        if dep.startswith("@executable_path/"):
-            candidate = self.workspace / "bin" / dep[len("@executable_path/") :]
-            if candidate.exists():
-                return candidate
-
-        if dep.startswith("@rpath/"):
-            rel = dep[len("@rpath/") :]
-            for root in self._runtime_search_dirs(binary_path):
-                candidate = root / rel
-                if candidate.exists():
-                    return candidate
-
-        return None
-
-    def _runtime_search_dirs(self, binary_path: Path) -> List[Path]:
-        """Return ordered search locations for runtime dependencies."""
-        candidates = [
-            binary_path.parent,
-            self.workspace / "bin",
-            self.workspace / "lib",
-            self.workspace / "lib64",
-        ]
-
-        if self.platform == "windows":
-            msys_root = Path(self.config.windows.msys2_root)
-            windows_root = Path(os.environ.get("WINDIR", r"C:\Windows"))
-            candidates.extend(
-                [
-                    msys_root / "ucrt64" / "bin",
-                    msys_root / "usr" / "bin",
-                    windows_root / "System32",
-                    windows_root / "SysWOW64",
-                ]
-            )
-        elif self.platform == "darwin":
-            candidates.extend(
-                [
-                    Path("/opt/local/lib"),
-                    Path("/usr/local/lib"),
-                ]
-            )
-
-        unique: List[Path] = []
-        seen: Set[str] = set()
-        for path in candidates:
-            key = self._path_key(path)
-            if key in seen:
-                continue
-            seen.add(key)
-            if path.exists():
-                unique.append(path)
-        return unique
-
-    def _is_system_runtime_library(self, lib_path: Path) -> bool:
-        """Return True if library belongs to OS/system runtime paths."""
-        path = lib_path.resolve()
-        workspace = self.workspace.resolve()
-        if self._is_under(path, workspace):
-            return False
-
-        if self.platform == "windows":
-            windir = Path(os.environ.get("WINDIR", r"C:\Windows"))
-            if self._is_under(path, windir):
-                return True
-            return False
-
-        if self.platform == "linux":
-            for prefix in ("/lib", "/lib64", "/usr/lib", "/usr/lib64"):
-                if self._is_under(path, Path(prefix)):
-                    return True
-            return False
-
-        if self.platform == "darwin":
-            return self._is_under(path, Path("/usr/lib")) or self._is_under(
-                path, Path("/System/Library")
-            )
-
-        return False
-
-    def _is_under(self, child: Path, parent: Path) -> bool:
-        """Return True when child path is equal to or nested under parent."""
-        child_norm = str(child.resolve()).replace("\\", "/").rstrip("/").lower()
-        parent_norm = str(parent.resolve()).replace("\\", "/").rstrip("/").lower()
-        return child_norm == parent_norm or child_norm.startswith(f"{parent_norm}/")
-
-    def _path_key(self, path: Path) -> str:
-        """Create canonical path key for de-duplication."""
-        normalized = str(path.resolve()).replace("\\", "/")
-        return normalized.lower() if self.platform == "windows" else normalized
+        return create_release_bundle(self)

@@ -55,6 +55,7 @@ Repository = "https://github.com/ffmpeg-builder/ffmpeg-builder"
 
 [tool.setuptools]
 packages = ["ffmpeg_builder", "ffmpeg_builder.ui"]
+py-modules = ["app", "build_steps", "build_types", "builder", "component_builders", "components", "config", "downloader", "executor", "platform_detect", "release_bundle", "state", "system_report"]
 
 [tool.setuptools.package-dir]
 ffmpeg_builder = "."

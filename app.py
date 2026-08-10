@@ -7,7 +7,8 @@ from typing import List, Optional
 from rich.console import Console
 from rich.live import Live
 
-from .builder import BuildError, FFmpegBuilder, SkipComponent
+from .build_types import BuildError, SkipComponent
+from .builder import FFmpegBuilder
 from .components import Component, ComponentRegistry
 from .config import BuildConfig, ConfigManager
 from .platform_detect import PlatformDetector

@@ -253,7 +253,12 @@ Windows/UCRT64 policy in current implementation:
 
 ### `builder.py` — Build Engine
 
-**`FFmpegBuilder`** — orchestrates the build of each component.
+**`FFmpegBuilder`** — orchestrates the build of each component and now delegates split responsibilities to internal helper modules:
+
+- `build_types.py` — shared `BuildError` / `SkipComponent` exceptions
+- `build_steps.py` — shared `_run_step` / `_run_make` / `_run_install` execution helpers
+- `component_builders.py` — explicit custom-build dispatch registry keyed by `custom_build_fn`
+- `release_bundle.py` — release directory creation and runtime dependency collection
 
 **Environment setup** (`_setup_environment()`):
 
@@ -269,7 +274,7 @@ Windows/UCRT64 policy in current implementation:
 1. Check if already completed (version match) → skip
 2. Download and extract source
 3. If HEADERS_ONLY → install headers, return
-4. If custom_build_fn → call it, return
+4. If `custom_build_fn` → resolve through `component_builders.get_custom_builder()` and call it, return
 5. Dispatch by build_system:
    - AUTOTOOLS → _build_autotools()
    - CMAKE     → _build_cmake()
@@ -278,7 +283,7 @@ Windows/UCRT64 policy in current implementation:
    - CARGO     → _build_cargo()
 ```
 
-**Custom build functions** for components with non-standard build processes:
+**Custom build functions** for components with non-standard build processes remain methods on `FFmpegBuilder`, but dispatch is now centralized through an explicit registry instead of `getattr()`:
 
 | Function | Component | Notes |
 |----------|-----------|-------|
