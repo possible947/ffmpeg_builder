@@ -1,5 +1,45 @@
 # Changelog
 
+## 2026-08-17 — Successful full build on Windows 11 (MSYS2 UCRT64)
+
+**Среда:** Windows 11, x86_64, GCC 16.2 (MSYS2 UCRT64), Python 3.13 (MSYS2 venv)
+**Режим:** полная сборка с нуля в среде `windows-msys2-ucrt64`
+
+### Результат
+
+Все компоненты собраны и установлены успешно. Полная сборка FFmpeg 9.0 завершена.
+
+### Устранённые проблемы
+
+#### Неполная среда MSYS2 (cmake не установлен)
+
+После первичной установки через `setup_windows_msys2_ucrt64.ps1` cmake не был доступен — скрипт
+использовал `pacman -Sy` (только синхронизация БД без обновления пакетов). Это приводило к тому,
+что cmake и другие пакеты из обновлённых репозиториев не устанавливались корректно при наличии
+устаревшей базы данных пакетов.
+
+**Симптом:** cmake configure failed с пустыми stdout/stderr и кодом возврата `3221225781`
+(0xC0000135, STATUS_DLL_NOT_FOUND / команда не найдена).
+
+**Исправление в `setup_windows_msys2_ucrt64.ps1`:**
+- Последовательность `pacman -Sy; pacman -S` заменена на двухшаговую: сначала
+  `pacman -Syu --noconfirm` (полное обновление системы и БД), затем `pacman -S --needed --noconfirm`
+  для установки пакетов проекта
+- Добавлена обязательная верификация инструментов после установки: gcc, cmake, ninja, meson,
+  nasm, python, pkg-config — скрипт выводит версии и завершается с ошибкой, если что-то отсутствует
+
+#### Ошибочная обёртка cmake/ninja через sh.exe
+
+В попытке исправить cmake-ошибку, cmake и ninja были обёрнуты через `sh.exe` в `executor.py`.
+Это сломало сборку dav1d (`cannot execute binary file`, exit 126): `sh.exe` не может запустить
+Windows PE бинарник ninja напрямую.
+
+**Исправление:** обёртка через `sh.exe` корректна только для `./script`-команд (autotools
+configure, shell-скрипты). cmake и ninja в MSYS2 UCRT64 являются нативными Windows PE
+исполняемыми файлами и вызываются напрямую через `subprocess.run()`.
+
+---
+
 ## 2026-08-10 — Successful full build on Fedora Linux 44 (Python 3.14)
 
 **Среда:** Fedora Linux 44, x86_64, GCC 16, Python 3.14 (system)

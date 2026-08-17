@@ -33,6 +33,43 @@
 - A full build is a long, hardware-dependent manual process (~20-60 min, ~10 GB, full toolchain). Verify code changes with unit tests; do not expect a CI build.
 - On component failure, inspect `workspace/logs/<component>_<step>.log` and the resume state in `workspace/build_state.json`.
 
+### Windows MSYS2 UCRT64: incomplete environment
+
+**Symptom**: a cmake-based component (e.g. `svtav1`) fails immediately with return code
+`3221225781` (0xC0000135, `STATUS_DLL_NOT_FOUND`) and empty stdout/stderr logs.
+This means the `cmake` executable was not found or could not load its DLLs — most often
+because `mingw-w64-ucrt-x86_64-cmake` was not installed or not fully upgraded in MSYS2.
+
+**Root cause**: the old setup script ran `pacman -Sy` (DB sync only) before `pacman -S`,
+which does not guarantee that all package files on disk match the synced DB. If the system
+was previously partially updated, dependency resolution can silently skip packages.
+
+**Fix**: run `setup_windows_msys2_ucrt64.ps1` after every MSYS2 environment rebuild.
+The script now runs `pacman -Syu --noconfirm` (full system upgrade) first, then
+`pacman -S --needed --noconfirm` for project packages, and finally verifies that all
+critical tools (`gcc`, `cmake`, `ninja`, `meson`, `nasm`, `python`, `pkg-config`) are
+present and prints their versions. If any tool is missing the script throws, preventing
+a silent broken environment.
+
+**Manual recovery**: if you suspect an incomplete environment, open an MSYS2 UCRT64 shell
+and run:
+```bash
+pacman -Syu          # full system upgrade (may require restarting the shell once)
+pacman -S --needed mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja \
+         mingw-w64-ucrt-x86_64-meson mingw-w64-ucrt-x86_64-nasm
+which cmake ninja meson nasm  # verify
+```
+
+### Windows MSYS2 UCRT64: sh.exe wrapping rules
+
+Only commands that begin with `./` (autotools `./configure`, shell bootstrap scripts) are
+wrapped through `sh.exe` in `executor.py`. cmake, ninja, make, pkg-config, and other
+`mingw-w64-ucrt-x86_64-*` tools are native Windows PE binaries; they must be called directly
+via `subprocess.run()`. Wrapping them through `sh.exe` causes `cannot execute binary file`
+(exit code 126) because MSYS2 sh cannot exec PE executables.
+
+
+
 ## Docs
 
 - `docs/DeveloperReadme.md` is the authoritative architecture doc (module responsibilities, data flow, extension points) and is not linked from the root README. `docs/Fix-Plan.md` tracks the code-review refactor status.

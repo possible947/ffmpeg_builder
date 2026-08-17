@@ -328,6 +328,13 @@ Windows/UCRT64 policy in current implementation:
 | `execute_make()` | `make -j<N>` |
 | `execute_install()` | `make install` |
 
+**UCRT64 sh-wrapping rule**: on `MSYSTEM=UCRT64`, commands that begin with `./` are
+automatically wrapped through `sh.exe` so that autotools scripts and shell bootstraps
+run inside the MSYS2 environment. All other commands — including `cmake`, `ninja`,
+`make`, `meson` — are native Windows PE binaries and are invoked directly. Never add
+MSYS2-installed tools (cmake, ninja, etc.) to the sh-wrapping path: `sh.exe` cannot
+execute Windows PE binaries and will fail with exit code 126 (`cannot execute binary file`).
+
 ### `downloader.py` — Download Management
 
 **`Downloader`** — downloads source archives with:
@@ -371,6 +378,56 @@ Built with the `rich` library. Static screens use `Table`, `Panel`, and `Prompt`
 2. Displays last 20 lines of the log file
 3. Presents letter-key menu: Retry (`r`) / Skip (`s`) / Abort (`a`) / Show Full Log (`l`)
 4. Returns user choice to the build loop in `app.py` after Live has been stopped
+
+## Platform-Specific Notes
+
+### Windows MSYS2 UCRT64
+
+#### Environment setup
+
+The UCRT64 backend requires a complete MSYS2 installation with all build tools
+installed via pacman. Use `scripts/setup_windows_msys2_ucrt64.ps1` to set up the
+environment. The script:
+
+1. Runs `pacman -Syu --noconfirm` — **full system upgrade first** (not just DB sync).
+   This is required because MSYS2 packages depend on runtime libs that must be
+   consistent with the installed compiler toolchain. Using `pacman -Sy` + `pacman -S`
+   without the upgrade step can leave cmake and other tools missing or broken.
+2. Installs all project packages with `pacman -S --needed --noconfirm`.
+3. **Verifies** that all critical tools are available (`gcc`, `cmake`, `ninja`, `meson`,
+   `nasm`, `python`, `pkg-config`) and prints their versions. Throws if any are absent.
+
+#### Incomplete environment symptoms
+
+If the MSYS2 environment was not fully upgraded before starting the build, cmake-based
+components (e.g. `svtav1`, `dav1d`, `x265`) may fail at configure with:
+
+- Return code `3221225781` (0xC0000135, `STATUS_DLL_NOT_FOUND`) — cmake binary not
+  found or unable to load its DLLs
+- Empty stdout and stderr in the `workspace/logs/<component>_configure.log`
+
+**Recovery**: open an MSYS2 UCRT64 shell and run `pacman -Syu`, then re-run the
+setup script or manually install the missing packages.
+
+#### PKG_CONFIG_PATH formats
+
+UCRT64 has two execution contexts that require different path formats:
+
+| Context | Format | Separator | Example |
+|---------|--------|-----------|---------|
+| POSIX shell (autotools `./configure` via sh.exe) | MSYS-style `/e/…` | `:` | `/e/Projects/…/lib/pkgconfig` |
+| Direct Python subprocess (Meson, CMake) | Windows-style `E:/…` | `;` | `E:/Projects/…/lib/pkgconfig` |
+
+`builder.py` stores the POSIX variant in `self.env` (for autotools). `_build_meson()`
+overrides it with the Windows variant. `_build_cmake()` overrides it with a
+semicolon-separated Windows path for components that need CMake's pkg-config integration.
+
+#### sh.exe wrapping scope
+
+Only commands starting with `./` are wrapped through `sh.exe` in `executor.py`.
+All MSYS2 build tools (`cmake`, `ninja`, `make`, `meson`) are native Windows PE
+executables that work correctly as direct `subprocess.run()` calls. Wrapping them
+through `sh.exe` will fail with exit code 126 (`cannot execute binary file`).
 
 ## Data Flow
 
