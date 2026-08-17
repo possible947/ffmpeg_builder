@@ -103,7 +103,16 @@ Write-Step "Validating active MSYS2 toolchain"
 Invoke-MsysBash "which gcc; gcc -dumpmachine; which python; python -V"
 
 if (-not $SkipPackageInstall) {
-    Write-Step "Installing required MSYS2 UCRT64 packages"
+    Write-Step "Updating MSYS2 system and installing required UCRT64 packages"
+
+    # Step 1: Full system upgrade first.  MSYS2 documentation requires running
+    # pacman -Syu (not just -Sy) before installing packages so that dependency
+    # resolution uses the latest package metadata and the runtime libs are
+    # consistent.  The upgrade may exit early asking for a shell restart; the
+    # retry loop in Invoke-MsysBashWithRetry handles transient failures.
+    Write-Host "  Step 1/2: pacman -Syu (full system upgrade)..." -ForegroundColor Gray
+    Invoke-MsysBashWithRetry "pacman -Syu --noconfirm" -Attempts 2 -DelaySeconds 3
+
     $packages = @(
         "base-devel"
         "git"
@@ -149,7 +158,26 @@ if (-not $SkipPackageInstall) {
     )
 
     $pkgLine = $packages -join " "
-    Invoke-MsysBashWithRetry "pacman -Sy --noconfirm; pacman -S --needed --noconfirm $pkgLine"
+    Write-Host "  Step 2/2: installing required packages..." -ForegroundColor Gray
+    Invoke-MsysBashWithRetry "pacman -S --needed --noconfirm $pkgLine"
+
+    # Verify that the critical build tools are actually present after install.
+    Write-Step "Verifying required build tools"
+    $requiredTools = @("gcc", "cmake", "ninja", "meson", "nasm", "python", "pkg-config")
+    $missing = @()
+    foreach ($tool in $requiredTools) {
+        $result = & $bashExe -lc "source /etc/profile >/dev/null 2>&1; which $tool >/dev/null 2>&1 && echo ok || echo missing" 2>&1
+        if ($result -match "missing") {
+            $missing += $tool
+            Write-Host "  MISSING: $tool" -ForegroundColor Red
+        } else {
+            $ver = & $bashExe -lc "source /etc/profile >/dev/null 2>&1; $tool --version 2>&1 | head -1" 2>&1
+            Write-Host "  OK: $tool  ($($ver -replace '\r?\n.*',''))" -ForegroundColor Green
+        }
+    }
+    if ($missing.Count -gt 0) {
+        throw "Required tools not found after package install: $($missing -join ', '). Run 'pacman -Syu' in MSYS2 UCRT64 and re-run this script."
+    }
 }
 
 $projectMsys = To-MsysPath $ProjectRoot
