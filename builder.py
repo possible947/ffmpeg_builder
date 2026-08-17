@@ -318,6 +318,25 @@ class FFmpegBuilder:
             value,
         )
 
+    @staticmethod
+    def _normalize_pkg_config_path_for_windows(value: str) -> str:
+        """Normalize PKG_CONFIG_PATH to Windows-style entries for Meson."""
+        if not value:
+            return ""
+
+        separator = ";" if ";" in value else ":"
+        normalized = []
+        for part in value.split(separator):
+            part = part.strip().replace("\\", "/")
+            if not part:
+                continue
+            match = re.match(r"^/([A-Za-z])/(.*)$", part)
+            if match:
+                part = f"{match.group(1).upper()}:/{match.group(2)}"
+            if part not in normalized:
+                normalized.append(part)
+        return ";".join(normalized)
+
     def _setup_environment(self) -> None:
         """Setup build environment."""
         self.workspace.mkdir(parents=True, exist_ok=True)
@@ -554,6 +573,23 @@ class FFmpegBuilder:
             if path not in deduped:
                 deduped.append(path)
         env["PYTHONPATH"] = os.pathsep.join(deduped)
+
+    @staticmethod
+    def _merge_path_list(existing: str, new_paths: List[str], separator: str) -> str:
+        """Prepend paths while preserving any existing entries.
+
+        The first occurrences win and duplicates are removed while preserving
+        order.
+        """
+        merged: List[str] = []
+        for path in new_paths:
+            if path and path not in merged:
+                merged.append(path)
+        if existing:
+            for path in existing.split(separator):
+                if path and path not in merged:
+                    merged.append(path)
+        return separator.join(merged)
 
     def prefetch_downloads(self, components: List[Component]) -> None:
         """Start background downloads for buildable source archives.
@@ -2296,20 +2332,32 @@ class FFmpegBuilder:
                     shutil.copy2(item, dest)
 
         existing_lp = env.get("LIBRARY_PATH", "")
-        new_lp = f"{ws}/lib:{ws}/lib64"
-        env["LIBRARY_PATH"] = f"{new_lp}:{existing_lp}" if existing_lp else new_lp
+        env["LIBRARY_PATH"] = self._merge_path_list(
+            existing_lp,
+            [f"{ws}/lib", f"{ws}/lib64"],
+            ":",
+        )
 
         if self.platform == "darwin" and vulkan_ok:
             # LunarG SDK installs to /usr/local/lib; extend PKG_CONFIG_PATH so
             # meson's dependency('vulkan') probe via pkg-config succeeds.
             existing_pkgcp = env.get("PKG_CONFIG_PATH", "")
             vulkan_pkgcp = "/usr/local/lib/pkgconfig"
-            env["PKG_CONFIG_PATH"] = f"{ws}/lib/pkgconfig:{ws}/lib64/pkgconfig:{vulkan_pkgcp}" + (
-                f":{existing_pkgcp}" if existing_pkgcp else ""
+            env["PKG_CONFIG_PATH"] = self._merge_path_list(
+                existing_pkgcp,
+                [f"{ws}/lib/pkgconfig", f"{ws}/lib64/pkgconfig", vulkan_pkgcp],
+                ":",
             )
 
         if self._is_windows_ucrt64_backend():
-            env["PKG_CONFIG_PATH"] = f"{ws}/lib/pkgconfig;{ws}/lib64/pkgconfig"
+            existing_pkgcp = self._normalize_pkg_config_path_for_windows(
+                env.get("PKG_CONFIG_PATH", "")
+            )
+            env["PKG_CONFIG_PATH"] = self._merge_path_list(
+                existing_pkgcp,
+                [f"{ws}/lib/pkgconfig", f"{ws}/lib64/pkgconfig"],
+                ";",
+            )
 
         if vulkan_ok:
             # Patch libplacebo's src/glsl/meson.build so that glslang is found
@@ -2330,15 +2378,7 @@ class FFmpegBuilder:
             # the SPIRV call on the preceding line.  This is the same variable
             # already defined in the file; no new logic is introduced.
             #
-            # The patch is applied to the source tree before meson runs and is
-            # idempotent (guarded by checking that the original text is present).
-            glsl_meson = source_dir / "src" / "glsl" / "meson.build"
-            if glsl_meson.exists():
-                original = "cxx.find_library('glslang', required: required, static: static)"
-                patched = "cxx.find_library('glslang', required: required, static: static, dirs: vulkan_lib_dirs)"
-                text = glsl_meson.read_text(encoding="utf-8")
-                if original in text:
-                    glsl_meson.write_text(text.replace(original, patched, 1), encoding="utf-8")
+            self._patch_libplacebo_glslang_search(source_dir)
 
         meson_args = [arg.replace("{workspace}", ws) for arg in component.configure_args]
 
@@ -2391,6 +2431,26 @@ class FFmpegBuilder:
         )
 
         self._patch_libplacebo_pc()
+
+    def _patch_libplacebo_glslang_search(self, source_dir: Path) -> None:
+        """Patch libplacebo's glslang lookup to honor Vulkan SDK library dirs."""
+        glsl_meson = source_dir / "src" / "glsl" / "meson.build"
+        if not glsl_meson.exists():
+            return
+
+        original = "cxx.find_library('glslang', required: required, static: static)"
+        patched = (
+            "cxx.find_library('glslang', required: required, static: static, dirs: vulkan_lib_dirs)"
+        )
+        text = glsl_meson.read_text(encoding="utf-8")
+        if patched in text:
+            return
+        if original not in text:
+            raise BuildError(
+                "libplacebo",
+                f"Expected glslang lookup pattern not found in {glsl_meson}",
+            )
+        glsl_meson.write_text(text.replace(original, patched, 1), encoding="utf-8")
 
     def _patch_libplacebo_pc(self) -> None:
         """Normalize libplacebo pkg-config metadata for FFmpeg probing.
