@@ -102,9 +102,7 @@ python -m ffmpeg_builder
 OpenMP on Windows/UCRT64 is recommended: it improves performance in components that use OpenMP-parallel code paths.  
 For GCC builds, `-fopenmp` is provided by the installed UCRT64 toolchain (`libgomp` via GCC). The bootstrap additionally installs `llvm-openmp` to keep Clang/OpenMP runtime available as well.
 
-Implementation details and migration plan are documented in:
-
-- `docs/Windows-UCRT64-Implementation-Plan.md`
+Implementation details are documented in `docs/DeveloperReadme.md`.
 
 ## Linux (native)
 
@@ -324,6 +322,8 @@ enable_libvmaf_cuda: true
 enable_libplacebo_vulkan: false
 disable_lv2: false
 num_jobs: "auto"
+make_timeout_seconds: 0
+install_timeout_seconds: 0
 async_downloads: true
 download_workers: 4
 source_archives_dir: "third_party/sources"
@@ -341,18 +341,14 @@ windows:
 
 By default, builds are **offline-first**: every archive must exist in `third_party/sources`.
 To allow fetching missing archives from the network, set `allow_network_downloads: true`.
+For archive integrity validation, components in `components.yaml` may define optional
+`sha256` checksums; when present, downloads are verified before extraction.
 
 ### Command Line
 
 ```bash
-# Show help
-python -m ffmpeg_builder --help
-
-# Use custom workspace
-python -m ffmpeg_builder --workspace /path/to/workspace
-
-# Use custom config
-python -m ffmpeg_builder --config /path/to/config.yaml
+# Launch interactive UI (no CLI arguments supported)
+python -m ffmpeg_builder
 ```
 
 ## Components

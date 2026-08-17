@@ -93,6 +93,21 @@ class TestBuildConfigRoundTrip:
         assert cfg.gpl_enabled is True
         assert cfg.full_static is False  # default
 
+    def test_from_dict_ignores_unknown_keys(self):
+        cfg = BuildConfig.from_dict(
+            {
+                "ffmpeg_version": "8.1",
+                "unknown_top_level": "ignored",
+                "linux": {"c_standard": "gnu11", "unknown_nested": "ignored"},
+            }
+        )
+        assert cfg.ffmpeg_version == "8.1"
+        assert cfg.linux.c_standard == "gnu11"
+
+    def test_from_dict_none_uses_defaults(self):
+        cfg = BuildConfig.from_dict(None)
+        assert cfg.ffmpeg_version == "8.1"
+
 
 class TestConfigManager:
     """Test file-based config management."""
@@ -128,5 +143,12 @@ class TestConfigManager:
 
     def test_missing_file_returns_defaults(self, tmp_path):
         mgr = ConfigManager(tmp_path / "nonexistent.yaml")
+        cfg = mgr.load()
+        assert cfg.ffmpeg_version == "8.1"
+
+    def test_empty_yaml_file_returns_defaults(self, tmp_path: Path):
+        path = tmp_path / "empty.yaml"
+        path.write_text("", encoding="utf-8")
+        mgr = ConfigManager(path)
         cfg = mgr.load()
         assert cfg.ffmpeg_version == "8.1"

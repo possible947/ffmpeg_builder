@@ -163,6 +163,7 @@ class FFmpegBuilder:
         work_dir: Path,
         jobs: Union[str, int],
         env: Dict[str, str],
+        timeout: Optional[int] = None,
     ) -> Tuple[ExecutionResult, Path]:
         """Mark status, run ``make``, and raise on failure.
 
@@ -172,7 +173,21 @@ class FFmpegBuilder:
         Returns ``(result, log_file)`` on success; raises ``BuildError``
         otherwise.
         """
-        return run_make(self, component, status, detail, error_msg, work_dir, jobs, env)
+        configured_timeout = getattr(self.config, "make_timeout_seconds", 0)
+        effective_timeout = timeout
+        if effective_timeout is None and configured_timeout > 0:
+            effective_timeout = configured_timeout
+        return run_make(
+            self,
+            component,
+            status,
+            detail,
+            error_msg,
+            work_dir,
+            jobs,
+            env,
+            timeout=effective_timeout,
+        )
 
     def _run_install(
         self,
@@ -182,6 +197,7 @@ class FFmpegBuilder:
         error_msg: str,
         work_dir: Path,
         env: Dict[str, str],
+        timeout: Optional[int] = None,
     ) -> Tuple[ExecutionResult, Path]:
         """Mark status, run ``make install``, and raise on failure.
 
@@ -191,7 +207,20 @@ class FFmpegBuilder:
         Returns ``(result, log_file)`` on success; raises ``BuildError``
         otherwise.
         """
-        return run_install(self, component, status, detail, error_msg, work_dir, env)
+        configured_timeout = getattr(self.config, "install_timeout_seconds", 0)
+        effective_timeout = timeout
+        if effective_timeout is None and configured_timeout > 0:
+            effective_timeout = configured_timeout
+        return run_install(
+            self,
+            component,
+            status,
+            detail,
+            error_msg,
+            work_dir,
+            env,
+            timeout=effective_timeout,
+        )
 
     def _is_windows_ucrt64_backend(self) -> bool:
         """Return True only for Windows + MSYS2 UCRT64 backend."""
@@ -977,6 +1006,7 @@ class FFmpegBuilder:
                 archive_path = self.downloader.download(
                     url,
                     filename,
+                    expected_sha256=component.sha256,
                     show_progress=self.on_download_status is None,
                 )
             else:
@@ -1299,16 +1329,18 @@ class FFmpegBuilder:
                 f"cargo-c requires rustc 1.95 or newer",
             )
 
-        self._run_step(
-            component,
-            ComponentStatus.BUILDING,
-            "cargo install cargo-c",
-            "Failed to install cargo-c",
-            ["cargo", "install", "cargo-c"],
-            "install-cargo-c",
-            source_dir,
-            env,
-        )
+        cargo_c_path = shutil.which("cargo-c", path=env.get("PATH"))
+        if cargo_c_path is None:
+            self._run_step(
+                component,
+                ComponentStatus.BUILDING,
+                "cargo install cargo-c",
+                "Failed to install cargo-c",
+                ["cargo", "install", "cargo-c"],
+                "install-cargo-c",
+                source_dir,
+                env,
+            )
 
         self._run_step(
             component,
@@ -1373,48 +1405,6 @@ class FFmpegBuilder:
                         shutil.copy2(item, dest_item)
                     elif item.is_dir():
                         shutil.copytree(item, dest_item, dirs_exist_ok=True)
-
-    def build_giflib(self, component: Component, source_dir: Path) -> None:
-        """Build giflib.
-
-        Patches Makefile to skip documentation build (requires ImageMagick).
-
-        Args:
-            component: Component to build.
-            source_dir: Source directory.
-        """
-        env = self.get_build_env(component)
-
-        makefile = source_dir / "Makefile"
-        if makefile.exists():
-            content = makefile.read_text()
-            content = content.replace("$(MAKE) -C doc", "")
-            content = content.replace(
-                "install: all install-bin install-include install-lib install-man",
-                "install: all install-bin install-include install-lib",
-            )
-            makefile.write_text(content)
-
-        self._run_make(
-            component,
-            ComponentStatus.BUILDING,
-            f"make -j1",
-            "Build failed",
-            source_dir,
-            1,
-            env,
-        )
-
-        self._run_step(
-            component,
-            ComponentStatus.INSTALLING,
-            "make install",
-            "Install failed",
-            ["make", f"PREFIX={self._ws_str()}", "install"],
-            "install",
-            source_dir,
-            env,
-        )
 
     def build_openssl(self, component: Component, source_dir: Path) -> None:
         """Build OpenSSL.
@@ -2591,6 +2581,58 @@ class FFmpegBuilder:
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ninja_bin, dest)
 
+    def build_meson(self, component: Component, source_dir: Path) -> None:
+        """Install meson from source when the system package is unavailable."""
+        env = self.get_build_env(component)
+        python_bin = shutil.which("python3", path=env.get("PATH")) or shutil.which(
+            "python", path=env.get("PATH")
+        )
+        if python_bin is None:
+            raise BuildError(component.name, "Python interpreter is required to build meson")
+
+        setup_py = source_dir / "setup.py"
+        if setup_py.exists():
+            self._run_step(
+                component,
+                ComponentStatus.INSTALLING,
+                "python setup.py install",
+                "Meson install failed",
+                [python_bin, "setup.py", "install", f"--prefix={self._ws_str()}"],
+                "install",
+                source_dir,
+                env,
+            )
+            return
+
+        meson_py = source_dir / "meson.py"
+        if meson_py.exists():
+            self._run_step(
+                component,
+                ComponentStatus.CONFIGURING,
+                "python meson.py setup build",
+                "Meson bootstrap configure failed",
+                [python_bin, "meson.py", "setup", "build", f"--prefix={self._ws_str()}"],
+                "configure",
+                source_dir,
+                env,
+            )
+            self._run_step(
+                component,
+                ComponentStatus.INSTALLING,
+                "python meson.py install -C build",
+                "Meson bootstrap install failed",
+                [python_bin, "meson.py", "install", "-C", "build"],
+                "install",
+                source_dir,
+                env,
+            )
+            return
+
+        raise BuildError(
+            component.name,
+            "Meson source archive does not contain setup.py or meson.py bootstrap entrypoint",
+        )
+
     def build_ffmpeg(self, component: Component, source_dir: Path) -> None:
         """Build FFmpeg.
 
@@ -2611,23 +2653,26 @@ class FFmpegBuilder:
         if "libplacebo" in built_components:
             self._patch_libplacebo_pc()
 
+        extra_libs = self.extralibs
+        extra_ldflags = self.ldflags
+
         # Add libraries conditionally based on built components
         if "libvmaf" in built_components:
             if self.platform == "darwin":
-                self.extralibs += " -lc++"
+                extra_libs += " -lc++"
             else:
-                self.extralibs += " -lstdc++"
+                extra_libs += " -lstdc++"
 
         if "libjxl" in built_components:
             # libjxl_threads.a uses std::thread — needs -lstdc++ for static
             # linking on all non-Apple platforms, including MinGW/UCRT64.
             # lcms2 is a private dependency of libjxl not listed in Libs:.
-            self.extralibs += " -llcms2"
+            extra_libs += " -llcms2"
             if self.platform != "darwin":
-                self.extralibs += " -lstdc++"
+                extra_libs += " -lstdc++"
 
         if "opencl-icd-loader" in built_components and self.platform == "linux":
-            self.extralibs += " -lva"
+            extra_libs += " -lva"
 
         # libplacebo links against the system Vulkan ICD loader at runtime.
         # On Linux the loader is libvulkan.so; it must appear in extralibs so
@@ -2645,17 +2690,17 @@ class FFmpegBuilder:
             )
             if placebo_vulkan:
                 if self.platform == "linux":
-                    self.extralibs += " -lvulkan"
+                    extra_libs += " -lvulkan"
                 elif self.platform == "darwin":
-                    self.extralibs += " -L/usr/local/lib -lvulkan"
+                    extra_libs += " -L/usr/local/lib -lvulkan"
                     # libvulkan.1.dylib is a shared library; dyld must be able
                     # to find it at runtime via @rpath.  Add the LunarG SDK lib
                     # directory so the compiler test executable doesn't crash
                     # with "Library not loaded: @rpath/libvulkan.1.dylib".
-                    self.ldflags += " -Wl,-rpath,/usr/local/lib"
+                    extra_ldflags += " -Wl,-rpath,/usr/local/lib"
 
         # Strip leading/trailing whitespace that accumulates when starting from "".
-        self.extralibs = self.extralibs.strip()
+        extra_libs = extra_libs.strip()
 
         configure_flags = self.registry.get_ffmpeg_configure_flags(
             built_components,
@@ -2670,8 +2715,8 @@ class FFmpegBuilder:
             "--enable-version3",
             f"--extra-cflags={self.cflags}",
             f"--extra-ldexeflags={self.ldexeflags}",
-            f"--extra-ldflags={self.ldflags}",
-            f"--extra-libs={self.extralibs}",
+            f"--extra-ldflags={extra_ldflags}",
+            f"--extra-libs={extra_libs}",
             # FFmpeg's configure is a POSIX shell script (runs via sh.exe).
             # Use MSYS-style path so bash doesn't misinterpret drive letters.
             f"--pkgconfigdir={self._to_msys_path(self._ws_str())}/lib/pkgconfig",

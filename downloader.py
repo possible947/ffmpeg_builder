@@ -1,5 +1,6 @@
 """Download management with progress tracking."""
 
+import hashlib
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -57,6 +58,7 @@ class Downloader:
         self,
         url: str,
         filename: Optional[str] = None,
+        expected_sha256: Optional[str] = None,
         max_retries: int = 3,
         show_progress: bool = True,
         progress_cb: Optional[ProgressCB] = None,
@@ -86,8 +88,10 @@ class Downloader:
 
         with lock:
             if target_path.exists() and target_path.stat().st_size > 0:
+                self._verify_sha256(target_path, expected_sha256)
                 return target_path
             if source_path is not None and source_path.exists() and source_path.stat().st_size > 0:
+                self._verify_sha256(source_path, expected_sha256)
                 return source_path
 
             if not self.allow_network_downloads:
@@ -122,6 +126,11 @@ class Downloader:
                                 destination_path,
                                 show_progress,
                                 progress_cb,
+                            )
+                            self._verify_sha256(
+                                destination_path,
+                                expected_sha256,
+                                delete_on_mismatch=True,
                             )
                             return destination_path
                         except Exception as candidate_error:
@@ -222,6 +231,43 @@ class Downloader:
 
         part_path.replace(target_path)
 
+    @staticmethod
+    def _compute_sha256(path: Path) -> str:
+        hasher = hashlib.sha256()
+        with open(path, "rb") as fh:
+            while True:
+                chunk = fh.read(1024 * 1024)
+                if not chunk:
+                    break
+                hasher.update(chunk)
+        return hasher.hexdigest()
+
+    def _verify_sha256(
+        self,
+        path: Path,
+        expected_sha256: Optional[str],
+        delete_on_mismatch: bool = False,
+    ) -> None:
+        if not expected_sha256:
+            return
+
+        normalized = expected_sha256.strip().lower()
+        if len(normalized) != 64 or any(ch not in "0123456789abcdef" for ch in normalized):
+            raise RuntimeError(f"Invalid sha256 for {path.name}: {expected_sha256!r}")
+
+        actual = self._compute_sha256(path)
+        if actual == normalized:
+            return
+
+        if delete_on_mismatch:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+        raise RuntimeError(
+            f"SHA256 mismatch for {path.name}: expected {normalized}, got {actual}"
+        )
+
 
 class AsyncDownloadManager:
     """Background source archive download manager."""
@@ -288,6 +334,7 @@ class AsyncDownloadManager:
                 self.downloader.download,
                 url,
                 filename,
+                getattr(component, "sha256", None),
                 3,
                 False,
                 progress_cb,
@@ -378,6 +425,7 @@ class AsyncDownloadManager:
         return self.downloader.download(
             component.get_url(),
             filename,
+            expected_sha256=getattr(component, "sha256", None),
             show_progress=False,
             progress_cb=progress_cb,
         )

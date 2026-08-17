@@ -1,6 +1,6 @@
 """Configuration management for FFmpeg builder."""
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -47,6 +47,8 @@ class BuildConfig:
     disable_lv2: bool = False
     openmp: bool = True
     num_jobs: str = "auto"
+    make_timeout_seconds: int = 0
+    install_timeout_seconds: int = 0
     async_downloads: bool = True
     download_workers: int = 4
     source_archives_dir: str = "third_party/sources"
@@ -60,19 +62,40 @@ class BuildConfig:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "BuildConfig":
+    def from_dict(cls, data: Optional[Dict[str, Any]]) -> "BuildConfig":
         """Create from dictionary."""
-        macos_data = data.get("macos", {})
-        linux_data = data.get("linux", {})
-        windows_data = data.get("windows", {})
+        if data is None:
+            data = {}
+        if not isinstance(data, dict):
+            raise ValueError(f"Expected config mapping, got {type(data).__name__}")
+
+        macos_data = data.get("macos") or {}
+        linux_data = data.get("linux") or {}
+        windows_data = data.get("windows") or {}
+        if not isinstance(macos_data, dict):
+            raise ValueError("Expected 'macos' to be a mapping")
+        if not isinstance(linux_data, dict):
+            raise ValueError("Expected 'linux' to be a mapping")
+        if not isinstance(windows_data, dict):
+            raise ValueError("Expected 'windows' to be a mapping")
 
         # Filter out nested config dicts before passing to constructor
-        config_data = {k: v for k, v in data.items() if k not in ("macos", "linux", "windows")}
+        nested_keys = {"macos", "linux", "windows"}
+        build_fields = {item.name for item in fields(cls)}
+        config_data = {
+            k: v for k, v in data.items() if k in build_fields and k not in nested_keys
+        }
+
+        macos_fields = {item.name for item in fields(MacOSConfig)}
+        linux_fields = {item.name for item in fields(LinuxConfig)}
+        windows_fields = {item.name for item in fields(WindowsConfig)}
 
         config = cls(**config_data)
-        config.macos = MacOSConfig(**macos_data)
-        config.linux = LinuxConfig(**linux_data)
-        config.windows = WindowsConfig(**windows_data)
+        config.macos = MacOSConfig(**{k: v for k, v in macos_data.items() if k in macos_fields})
+        config.linux = LinuxConfig(**{k: v for k, v in linux_data.items() if k in linux_fields})
+        config.windows = WindowsConfig(
+            **{k: v for k, v in windows_data.items() if k in windows_fields}
+        )
 
         return config
 

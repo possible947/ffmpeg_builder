@@ -13,7 +13,6 @@ The current project is centered on FFmpeg 8.1:
 - Default config version: `8.1`
   - `/home/runner/work/ffmpeg_builder/ffmpeg_builder/config.py`
   - `/home/runner/work/ffmpeg_builder/ffmpeg_builder/build_config.yaml`
-  - `/home/runner/work/ffmpeg_builder/ffmpeg_builder/profiles/default.yaml`
 - Target component entry:
   - `/home/runner/work/ffmpeg_builder/ffmpeg_builder/components.yaml` (`name: ffmpeg`, `version: '8.1'`)
 - Tests hard-code 8.1 assumptions:
@@ -112,7 +111,6 @@ FFmpeg 9.0 introduces `--enable-libonnxruntime` as optional. For the first 9.0 i
 2. Update defaults in:
    - `config.py` (`BuildConfig.ffmpeg_version`)
    - `build_config.yaml`
-   - `profiles/default.yaml`
 3. Remove or version-gate obsolete FFmpeg flags (starting with `--enable-libglslang`).
 4. Keep libplacebo/glslang build chain intact for Vulkan, but decouple it from FFmpeg configure flags.
 
@@ -179,4 +177,3 @@ This sequencing minimizes blast radius and makes failures easier to isolate.
   - `FFmpeg/nv-codec-headers`
   - `intel/libvpl`
   - `haasn/libplacebo`
-

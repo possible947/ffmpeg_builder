@@ -33,3 +33,4 @@ missing
 test-driver
 # MSYS2 venvs
 .venv-msys2*/
+build_config.yaml

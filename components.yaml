@@ -9,7 +9,6 @@
   build_system: custom
   system_component: true
   system_tool_name: giflib
-  custom_build_fn: build_giflib
 - name: pkg-config
   version: 0.29.2
   url: https://pkgconfig.freedesktop.org/releases/pkg-config-{version}.tar.gz
@@ -111,11 +110,12 @@
   version: 1.8.2
   url: https://github.com/mesonbuild/meson/releases/download/{version}/meson-{version}.tar.gz
   category: build_tool
-  build_system: autotools
+  build_system: custom
   configure_args:
   - --prefix={workspace}
   system_component: true
   system_tool_name: meson
+  custom_build_fn: build_meson
 - name: ninja
   version: 1.12.1
   url: https://github.com/ninja-build/ninja/archive/refs/tags/v{version}.tar.gz
@@ -333,14 +333,6 @@
   - python3
   - meson
   - ninja
-  skip_condition: disable_lv2
-- name: waflib
-  version: b600c92
-  url: https://gitlab.com/drobilla/autowaf/-/archive/{version}/autowaf-{version}.tar.gz
-  category: audio_codec
-  build_system: headers_only
-  archive_filename: autowaf.tar.gz
-  archive_dirname: autowaf-{version}
   skip_condition: disable_lv2
 - name: serd
   version: 0.32.8

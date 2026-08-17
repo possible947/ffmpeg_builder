@@ -552,43 +552,17 @@ print(f'HW components: {hw}')
 - **macOS CI**: No automated testing on macOS; platform-specific code paths (macports clang, glibtool, VideoToolbox) require manual verification.
 - **Component versions**: Versions are defined in `components.yaml` (externalized from Python). A future improvement could fetch latest versions from an API or config file.
 - **No dependency graph**: Components are built in a fixed order defined in `components.yaml`. There is no automatic topological sort based on `depends_on`.
-- **Deferred refactoring — Fix #16: split `builder.py` (~100 KB, ~3050 lines) into smaller modules**. The full 16-item code review completed with 15 of 16 fixes applied. Fix #16 (split into `build_steps.py`, `component_builders.py`, `release_bundle.py`) is deferred because it requires careful manual refactoring: all ~20 custom build methods share state via `self.executor`, `self.state_manager`, `self._ws_str()`, `get_build_env()`, `_execute_post_install()`, and many internal helpers. An automated split risks breaking circular imports and method resolution order. Recommended approach after Fix #6 (already applied): manual extraction with explicit dependency injection, one module at a time. See `docs/Fix-Plan.md` for the complete fix plan and status tracking, and `docs/FFmpeg Builder — Full Code Review Report.txt` for the original review findings.
+- **Large builder surface still in one module** — `builder.py` remains the main integration point and still contains many component-specific build methods. Shared plumbing has already been split to `build_steps.py`, `component_builders.py`, and `release_bundle.py`, but further decomposition should continue in small, behavior-preserving steps.
 
 ## Code Review & Refactoring Status (2026-08)
 
-The project underwent a comprehensive 16-item code review in August 2026. Results:
+August 2026 hardening work is now reflected directly in the codebase and changelog:
 
-| Metric | Value |
-|--------|-------|
-| Total items reviewed | 16 |
-| Applied fixes | 14 (✅ DONE) |
-| Deferred items | 2 (🔜 DEFERRED — Fix #10: HTTP fallback warning, Fix #16: split builder.py) |
-
-### What changed
-
-- **Components externalized**: `components.yaml` replaces ~850 lines of hardcoded Python dataclasses with a 774-line, 63-component YAML registry.
-- **Build orchestration deduplicated**: `_run_step()`, `_run_make()`, `_run_install()` helpers replaced ~100+ lines of repeated mark/execute/check/raise logic across all custom build functions.
-- **Thread safety fixed**: `StateManager` now uses `threading.RLock` on all mutations; `AsyncDownloadManager.get()` uses per-file `threading.Event` to eliminate race between futures check and result retrieval.
-- **Security hardened**: Shell injection in `_execute_post_install()` wrapped with `shlex.quote()`; HTTP fallback downloads emit `logging.warning()`.
-- **Test coverage added**: 56 unit tests across 3 modules (config round-trip, state serialization/thread-safety, component filtering). All passing.
-- **Style normalized**: `black` + `isort` applied to all source files (21 files reformatted).
-
-### Remaining work
-
-**Fix #16 — Split `builder.py`** (deferred):
-
-Current state: single file at ~100 KB, ~3050 lines. Target split:
-
-| Target module | Responsibility |
-|---------------|----------------|
-| `build_steps.py` | Generic build-step orchestration (`_run_step`, `_run_make`, `_run_install`) |
-| `component_builders.py` | Per-component custom build functions (~20 methods: openssl, x264, x265, libvpx, zimg, libvorbis, libjxl, libvmaf, srt, libzmq, libplacebo, glslang, ninja, ffmpeg) |
-| `release_bundle.py` | `make_release_bundle()` and runtime-dependency collection logic |
-
-Risk assessment: manual refactoring required. Automated tooling cannot safely handle the shared state dependencies without introducing circular imports. Estimated effort: 4–6 hours. Priority: Low (code works correctly; this is purely organizational).
+- high-severity findings (H1-H3) resolved,
+- medium-severity findings (M1-M11) resolved,
+- docs synchronized with current runtime behavior (interactive CLI-only launch, environment-specific local config, and optional archive checksum verification).
 
 See also:
 
-- `docs/Fix-Plan.md` — full execution plan with per-fix status
-- `docs/FFmpeg Builder — Full Code Review Report.txt` — original review findings
-- `changelog.md` (repository root) — post-refactor debugging log
+- `docs/CHANGELOG.md` — detailed chronological change log
+- `changelog.md` (repository root) — build-session notes and environment-specific debugging history

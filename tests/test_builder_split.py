@@ -24,6 +24,7 @@ def test_builder_module_reexports_shared_exceptions():
 def test_custom_builder_registry_contains_known_entries():
     assert get_custom_builder("build_ffmpeg") is not None
     assert get_custom_builder("build_libplacebo") is not None
+    assert get_custom_builder("build_meson") is not None
     assert get_custom_builder("missing-builder") is None
 
 

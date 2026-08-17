@@ -164,6 +164,7 @@ class CommandExecutor:
         env: Optional[Dict[str, str]] = None,
         component_name: str = "",
         step: str = "build",
+        timeout: Optional[int] = None,
     ) -> Tuple[ExecutionResult, Path]:
         """Execute make command.
 
@@ -178,13 +179,14 @@ class CommandExecutor:
             Tuple of (ExecutionResult, log_file_path).
         """
         command = ["make", f"-j{num_jobs}"]
-        return self.execute_with_log(command, component_name, step, cwd, env)
+        return self.execute_with_log(command, component_name, step, cwd, env, timeout=timeout)
 
     def execute_install(
         self,
         cwd: Path,
         env: Optional[Dict[str, str]] = None,
         component_name: str = "",
+        timeout: Optional[int] = None,
     ) -> Tuple[ExecutionResult, Path]:
         """Execute make install command.
 
@@ -197,4 +199,4 @@ class CommandExecutor:
             Tuple of (ExecutionResult, log_file_path).
         """
         command = ["make", "install"]
-        return self.execute_with_log(command, component_name, "install", cwd, env)
+        return self.execute_with_log(command, component_name, "install", cwd, env, timeout=timeout)

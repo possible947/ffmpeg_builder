@@ -4,9 +4,26 @@ All notable changes to the FFmpeg Builder project.
 
 ## [Unreleased]
 
+### Code-review remediation complete (H1-H3, M1-M11) — 2026-08-17
+
+- **H1 fixed (libplacebo on macOS):** removed accidental Linux-only gating from the registry so libplacebo remains buildable on macOS.
+- **H2 fixed (UCRT64 PATH merge):** switched PATH merging to `os.pathsep` and prepend `workspace/bin` only when it exists.
+- **H3 fixed (Python compatibility):** aligned runtime requirement to Python 3.12+ for secure `tar.extractall(..., filter="data")`.
+- **M1 fixed:** `build_ffmpeg()` no longer mutates persistent `self.extralibs`/`self.ldflags`; uses per-build local copies.
+- **M2 fixed:** Meson source fallback now uses a dedicated custom builder (`build_meson`) instead of autotools assumptions.
+- **M3 fixed:** `_build_cargo()` now installs `cargo-c` only when missing.
+- **M4 fixed:** Windows UCRT64 bootstrap installs `perl` required by OpenSSL source builds.
+- **M5 fixed:** configurable make/install timeouts added (`make_timeout_seconds`, `install_timeout_seconds`) and wired through executor helpers.
+- **M6 fixed:** `BuildConfig.from_dict()` now handles empty YAML and ignores unknown keys safely.
+- **M7 fixed:** removed dead `profiles/default.yaml`.
+- **M8 fixed:** README/docs now reflect actual CLI behavior (interactive mode only, no CLI args).
+- **M9 fixed:** optional component `sha256` checksums added and enforced by downloader.
+- **M10 fixed:** removed unreachable `build_giflib` custom builder path.
+- **M11 fixed:** removed dead `waflib` registry entry.
+
 ### Code Review Fixes (16 items, 15 applied — only Fix #16 deferred)
 
-> Full plan in `docs/Fix-Plan.md`. Applied incrementally; each item tracked below with current status.
+> Applied incrementally; each item tracked below with current status.
 
 | # | Fix | Severity | File(s) | Status | Notes |
 |---|-----|----------|---------|--------|-------|
@@ -180,7 +197,7 @@ All notable changes to the FFmpeg Builder project.
 - **Linux-only HW components with explicit UCRT64 override** — `nv-codec`, `opencl-headers`, and `opencl-icd-loader` remain `linux_only` (preserving WSL2/Linux behavior) and are enabled on Windows only via a dedicated `windows_ucrt64_supported` gate under `windows-msys2-ucrt64` backend
 - **Platform selection in app/builder** — `FFmpegBuilderApp` and `FFmpegBuilder` now use `PlatformDetector.get_platform_name()` instead of binary darwin/linux fallback, enabling explicit Windows path through component filtering and build orchestration
 - **System report for backend separation** — Start screen now shows both normalized build platform and resolved backend (`linux-wsl2`, `windows-msys2-ucrt64`, etc.) to make WSL2 vs MSYS2-UCRT64 mode explicit
-- **Windows documentation scope** — Expanded Windows docs with a dedicated implementation plan (`ffmpeg_builder/docs/Windows-UCRT64-Implementation-Plan.md`) and fixed hardware target requirements for Windows adaptation (dual GPU: NVIDIA Titan V + Intel Arc A750; required CUDA/NVENC+NVDEC, Intel QSV/oneVPL, Vulkan, OpenCL)
+- **Windows documentation scope** — Expanded Windows docs and fixed hardware target requirements for Windows adaptation (dual GPU: NVIDIA Titan V + Intel Arc A750; required CUDA/NVENC+NVDEC, Intel QSV/oneVPL, Vulkan, OpenCL)
 - **Build dashboard layout** — The header is now a single line (`FFmpeg Builder X.Y - Building | Elapsed: HH:MM:SS`) instead of a multi-line panel. The messages panel is fixed at 8 content lines (10 lines including borders) and stays anchored at the bottom of the screen. The component list occupies the remaining fixed-height area and scrolls upward as new rows appear, so the messages panel is never pushed down by a growing table
 - **Viewport follows build order** — The visible component rows are now centered on the active component in the original build order (`1/N`, `2/N`, …) rather than being reordered to pin in-progress rows at the top. This keeps the progression readable while still making the active phase visible
 

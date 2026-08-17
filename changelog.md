@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-08-17 — Закрытие review-фиксов H1-H3 и M1-M11
+
+В кодовой базе применён полный пакет исправлений по результатам ревью:
+
+- **H1-H3:** восстановлена сборка `libplacebo` на macOS, исправлена сборка `PATH` для UCRT64 через `os.pathsep`, зафиксирована совместимость извлечения архивов через Python `>=3.12`.
+- **M1:** устранено накопление `extralibs/ldflags` при повторных запусках `build_ffmpeg`.
+- **M2:** для `meson` добавлен корректный source fallback через `custom_build_fn: build_meson`.
+- **M3:** установка `cargo-c` выполняется только при отсутствии в окружении.
+- **M4:** в bootstrap MSYS2 UCRT64 добавлен пакет `perl` (нужен для OpenSSL).
+- **M5:** добавлены конфигурируемые таймауты `make_timeout_seconds` и `install_timeout_seconds`.
+- **M6:** `BuildConfig.from_dict()` теперь устойчив к пустому YAML и неизвестным ключам.
+- **M7:** удалён неиспользуемый `profiles/default.yaml`.
+- **M8:** документация синхронизирована с фактическим запуском (`python -m ffmpeg_builder` без CLI-аргументов).
+- **M9:** добавлена опциональная проверка `sha256` архивов в `components.yaml`/`downloader.py`.
+- **M10:** удалён недостижимый `build_giflib`.
+- **M11:** удалён мёртвый компонент-реестр `waflib`.
+
 ## 2026-08-17 — Successful full build on Windows 11 (MSYS2 UCRT64)
 
 **Среда:** Windows 11, x86_64, GCC 16.2 (MSYS2 UCRT64), Python 3.13 (MSYS2 venv)

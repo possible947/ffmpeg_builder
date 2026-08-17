@@ -126,6 +126,7 @@ if (-not $SkipPackageInstall) {
         "autoconf"
         "automake"
         "libtool"
+        "perl"
         "make"
         "mingw-w64-ucrt-x86_64-toolchain"
         "mingw-w64-ucrt-x86_64-python"

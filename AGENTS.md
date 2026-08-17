@@ -5,14 +5,13 @@
 - Flat layout: the package IS the repo root. The root `ffmpeg_builder` file is a launcher script, not a package directory — the real package modules live at the root (`__main__.py`, `app.py`, `components.py`, ...), with `ui/` mapped to `ffmpeg_builder.ui` (see `[tool.setuptools.package-dir]` in `pyproject.toml`).
 - Use absolute imports (`from ffmpeg_builder.components import ComponentRegistry`). Run `pip install -e .` after environment changes.
 - `components.py` `ComponentRegistry` loads the 64-component registry from `components.yaml` at the repo root. Its header says `python _gen_components_yaml.py` regenerates it, but that script does not exist in the repo — edit `components.yaml` directly. Custom build functions live in `builder.py` and are dispatched via the `CUSTOM_BUILDERS` dict in `component_builders.py` (referenced by `custom_build_fn`).
-- `profiles/default.yaml` is dead code — nothing in the codebase references `profiles/`.
 
 ## Commands
 
 - Install: `pip install -e .`
 - Env check: `./scripts/check_python_env.sh`
 - Run: `python -m ffmpeg_builder` (or `./ffmpeg_builder`, or the `ffmpeg-builder` entry point). It takes **no CLI arguments** — the `--help`/`--workspace`/`--config` options documented in the README do not exist.
-- Tests: `pytest tests/` (61 unit tests, ~2 s; config/state/components/builder-split surface). Do NOT run bare `pytest` at the root: it also collects `workspace/packages/` (extracted third-party sources, gitignored) and crashes on their test programs. Single test: `pytest tests/test_state.py::test_name`.
+- Tests: `pytest tests/` (66 unit tests, ~2 s; config/state/components/builder-split/downloader surface). Do NOT run bare `pytest` at the root: it also collects `workspace/packages/` (extracted third-party sources, gitignored) and crashes on their test programs. Single test: `pytest tests/test_state.py::test_name`.
 - Lint/typecheck: `black .` (line-length 100), `mypy <files>`. mypy enforces `disallow_untyped_defs = true` and has a pre-existing baseline of ~33 errors (missing `tqdm`/`yaml` stubs, untyped defs); `black --check` currently flags 3 files (`tests/test_builder_split.py`, `component_builders.py`, `release_bundle.py`). Run mypy on specific files, not `.`, to avoid crawling `workspace/`.
 - No CI workflow, no pre-commit. A full FFmpeg build is a long, hardware-dependent manual process (~20–60 min, ~10 GB); verify code changes with unit tests.
 - On this Windows machine, tests run under the MSYS2 venv: `C:\msys64\usr\bin\bash.exe -lc "cd /e/Projects/ffmpeg_builder && source ./.venv-msys2-ucrt64/bin/activate && python -m pytest tests/ -q"`.
@@ -30,12 +29,7 @@
 
 - `third_party/sources` archives are Git LFS-tracked (`.gitattributes`); run `git lfs pull` after clone. Check that an archive is a real tarball, not a 3-line LFS pointer (`version https://git-lfs.github.com/spec/v1`), before debugging extraction failures.
 - On component failure, inspect `workspace/logs/<component>_<step>.log` and the resume state in `workspace/build_state.json`.
-- `build_ffmpeg` (`builder.py:2587+`) mutates `self.extralibs`/`self.ldflags`; the UI retry path re-runs the build on the **same** builder instance, so flags accumulate on retry. Build local copies instead of mutating instance state.
-- `builder.py:446` merges PATH with a hardcoded `:` separator — broken under MSYS2 UCRT64, where the inherited PATH is `;`-separated (the first PATH entry gets swallowed). Use `os.pathsep`.
-- `tar.extractall(..., filter="data")` (`builder.py:996,1014`) requires Python ≥ 3.12, but `pyproject.toml` declares `>=3.10` — 3.10/3.11 users crash on first extraction.
-- libplacebo's `linux_only: true` (`components.yaml:709`) silently drops libplacebo on macOS — a known regression (macOS previously built it; review report H1).
-- `setup_windows_msys2_ucrt64.ps1` installs no `perl`, but the default config's `gpl_enabled: true` openssl source build needs it — fresh UCRT64 environments fail on openssl.
-- Root `changelog.md` has a 2026-08-17 entry claiming a FFmpeg 9.0 build, but the registry/config target 8.1 — treat `components.yaml`/`build_config.yaml` as truth.
+- Root `build_config.yaml` is gitignored and environment-specific; do not rely on repository-tracked defaults from that file.
 
 ### Windows MSYS2 UCRT64: incomplete environment
 
@@ -60,5 +54,4 @@ Only commands beginning with `./` are wrapped through `sh.exe` in `executor.py:7
 ## Docs
 
 - `docs/DeveloperReadme.md` is the authoritative architecture doc (module responsibilities, data flow, extension points); not linked from the root README.
-- `docs/Fix-Plan.md` tracks the 16-item code-review refactor but is stale on #10 (implemented, `downloader.py:109-114`) and #16 (partially done: `build_steps.py`/`component_builders.py`/`release_bundle.py` exist; ~20 `build_*` functions still live in `builder.py`).
-- `docs/Code-Review-Report-2026-08-17.md` is the current audit (findings H1–H3, M1–M11, L1–L13 with suggested fixes); the Gotchas above mirror its open HIGH/MEDIUM items.
+- `docs/CHANGELOG.md` tracks applied remediation for high/medium review findings and is the authoritative status source for fix history.

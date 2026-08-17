@@ -49,12 +49,15 @@ def run_make(
     work_dir: Path,
     jobs: Union[str, int],
     env: Dict[str, str],
+    timeout: Optional[int] = None,
 ) -> Tuple[ExecutionResult, Path]:
     """Mark status, run make, and raise on failure."""
     context.state_manager.mark_component_status(
         component.name, status, component.version, detail=detail
     )
-    result, log_file = context.executor.execute_make(work_dir, jobs, env, component.name)
+    result, log_file = context.executor.execute_make(
+        work_dir, jobs, env, component.name, timeout=timeout
+    )
     if not result.success:
         raise BuildError(component.name, error_msg, log_file)
     return result, log_file
@@ -68,12 +71,15 @@ def run_install(
     error_msg: str,
     work_dir: Path,
     env: Dict[str, str],
+    timeout: Optional[int] = None,
 ) -> Tuple[ExecutionResult, Path]:
     """Mark status, run make install, and raise on failure."""
     context.state_manager.mark_component_status(
         component.name, status, component.version, detail=detail
     )
-    result, log_file = context.executor.execute_install(work_dir, env, component.name)
+    result, log_file = context.executor.execute_install(
+        work_dir, env, component.name, timeout=timeout
+    )
     if not result.success:
         raise BuildError(component.name, error_msg, log_file)
     return result, log_file

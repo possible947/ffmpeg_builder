@@ -79,6 +79,7 @@ class Component:
     archive_strip_components: int = 1
     archive_dirname: Optional[str] = None
     archive_filename: Optional[str] = None
+    sha256: Optional[str] = None
     workdir: Optional[str] = None
     platform_overrides: Dict[str, PlatformOverride] = field(default_factory=dict)
     extra_env: Dict[str, str] = field(default_factory=dict)
@@ -212,6 +213,7 @@ class ComponentRegistry:
             archive_strip_components=int(data.get("archive_strip_components", 1)),
             archive_filename=data.get("archive_filename"),
             archive_dirname=data.get("archive_dirname"),
+            sha256=data.get("sha256"),
             workdir=data.get("workdir"),
             platform_overrides=cls._platform_overrides_from_dict(data.get("platform_overrides")),
             extra_env=dict(data.get("extra_env") or {}),

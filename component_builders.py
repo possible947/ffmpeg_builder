@@ -19,7 +19,7 @@ def get_custom_builder(name: str) -> Optional[CustomBuilder]:
 
 
 CUSTOM_BUILDERS: Dict[str, CustomBuilder] = {
-    "build_giflib": lambda builder, component, source_dir: builder.build_giflib(component, source_dir),
+    "build_meson": lambda builder, component, source_dir: builder.build_meson(component, source_dir),
     "build_openssl": lambda builder, component, source_dir: builder.build_openssl(component, source_dir),
     "build_x264": lambda builder, component, source_dir: builder.build_x264(component, source_dir),
     "build_x265": lambda builder, component, source_dir: builder.build_x265(component, source_dir),
