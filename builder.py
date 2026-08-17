@@ -203,6 +203,51 @@ class FFmpegBuilder:
             and self.config.windows.backend == "msys2-ucrt64"
         )
 
+    def _cmake_exe(self) -> str:
+        """Return the cmake executable to use for this backend.
+
+        On UCRT64, cmake.exe from C:\\msys64\\ucrt64\\bin depends on
+        msys-2.0.dll and cannot be launched as a plain subprocess from Python
+        (return code 0xC0000135 / STATUS_DLL_NOT_FOUND).  Find the first
+        cmake.exe that lives outside MSYS2 directories — typically the native
+        Windows CMake installed under C:\\Program Files\\CMake\\bin.
+        """
+        if not self._is_windows_ucrt64_backend():
+            return "cmake"
+
+        msys2_root = Path(self.config.windows.msys2_root).resolve()
+        path_env = os.environ.get("PATH", "")
+        # PATH from MSYS2 bash uses both ':' and ';' as separators; split on both.
+        dirs: list[str] = []
+        for part in path_env.replace(";", ":").split(":"):
+            part = part.strip()
+            if part:
+                dirs.append(part)
+
+        for directory in dirs:
+            # Convert MSYS-style paths (/ucrt64/bin, /c/...) to Windows paths.
+            win_dir = directory
+            m = re.match(r"^/([A-Za-z])/(.*)$", directory)
+            if m:
+                win_dir = f"{m.group(1).upper()}:/{m.group(2)}"
+            try:
+                candidate = Path(win_dir).resolve()
+            except (OSError, ValueError):
+                continue
+            # Skip any directory that lives inside the MSYS2 tree.
+            try:
+                candidate.relative_to(msys2_root)
+                continue  # inside MSYS2 — skip
+            except ValueError:
+                pass
+            cmake_path = candidate / "cmake.exe"
+            if cmake_path.is_file():
+                return str(cmake_path)
+
+        # Fallback: let the OS resolve it; might still fail on UCRT64 but
+        # better than a silent crash.
+        return "cmake"
+
     def _prefer_system_packages(self) -> bool:
         """Return whether system packages must be used for system components."""
         return self._is_windows_ucrt64_backend() and self.config.windows.prefer_system_packages
@@ -1122,7 +1167,7 @@ class FFmpegBuilder:
             ws = self._ws_str()
             env["PKG_CONFIG_PATH"] = f"{ws}/lib/pkgconfig;{ws}/lib64/pkgconfig"
 
-        cmake_cmd = ["cmake", "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"] + cmake_args + [str(source_dir)]
+        cmake_cmd = [self._cmake_exe(), "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"] + cmake_args + [str(source_dir)]
         self._run_step(
             component,
             ComponentStatus.CONFIGURING,
@@ -1139,7 +1184,7 @@ class FFmpegBuilder:
             ComponentStatus.BUILDING,
             "cmake --build",
             "Build failed",
-            ["cmake", "--build", ".", "--parallel", str(self.num_jobs)],
+            [self._cmake_exe(), "--build", ".", "--parallel", str(self.num_jobs)],
             "build",
             build_dir,
             env,
@@ -1150,7 +1195,7 @@ class FFmpegBuilder:
             ComponentStatus.INSTALLING,
             "cmake --install",
             "Install failed",
-            ["cmake", "--install", "."],
+            [self._cmake_exe(), "--install", "."],
             "install",
             build_dir,
             env,
@@ -1622,7 +1667,7 @@ class FFmpegBuilder:
                 ComponentStatus.CONFIGURING,
                 f"cmake (configure-{bitdepth})",
                 f"Configure {bitdepth} failed",
-                ["cmake", "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"] + cmake_args + ["../../../source"],
+                [self._cmake_exe(), "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"] + cmake_args + ["../../../source"],
                 f"configure-{bitdepth}",
                 bitdepth_dir,
                 env,
@@ -1633,7 +1678,7 @@ class FFmpegBuilder:
                 ComponentStatus.BUILDING,
                 "cmake --build (multi-bitdepth)",
                 f"Build {bitdepth} failed",
-                ["cmake", "--build", ".", "--parallel", str(self.num_jobs)],
+                [self._cmake_exe(), "--build", ".", "--parallel", str(self.num_jobs)],
                 f"build-{bitdepth}",
                 bitdepth_dir,
                 env,
@@ -1707,7 +1752,7 @@ class FFmpegBuilder:
             ComponentStatus.INSTALLING,
             "cmake --install",
             "Install failed",
-            ["cmake", "--install", "."],
+            [self._cmake_exe(), "--install", "."],
             "install",
             eight_dir,
             env,
@@ -2013,7 +2058,7 @@ class FFmpegBuilder:
             ComponentStatus.CONFIGURING,
             "cmake .",
             "Configure failed",
-            ["cmake", "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"] + cmake_args + ["."],
+            [self._cmake_exe(), "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"] + cmake_args + ["."],
             "configure",
             source_dir,
             env,
@@ -2024,7 +2069,7 @@ class FFmpegBuilder:
             ComponentStatus.BUILDING,
             f"cmake --build . --parallel {self.num_jobs}",
             "Build failed",
-            ["cmake", "--build", ".", f"--parallel={self.num_jobs}"],
+            [self._cmake_exe(), "--build", ".", f"--parallel={self.num_jobs}"],
             "build",
             source_dir,
             env,
@@ -2035,7 +2080,7 @@ class FFmpegBuilder:
             ComponentStatus.INSTALLING,
             "cmake --install .",
             "Install failed",
-            ["cmake", "--install", "."],
+            [self._cmake_exe(), "--install", "."],
             "install",
             source_dir,
             env,
@@ -2153,7 +2198,7 @@ class FFmpegBuilder:
             ComponentStatus.CONFIGURING,
             "cmake .",
             "Configure failed",
-            ["cmake", "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"] + cmake_args + ["."],
+            [self._cmake_exe(), "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"] + cmake_args + ["."],
             "configure",
             source_dir,
             env,
@@ -2164,7 +2209,7 @@ class FFmpegBuilder:
             ComponentStatus.BUILDING,
             "cmake --build",
             "Build failed",
-            ["cmake", "--build", ".", "--parallel", str(self.num_jobs)],
+            [self._cmake_exe(), "--build", ".", "--parallel", str(self.num_jobs)],
             "build",
             source_dir,
             env,
@@ -2175,7 +2220,7 @@ class FFmpegBuilder:
             ComponentStatus.INSTALLING,
             "cmake --install",
             "Install failed",
-            ["cmake", "--install", "."],
+            [self._cmake_exe(), "--install", "."],
             "install",
             source_dir,
             env,
@@ -2531,7 +2576,7 @@ class FFmpegBuilder:
             ComponentStatus.CONFIGURING,
             "cmake .",
             "Configure failed",
-            ["cmake", "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"] + cmake_args + ["."],
+            [self._cmake_exe(), "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"] + cmake_args + ["."],
             "configure",
             source_dir,
             env,
@@ -2542,7 +2587,7 @@ class FFmpegBuilder:
             ComponentStatus.BUILDING,
             "cmake --build",
             "Build failed",
-            ["cmake", "--build", ".", "--parallel", str(self.num_jobs)],
+            [self._cmake_exe(), "--build", ".", "--parallel", str(self.num_jobs)],
             "build",
             source_dir,
             env,
@@ -2553,7 +2598,7 @@ class FFmpegBuilder:
             ComponentStatus.INSTALLING,
             "cmake --install",
             "Install failed",
-            ["cmake", "--install", "."],
+            [self._cmake_exe(), "--install", "."],
             "install",
             source_dir,
             env,
