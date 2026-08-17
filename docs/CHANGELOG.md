@@ -4,6 +4,10 @@ All notable changes to the FFmpeg Builder project.
 
 ## [Unreleased]
 
+### Fixed
+
+- **WSL2 PCRE build failure in strict C11 mode (2026-08-17)** — `pcregrep.c` failed with `S_IFMT`/`S_IFDIR`/`S_IFREG` undeclared while compiling with global `-std=c11` flags. Added `platform_overrides` for `pcre` (`linux`, `linux-wsl2`) with `extra_cflags: -D_DEFAULT_SOURCE` in `components.yaml`, restoring required POSIX feature macros without changing global compiler standards.
+
 ### Code-review remediation complete (H1-H3, M1-M11) — 2026-08-17
 
 - **H1 fixed (libplacebo on macOS):** removed accidental Linux-only gating from the registry so libplacebo remains buildable on macOS.

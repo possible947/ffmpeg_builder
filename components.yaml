@@ -360,6 +360,13 @@
   - --enable-static
   archive_filename: pcre-{version}.tar.gz
   skip_condition: disable_lv2
+  platform_overrides:
+    linux:
+      extra_env: {}
+      extra_cflags: -D_DEFAULT_SOURCE
+    linux-wsl2:
+      extra_env: {}
+      extra_cflags: -D_DEFAULT_SOURCE
 - name: zix
   version: 0.8.0
   url: https://gitlab.com/drobilla/zix/-/archive/v{version}/zix-v{version}.tar.gz
