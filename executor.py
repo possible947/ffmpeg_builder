@@ -1,12 +1,17 @@
 """Command execution with logging and error handling."""
 
 import os
+import re
 import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+# Tools that are MSYS2-linked on UCRT64 and must run through sh.exe when
+# invoked as a bare name (not a full native Windows path).
+_UCRT64_SH_TOOLS = frozenset({"cmake", "ninja"})
 
 
 @dataclass
@@ -74,14 +79,28 @@ class CommandExecutor:
                 and run_command
             ):
                 first = str(run_command[0])
+                first_stem = Path(first).stem.lower()
+                sh_path = shutil.which("sh", path=merged_env.get("PATH"))
+
                 if first.startswith("./") and first.endswith(".py"):
                     # Python scripts must be run with the Python interpreter
                     # directly; sh.exe cannot execute them via shebang on Windows.
                     run_command = [sys.executable, first[2:]] + [str(c) for c in run_command[1:]]
-                elif first.startswith("./"):
-                    sh_path = shutil.which("sh", path=merged_env.get("PATH"))
-                    if sh_path:
-                        run_command = [sh_path] + [str(c) for c in run_command]
+                elif sh_path and (
+                    first.startswith("./")
+                    or (
+                        first_stem in _UCRT64_SH_TOOLS
+                        # A full native Windows path (C:\...) → run directly.
+                        and not re.match(r"^[A-Za-z]:[/\\]", first)
+                    )
+                ):
+                    # MSYS2-linked tools (cmake, ninja) and shell scripts need
+                    # sh.exe to initialize the MSYS2 runtime.  Normalize
+                    # backslashes in every argument so sh does not mis-interpret
+                    # them as escape sequences (e.g. E:\Projects → E:/Projects).
+                    run_command = [sh_path] + [
+                        str(c).replace("\\", "/") for c in run_command
+                    ]
 
             result = subprocess.run(
                 run_command,
