@@ -442,8 +442,15 @@ class FFmpegBuilder:
             )
             pkg_config_path = ":".join(pkg_config_paths)
 
+        ws_bin = f"{self._ws_str()}/bin"
+        inherited_path = os.environ.get("PATH", "")
+        if os.path.isdir(ws_bin):
+            path_value = f"{ws_bin}{os.pathsep}{inherited_path}"
+        else:
+            path_value = inherited_path
+
         self.env = {
-            "PATH": f"{self._ws_str()}/bin:{os.environ.get('PATH', '')}",
+            "PATH": path_value,
             "PKG_CONFIG_PATH": pkg_config_path,
             "CFLAGS": self.cflags,
             "CXXFLAGS": self.cxxflags,

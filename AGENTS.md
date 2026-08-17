@@ -1,58 +1,51 @@
 # AGENTS.md
 
-## Repo history: past merge (2026-08-09)
-
-- `master` previously diverged from `origin/master`; the merge was resolved keeping the YAML-driven `ComponentRegistry` (from `components.yaml`) and the `enable_libplacebo_vulkan` config key, while taking origin/master's macOS/libplacebo fixes (glslang meson patch, `-Dvulkan`/`-Dglslang` meson args, `_find_macports_clang` highest-version resolution, `clang-mp-N` fallback, `SystemReport.configured_clang`, giflib pkg-config aliases). The `fast-float` v6.1.6 component (origin-only) was added to `components.yaml`; its archive was re-fetched because origin had committed an LFS pointer. The merged history was then rewritten with `git lfs migrate` so all `third_party/sources/` archives are Git LFS objects (the raw 170MB AMF blob exceeds GitHub's 100MB file limit) and force-pushed.
-
 ## Package layout (unusual)
 
 - Flat layout: the package IS the repo root. The root `ffmpeg_builder` file is a launcher script, not a package directory — the real package modules live at the root (`__main__.py`, `app.py`, `components.py`, ...), with `ui/` mapped to `ffmpeg_builder.ui` (see `[tool.setuptools.package-dir]` in `pyproject.toml`).
-- Use absolute imports (`from ffmpeg_builder.components import ComponentRegistry`). A `.venv` exists; run `pip install -e .` after environment changes.
-- `components.py` `ComponentRegistry` loads the 64-component registry from `components.yaml` at the repo root. Its header says `python _gen_components_yaml.py` regenerates it, but that script does not exist in the repo — edit `components.yaml` directly. Custom build functions live in `builder.py` and are referenced by `custom_build_fn`.
+- Use absolute imports (`from ffmpeg_builder.components import ComponentRegistry`). Run `pip install -e .` after environment changes.
+- `components.py` `ComponentRegistry` loads the 64-component registry from `components.yaml` at the repo root. Its header says `python _gen_components_yaml.py` regenerates it, but that script does not exist in the repo — edit `components.yaml` directly. Custom build functions live in `builder.py` and are dispatched via the `CUSTOM_BUILDERS` dict in `component_builders.py` (referenced by `custom_build_fn`).
+- `profiles/default.yaml` is dead code — nothing in the codebase references `profiles/`.
 
 ## Commands
 
 - Install: `pip install -e .`
 - Env check: `./scripts/check_python_env.sh`
-- Run: `python -m ffmpeg_builder` (or `./ffmpeg_builder`)
-- Tests (pure unit tests for config/state/components — no integration tests): `pytest tests/`. Do NOT run bare `pytest` at the root: it also collects `workspace/packages/` (extracted third-party sources, gitignored) and crashes on their test programs.
-- Lint/typecheck: `black .`, `mypy <files>`. mypy enforces `disallow_untyped_defs = true` (annotate new code) and currently has a pre-existing baseline of errors (missing `tqdm`/`yaml` stubs, untyped test functions); it also requires `python_version >= 3.10` in `pyproject.toml` (mypy 2.x rejects 3.8). Run mypy on specific files, not `.`, to avoid crawling `workspace/`.
+- Run: `python -m ffmpeg_builder` (or `./ffmpeg_builder`, or the `ffmpeg-builder` entry point). It takes **no CLI arguments** — the `--help`/`--workspace`/`--config` options documented in the README do not exist.
+- Tests: `pytest tests/` (61 unit tests, ~2 s; config/state/components/builder-split surface). Do NOT run bare `pytest` at the root: it also collects `workspace/packages/` (extracted third-party sources, gitignored) and crashes on their test programs. Single test: `pytest tests/test_state.py::test_name`.
+- Lint/typecheck: `black .` (line-length 100), `mypy <files>`. mypy enforces `disallow_untyped_defs = true` and has a pre-existing baseline of ~33 errors (missing `tqdm`/`yaml` stubs, untyped defs); `black --check` currently flags 3 files (`tests/test_builder_split.py`, `component_builders.py`, `release_bundle.py`). Run mypy on specific files, not `.`, to avoid crawling `workspace/`.
+- No CI workflow, no pre-commit. A full FFmpeg build is a long, hardware-dependent manual process (~20–60 min, ~10 GB); verify code changes with unit tests.
+- On this Windows machine, tests run under the MSYS2 venv: `C:\msys64\usr\bin\bash.exe -lc "cd /e/Projects/ffmpeg_builder && source ./.venv-msys2-ucrt64/bin/activate && python -m pytest tests/ -q"`.
 
-## Conventions (verified in code, preserved from .github/copilot-instructions.md)
+## Conventions
 
 - Keep component behavior declarative in the registry; prefer `platform_overrides` / `configure_args_override` / `skip_condition` / `custom_build_fn` over ad-hoc per-component branching in `builder.py`.
-- Preserve `ComponentStatus` values exactly (`pending`, `system`, `downloading`, `configuring`, `building`, `installing`, `completed`, `failed`, `skipped`) — state recovery and dashboard rendering depend on them.
+- Preserve `ComponentStatus` values exactly (`pending`, `system`, `downloading`, `configuring`, `building`, `installing`, `completed`, `failed`, `skipped` — `state.py:13`) — state recovery and dashboard rendering depend on them.
 - Pass `detail="..."` on every status transition (via `mark_component_status`) so the live dashboard shows the running command/progress; `detail` is transient and not persisted.
-- Raise build failures as `BuildError(component, message, log_file)` so the UI error handler can show component + log context.
+- Raise build failures as `BuildError(component, message, log_file)` (`build_types.py`) so the UI error handler can show component + log context.
 - Builds are offline-first: archives resolve from `third_party/sources`; network fetching is opt-in via `allow_network_downloads`.
 - `windows-msys2-ucrt64` and `linux-wsl2` are distinct backends with separate component-eligibility rules; do not generalize native Linux/Windows assumptions onto them.
 
 ## Gotchas
 
-- `third_party/sources` archives are Git LFS-tracked (`.gitattributes`); run `git lfs pull` after clone. A 2026-08-09 migration converted the committed archives to LFS objects because plain blobs over GitHub's 100MB file limit (e.g. AMF-1.5.0.tar.gz, 170MB) are rejected. Check that an archive is a real tarball, not a 3-line LFS pointer (`version https://git-lfs.github.com/spec/v1`), before debugging extraction failures.
-- A full build is a long, hardware-dependent manual process (~20-60 min, ~10 GB, full toolchain). Verify code changes with unit tests; do not expect a CI build.
+- `third_party/sources` archives are Git LFS-tracked (`.gitattributes`); run `git lfs pull` after clone. Check that an archive is a real tarball, not a 3-line LFS pointer (`version https://git-lfs.github.com/spec/v1`), before debugging extraction failures.
 - On component failure, inspect `workspace/logs/<component>_<step>.log` and the resume state in `workspace/build_state.json`.
+- `build_ffmpeg` (`builder.py:2587+`) mutates `self.extralibs`/`self.ldflags`; the UI retry path re-runs the build on the **same** builder instance, so flags accumulate on retry. Build local copies instead of mutating instance state.
+- `builder.py:446` merges PATH with a hardcoded `:` separator — broken under MSYS2 UCRT64, where the inherited PATH is `;`-separated (the first PATH entry gets swallowed). Use `os.pathsep`.
+- `tar.extractall(..., filter="data")` (`builder.py:996,1014`) requires Python ≥ 3.12, but `pyproject.toml` declares `>=3.10` — 3.10/3.11 users crash on first extraction.
+- libplacebo's `linux_only: true` (`components.yaml:709`) silently drops libplacebo on macOS — a known regression (macOS previously built it; review report H1).
+- `setup_windows_msys2_ucrt64.ps1` installs no `perl`, but the default config's `gpl_enabled: true` openssl source build needs it — fresh UCRT64 environments fail on openssl.
+- Root `changelog.md` has a 2026-08-17 entry claiming a FFmpeg 9.0 build, but the registry/config target 8.1 — treat `components.yaml`/`build_config.yaml` as truth.
 
 ### Windows MSYS2 UCRT64: incomplete environment
 
-**Symptom**: a cmake-based component (e.g. `svtav1`) fails immediately with return code
-`3221225781` (0xC0000135, `STATUS_DLL_NOT_FOUND`) and empty stdout/stderr logs.
-This means the `cmake` executable was not found or could not load its DLLs — most often
-because `mingw-w64-ucrt-x86_64-cmake` was not installed or not fully upgraded in MSYS2.
+**Symptom**: a cmake-based component (e.g. `svtav1`) fails immediately with return code `3221225781` (0xC0000135, `STATUS_DLL_NOT_FOUND`) and empty stdout/stderr logs — `cmake` was not found or could not load its DLLs.
 
-**Root cause**: the old setup script ran `pacman -Sy` (DB sync only) before `pacman -S`,
-which does not guarantee that all package files on disk match the synced DB. If the system
-was previously partially updated, dependency resolution can silently skip packages.
+**Root cause**: an old setup script ran `pacman -Sy` (DB sync only) before `pacman -S`, which does not guarantee on-disk packages match the synced DB; dependency resolution can silently skip packages after a partial update.
 
-**Fix**: run `setup_windows_msys2_ucrt64.ps1` after every MSYS2 environment rebuild.
-The script now runs `pacman -Syu --noconfirm` (full system upgrade) first, then
-`pacman -S --needed --noconfirm` for project packages, and finally verifies that all
-critical tools (`gcc`, `cmake`, `ninja`, `meson`, `nasm`, `python`, `pkg-config`) are
-present and prints their versions. If any tool is missing the script throws, preventing
-a silent broken environment.
+**Fix**: run `setup_windows_msys2_ucrt64.ps1` after every MSYS2 environment rebuild. It runs `pacman -Syu --noconfirm` first, then `pacman -S --needed --noconfirm` for project packages, and verifies all critical tools (`gcc`, `cmake`, `ninja`, `meson`, `nasm`, `python`, `pkg-config`) are present, throwing if any is missing.
 
-**Manual recovery**: if you suspect an incomplete environment, open an MSYS2 UCRT64 shell
-and run:
+**Manual recovery**: in an MSYS2 UCRT64 shell:
 ```bash
 pacman -Syu          # full system upgrade (may require restarting the shell once)
 pacman -S --needed mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja \
@@ -62,14 +55,10 @@ which cmake ninja meson nasm  # verify
 
 ### Windows MSYS2 UCRT64: sh.exe wrapping rules
 
-Only commands that begin with `./` (autotools `./configure`, shell bootstrap scripts) are
-wrapped through `sh.exe` in `executor.py`. cmake, ninja, make, pkg-config, and other
-`mingw-w64-ucrt-x86_64-*` tools are native Windows PE binaries; they must be called directly
-via `subprocess.run()`. Wrapping them through `sh.exe` causes `cannot execute binary file`
-(exit code 126) because MSYS2 sh cannot exec PE executables.
-
-
+Only commands beginning with `./` are wrapped through `sh.exe` in `executor.py:71-84`; `./x.py` scripts are run via `sys.executable` directly (sh.exe cannot use shebangs on Windows). cmake, ninja, make, pkg-config, and other `mingw-w64-ucrt-x86_64-*` tools are native Windows PE binaries and must be called directly via `subprocess.run()` — wrapping them through `sh.exe` causes `cannot execute binary file` (exit 126).
 
 ## Docs
 
-- `docs/DeveloperReadme.md` is the authoritative architecture doc (module responsibilities, data flow, extension points) and is not linked from the root README. `docs/Fix-Plan.md` tracks the code-review refactor status.
+- `docs/DeveloperReadme.md` is the authoritative architecture doc (module responsibilities, data flow, extension points); not linked from the root README.
+- `docs/Fix-Plan.md` tracks the 16-item code-review refactor but is stale on #10 (implemented, `downloader.py:109-114`) and #16 (partially done: `build_steps.py`/`component_builders.py`/`release_bundle.py` exist; ~20 `build_*` functions still live in `builder.py`).
+- `docs/Code-Review-Report-2026-08-17.md` is the current audit (findings H1–H3, M1–M11, L1–L13 with suggested fixes); the Gotchas above mirror its open HIGH/MEDIUM items.

@@ -22,7 +22,7 @@ FFmpeg Builder replaces the traditional bash `build-ffmpeg` script with a modern
 
 ### System
 
-- **Python** >= 3.10 (code uses f-strings, kw-only dataclasses; runs on Python 3.12–3.14)
+- **Python** >= 3.12 (required for secure `tar` extraction, PEP 706; runs on Python 3.12–3.14)
 - **OS**: macOS (11.0+) or Linux (x86_64 / arm64)
 - **Disk Space**: ~10 GB for sources and build artifacts
 

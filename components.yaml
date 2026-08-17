@@ -706,8 +706,6 @@
   - vulkan-headers
   - glslang
   - fast-float
-  linux_only: true
-  windows_ucrt64_supported: true
   custom_build_fn: build_libplacebo
   ffmpeg_configure_flag: --enable-libplacebo
 - name: nv-codec
