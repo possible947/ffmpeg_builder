@@ -327,7 +327,10 @@ class ComponentRegistry:
                 if comp.name == "amf" and not platform_info.amf_available:
                     continue
                 if comp.name in ("opencl-headers", "opencl-icd-loader"):
-                    if not platform_info.opencl_available:
+                    opencl_runtime_available = getattr(
+                        platform_info, "opencl_runtime_available", False
+                    )
+                    if not (platform_info.opencl_available or opencl_runtime_available):
                         continue
                 if comp.name == "onevpl" and not platform_info.qsv_available:
                     continue
@@ -382,6 +385,7 @@ class ComponentRegistry:
         built_components: List[str],
         gpl_enabled: bool,
         platform: str,
+        platform_info: Optional[Any] = None,
     ) -> List[str]:
         """Get FFmpeg configure flags based on built components.
 
@@ -401,6 +405,22 @@ class ComponentRegistry:
 
         if platform == "darwin":
             flags.append("--enable-videotoolbox")
-            flags.append("--enable-opencl")
+
+        opencl_components_built = (
+            "opencl-headers" in built_components and "opencl-icd-loader" in built_components
+        )
+        opencl_system_ready = False
+        if platform_info is not None:
+            opencl_system_ready = bool(
+                getattr(platform_info, "opencl_available", False)
+                or (
+                    getattr(platform_info, "opencl_runtime_available", False)
+                    and getattr(platform_info, "opencl_dev_available", False)
+                )
+            )
+
+        if platform == "darwin" or opencl_components_built or opencl_system_ready:
+            if "--enable-opencl" not in flags:
+                flags.append("--enable-opencl")
 
         return flags

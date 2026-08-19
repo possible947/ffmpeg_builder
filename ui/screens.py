@@ -130,6 +130,25 @@ class SystemReportScreen(UIScreen):
             status = "yes" if report.platform_info.libvmaf_cuda_supported else "no"
             reason = report.platform_info.libvmaf_cuda_reason or "unknown"
             tools_table.add_row("libvmaf CUDA", f"{status} ({reason})")
+        sdk_status = report.get_sdk_status()
+        sdk_values = []
+        for sdk_name, sdk_info in sdk_status.items():
+            if sdk_info["available"]:
+                sdk_values.append(f"{sdk_name}: {sdk_info['path'] or 'detected'}")
+        if sdk_values:
+            tools_table.add_row("SDKs", " · ".join(sdk_values))
+        opencl_diag = report.get_opencl_diagnostics()
+        opencl_status = "yes" if opencl_diag["effective_available"] else "no"
+        tools_table.add_row(
+            "OpenCL detect",
+            (
+                f"{opencl_status}"
+                f" (runtime: {'yes' if opencl_diag['runtime_available'] else 'no'}, "
+                f"dev: {'yes' if opencl_diag['dev_available'] else 'no'})"
+            ),
+        )
+        if opencl_diag["effective_reason"]:
+            tools_table.add_row("OpenCL reason", opencl_diag["effective_reason"])
         self.console.print(tools_table)
 
         config_table = Table(title="Build Configuration", show_header=False)

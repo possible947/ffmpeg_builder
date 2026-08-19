@@ -2706,6 +2706,7 @@ class FFmpegBuilder:
             built_components,
             self.config.gpl_enabled,
             self.platform,
+            self.platform_detector.platform_info,
         )
 
         configure_args = [

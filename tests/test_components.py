@@ -249,6 +249,8 @@ class TestComponentRegistry:
             vulkan_available = True
             amf_available = False
             opencl_available = True
+            opencl_runtime_available = True
+            opencl_dev_available = True
             qsv_available = True
             is_msys2 = False
             is_ucrt64 = False
@@ -277,6 +279,29 @@ class TestComponentRegistry:
         # Should be a subset of the allowed list
         assert hw_names.issubset(WINDOWS_UCRT64_HW_ACCEL_COMPONENTS)
 
+    def test_get_buildable_opencl_runtime_includes_opencl_components(self, mock_tools):
+        class RuntimeOnlyOpenCL:
+            cuda_available = False
+            vulkan_available = True
+            amf_available = False
+            opencl_available = False
+            opencl_runtime_available = True
+            opencl_dev_available = False
+            qsv_available = False
+            is_msys2 = False
+            is_ucrt64 = False
+            build_backend = "linux-native"
+
+        buildable = self.registry.get_buildable(
+            gpl_enabled=True,
+            platform="linux",
+            tools=mock_tools,
+            platform_info=RuntimeOnlyOpenCL(),
+        )
+        names = {c.name for c in buildable}
+        assert "opencl-headers" in names
+        assert "opencl-icd-loader" in names
+
     def test_get_ffmpeg_configure_flags(self):
         flags = self.registry.get_ffmpeg_configure_flags(
             built_components=["x264", "libvpx", "opus"],
@@ -294,6 +319,28 @@ class TestComponentRegistry:
             platform="darwin",
         )
         assert "--enable-videotoolbox" in flags
+        assert "--enable-opencl" in flags
+
+    def test_get_ffmpeg_configure_flags_opencl_from_components(self):
+        flags = self.registry.get_ffmpeg_configure_flags(
+            built_components=["opencl-headers", "opencl-icd-loader"],
+            gpl_enabled=True,
+            platform="linux",
+        )
+        assert "--enable-opencl" in flags
+
+    def test_get_ffmpeg_configure_flags_opencl_from_system_ready(self):
+        class OpenCLSystemReady:
+            opencl_available = False
+            opencl_runtime_available = True
+            opencl_dev_available = True
+
+        flags = self.registry.get_ffmpeg_configure_flags(
+            built_components=[],
+            gpl_enabled=True,
+            platform="linux",
+            platform_info=OpenCLSystemReady(),
+        )
         assert "--enable-opencl" in flags
 
     def test_build_order_ffmpeg_last(self):

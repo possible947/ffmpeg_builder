@@ -125,6 +125,8 @@ def mock_platform_info():
         vulkan_available = True
         amf_available = False
         opencl_available = True
+        opencl_runtime_available = True
+        opencl_dev_available = True
         qsv_available = True
         is_msys2 = False
         is_ucrt64 = False
@@ -142,6 +144,8 @@ def mock_platform_info_windows():
         vulkan_available = True
         amf_available = True
         opencl_available = True
+        opencl_runtime_available = True
+        opencl_dev_available = True
         qsv_available = True
         is_msys2 = True
         is_ucrt64 = True

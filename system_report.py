@@ -103,6 +103,38 @@ class SystemReport:
 
         return status
 
+    def get_opencl_diagnostics(self) -> Dict[str, Any]:
+        """Get OpenCL detection diagnostics."""
+        return {
+            "effective_available": self.platform_info.opencl_effective_available,
+            "effective_reason": self.platform_info.opencl_effective_reason,
+            "runtime_available": self.platform_info.opencl_runtime_available,
+            "runtime_reason": self.platform_info.opencl_runtime_reason,
+            "dev_available": self.platform_info.opencl_dev_available,
+            "dev_reason": self.platform_info.opencl_dev_reason,
+            "pkg_config_name": self.platform_info.opencl_pkg_config_name,
+            "header_paths": self.platform_info.opencl_detected_header_paths,
+            "loader_paths": self.platform_info.opencl_detected_loader_paths,
+            "icd_files": self.platform_info.opencl_detected_icd_files,
+        }
+
+    def get_sdk_status(self) -> Dict[str, Dict[str, Any]]:
+        """Get detected SDK roots for diagnostics."""
+        return {
+            "ROCm": {
+                "available": self.platform_info.rocm_available,
+                "path": self.platform_info.rocm_path,
+            },
+            "CUDA": {
+                "available": self.platform_info.cuda_available,
+                "path": self.platform_info.cuda_path,
+            },
+            "Vulkan SDK": {
+                "available": self.platform_info.vulkan_sdk_available,
+                "path": self.platform_info.vulkan_sdk_path,
+            },
+        }
+
     def get_compiler_info(self) -> Dict[str, str]:
         """Get compiler information.
 

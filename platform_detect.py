@@ -80,6 +80,20 @@ class PlatformInfo:
     amf_available: bool = False
     vulkan_available: bool = False
     opencl_available: bool = False
+    opencl_runtime_available: bool = False
+    opencl_dev_available: bool = False
+    opencl_effective_available: bool = False
+    opencl_runtime_reason: str = ""
+    opencl_dev_reason: str = ""
+    opencl_effective_reason: str = ""
+    opencl_detected_header_paths: List[str] = field(default_factory=list)
+    opencl_detected_loader_paths: List[str] = field(default_factory=list)
+    opencl_detected_icd_files: List[str] = field(default_factory=list)
+    opencl_pkg_config_name: Optional[str] = None
+    rocm_available: bool = False
+    rocm_path: Optional[str] = None
+    vulkan_sdk_available: bool = False
+    vulkan_sdk_path: Optional[str] = None
 
     def to_dict(self) -> Dict:
         """Convert to dictionary."""
@@ -105,6 +119,20 @@ class PlatformInfo:
             "amf_available": self.amf_available,
             "vulkan_available": self.vulkan_available,
             "opencl_available": self.opencl_available,
+            "opencl_runtime_available": self.opencl_runtime_available,
+            "opencl_dev_available": self.opencl_dev_available,
+            "opencl_effective_available": self.opencl_effective_available,
+            "opencl_runtime_reason": self.opencl_runtime_reason,
+            "opencl_dev_reason": self.opencl_dev_reason,
+            "opencl_effective_reason": self.opencl_effective_reason,
+            "opencl_detected_header_paths": self.opencl_detected_header_paths,
+            "opencl_detected_loader_paths": self.opencl_detected_loader_paths,
+            "opencl_detected_icd_files": self.opencl_detected_icd_files,
+            "opencl_pkg_config_name": self.opencl_pkg_config_name,
+            "rocm_available": self.rocm_available,
+            "rocm_path": self.rocm_path,
+            "vulkan_sdk_available": self.vulkan_sdk_available,
+            "vulkan_sdk_path": self.vulkan_sdk_path,
         }
 
 
@@ -412,6 +440,7 @@ class PlatformDetector:
         if self.platform_info.is_linux:
             self.platform_info.is_wsl2 = self._check_wsl2()
         self.platform_info.build_backend = self._resolve_build_backend()
+        self._detect_sdk_paths()
 
         # Detect AMF on Linux: enable when an AMD GPU is present, since the
         # AMF headers component downloads the required headers from GPUOpen.
@@ -434,7 +463,40 @@ class PlatformDetector:
         # Vulkan and OpenCL are available on all platforms (including macOS via LunarG SDK / OpenCL.framework)
         self.platform_info.vulkan_available = self._check_vulkan()
         self.platform_info.opencl_available = self._check_opencl()
+        self.platform_info.opencl_effective_available = self.platform_info.opencl_available
+        if self.platform_info.opencl_available:
+            self.platform_info.opencl_effective_reason = "Supported"
+        else:
+            if not self.platform_info.opencl_dev_available:
+                self.platform_info.opencl_effective_reason = (
+                    self.platform_info.opencl_dev_reason or "OpenCL development files not found"
+                )
+            elif not self.platform_info.opencl_runtime_available:
+                self.platform_info.opencl_effective_reason = (
+                    self.platform_info.opencl_runtime_reason or "OpenCL runtime not found"
+                )
         self.platform_info.vaapi_available = self._check_vaapi()
+
+    def _detect_sdk_paths(self) -> None:
+        """Detect common SDK root locations for diagnostics."""
+        rocm_candidates = [
+            os.environ.get("ROCM_PATH"),
+            os.environ.get("ROCM_ROOT"),
+            "/opt/rocm",
+        ]
+        for candidate in rocm_candidates:
+            if not candidate:
+                continue
+            path = Path(candidate)
+            if path.exists():
+                self.platform_info.rocm_available = True
+                self.platform_info.rocm_path = str(path)
+                break
+
+        vulkan_sdk = os.environ.get("VULKAN_SDK")
+        if vulkan_sdk and Path(vulkan_sdk).exists():
+            self.platform_info.vulkan_sdk_available = True
+            self.platform_info.vulkan_sdk_path = vulkan_sdk
 
     def _detect_msys2_mode(self) -> None:
         """Detect MSYS2 runtime details when running on Windows."""
@@ -774,57 +836,79 @@ class PlatformDetector:
         """Check if OpenCL development files and runtime are available.
 
         Returns:
-            True if OpenCL headers, ICD loader, and at least one vendor ICD are available.
+            True if OpenCL runtime and development interfaces are available.
         """
-        # Check pkg-config first
+        self.platform_info.opencl_detected_header_paths = []
+        self.platform_info.opencl_detected_loader_paths = []
+        self.platform_info.opencl_detected_icd_files = []
+        self.platform_info.opencl_pkg_config_name = None
+        self.platform_info.opencl_runtime_available = False
+        self.platform_info.opencl_dev_available = False
+        self.platform_info.opencl_runtime_reason = ""
+        self.platform_info.opencl_dev_reason = ""
+
         for pkg_name in ("OpenCL", "opencl"):
             try:
                 result = subprocess.run(
                     ["pkg-config", "--exists", pkg_name], capture_output=True, timeout=5
                 )
                 if result.returncode == 0:
-                    return True
+                    self.platform_info.opencl_pkg_config_name = pkg_name
+                    self.platform_info.opencl_dev_available = True
+                    self.platform_info.opencl_dev_reason = f"Detected via pkg-config ({pkg_name})"
+                    break
             except Exception:
                 pass
 
-        # Check for OpenCL headers
         opencl_header_paths = [
             Path("/usr/include/CL/cl.h"),
             Path("/usr/local/include/CL/cl.h"),
             Path("/opt/local/include/CL/cl.h"),  # MacPorts
             Path("/opt/homebrew/include/CL/cl.h"),  # Homebrew ARM
+            Path("/opt/rocm/include/CL/cl.h"),
+            Path("/usr/local/cuda/include/CL/cl.h"),
         ]
         if self.platform_info.is_windows:
-            opencl_header_paths.extend(
-                [
-                    Path("/ucrt64/include/CL/cl.h"),
-                    Path("C:/msys64/ucrt64/include/CL/cl.h"),
-                ]
-            )
+            windows_header_paths = [
+                Path("/ucrt64/include/CL/cl.h"),
+                Path("C:/msys64/ucrt64/include/CL/cl.h"),
+            ]
+            opencl_header_paths.extend(windows_header_paths)
 
         # On macOS, OpenCL is provided as a system framework — no separate header install needed
         if self.platform_info.is_macos:
             opencl_framework = Path("/System/Library/Frameworks/OpenCL.framework")
             if opencl_framework.exists():
+                self.platform_info.opencl_runtime_available = True
+                self.platform_info.opencl_dev_available = True
+                self.platform_info.opencl_runtime_reason = "OpenCL.framework found"
+                self.platform_info.opencl_dev_reason = "OpenCL.framework found"
                 return True
 
-        has_headers = any(path.exists() for path in opencl_header_paths)
-        if not has_headers:
-            return False
+        existing_headers = [str(path) for path in opencl_header_paths if path.exists()]
+        self.platform_info.opencl_detected_header_paths = existing_headers
+        has_headers_any = bool(existing_headers)
+        if has_headers_any and not self.platform_info.opencl_dev_available:
+            self.platform_info.opencl_dev_available = True
+            self.platform_info.opencl_dev_reason = "OpenCL headers found"
+
+        if not has_headers_any and not self.platform_info.opencl_dev_reason:
+            self.platform_info.opencl_dev_reason = "OpenCL headers not found"
 
         # Check for ICD loader library
         icd_loader_paths = [
             Path("/usr/lib/libOpenCL.so"),
             Path("/usr/lib64/libOpenCL.so"),
+            Path("/opt/rocm/lib/libOpenCL.so"),
+            Path("/opt/rocm/lib64/libOpenCL.so"),
         ]
         if self.platform_info.is_windows:
-            icd_loader_paths.extend(
-                [
-                    Path("/c/Windows/System32/OpenCL.dll"),
-                    Path("C:/Windows/System32/OpenCL.dll"),
-                    Path("/ucrt64/bin/libOpenCL.dll.a"),
-                ]
-            )
+            windows_loader_paths = [
+                Path("/c/Windows/System32/OpenCL.dll"),
+                Path("C:/Windows/System32/OpenCL.dll"),
+                Path("/ucrt64/bin/libOpenCL.dll.a"),
+            ]
+            icd_loader_paths.extend(windows_loader_paths)
 
         # Add architecture-specific paths
         multiarch = self.get_multiarch_dir()
@@ -836,24 +920,52 @@ class PlatformDetector:
                 ]
             )
 
-        has_loader = any(path.exists() for path in icd_loader_paths)
-        if not has_loader:
-            return False
+        existing_loaders = [str(path) for path in icd_loader_paths if path.exists()]
+        self.platform_info.opencl_detected_loader_paths = existing_loaders
+        has_loader_any = bool(existing_loaders)
+        if not has_loader_any:
+            self.platform_info.opencl_runtime_reason = "OpenCL ICD loader not found"
 
         # Check for at least one vendor ICD file
         icd_vendors_dir = Path("/etc/OpenCL/vendors")
-        if icd_vendors_dir.exists() and any(icd_vendors_dir.glob("*.icd")):
-            return True
+        has_vendor_icd = False
+        if icd_vendors_dir.exists():
+            icd_files = sorted(str(path) for path in icd_vendors_dir.glob("*.icd"))
+            self.platform_info.opencl_detected_icd_files = icd_files
+            if icd_files:
+                has_vendor_icd = True
+                self.platform_info.opencl_runtime_available = True
+                self.platform_info.opencl_runtime_reason = "Vendor OpenCL ICD files found"
 
         # Check WSL NVIDIA OpenCL (not available in WSL)
         wsl_lib = Path("/usr/lib/wsl/lib")
+        has_wsl_nvidia_opencl = False
         if wsl_lib.exists():
             if any(wsl_lib.glob("libnvidia-opencl*")):
-                return True
+                has_wsl_nvidia_opencl = True
+                self.platform_info.opencl_runtime_available = True
+                self.platform_info.opencl_runtime_reason = "NVIDIA WSL OpenCL runtime found"
             # WSL without OpenCL implementation
-            return False
+            elif not self.platform_info.opencl_runtime_reason:
+                self.platform_info.opencl_runtime_reason = "WSL OpenCL runtime is not available"
 
-        return False
+        if self.platform_info.is_windows and has_loader_any:
+            self.platform_info.opencl_runtime_available = True
+            if not self.platform_info.opencl_runtime_reason:
+                self.platform_info.opencl_runtime_reason = "OpenCL loader found on Windows"
+
+        if not self.platform_info.opencl_runtime_reason:
+            self.platform_info.opencl_runtime_reason = "No OpenCL vendor ICD files found"
+        if (
+            not self.platform_info.opencl_runtime_available
+            and has_loader_any
+            and (has_vendor_icd or has_wsl_nvidia_opencl)
+        ):
+            self.platform_info.opencl_runtime_available = True
+
+        return bool(
+            self.platform_info.opencl_dev_available and self.platform_info.opencl_runtime_available
+        )
 
     def _detect_tools(self) -> None:
         """Detect available tools."""
