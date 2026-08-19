@@ -6,6 +6,9 @@ All notable changes to the FFmpeg Builder project.
 
 ### Fixed
 
+- **OpenCL detection generalized for Linux SDK layouts (2026-08-20)** — Reworked OpenCL probing from legacy “standard include path only” checks to a runtime+development readiness model. Detection now tracks runtime (`ICD loader + vendor ICD`) and development interfaces separately, scans non-standard SDK paths such as ROCm (`/opt/rocm/...`) and CUDA (`/usr/local/cuda/...`), and surfaces explicit diagnostics (reasons, discovered headers/loaders/ICDs, pkg-config source) in `PlatformInfo`/system report. This allows OpenCL-enabled systems with vendor SDK installs outside `/usr/include` to be recognized correctly.
+- **FFmpeg configure regression after OpenCL enablement (2026-08-20)** — Removed incorrect `-lva` injection when `opencl-icd-loader` is built. `-lva` is unrelated to OpenCL and caused `gcc is unable to create an executable file` / `cannot find -lva` during FFmpeg `./configure` compiler tests on systems without `libva` dev packages.
+- **OpenCL component/flag gating switched to new readiness model (2026-08-20)** — `opencl-headers` and `opencl-icd-loader` are now selected when OpenCL runtime is detected, and `--enable-opencl` is added when runtime+dev are ready (or OpenCL components were built), not only from legacy availability checks.
 - **WSL2 PCRE build failure in strict C11 mode (2026-08-17)** — `pcregrep.c` failed with `S_IFMT`/`S_IFDIR`/`S_IFREG` undeclared while compiling with global `-std=c11` flags. Added `platform_overrides` for `pcre` (`linux`, `linux-wsl2`) with `extra_cflags: -D_DEFAULT_SOURCE` in `components.yaml`, restoring required POSIX feature macros without changing global compiler standards.
 
 ### Code-review remediation complete (H1-H3, M1-M11) — 2026-08-17

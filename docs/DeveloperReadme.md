@@ -166,7 +166,7 @@ Detects the full system environment in a single `detect_all()` call.
 | Class | Fields |
 |-------|--------|
 | `SystemInfo` | os_name, os_version, architecture, cpu_model, cpu_cores, ram_gb |
-| `PlatformInfo` | platform, build_backend, is_macos, is_linux, is_windows, is_arm64, is_wsl2, is_msys2, is_ucrt64, msystem, macports_clang, cuda_available, cuda_path, vaapi_available, qsv_available, amf_available, vulkan_available, opencl_available |
+| `PlatformInfo` | platform, build_backend, is_macos, is_linux, is_windows, is_arm64, is_wsl2, is_msys2, is_ucrt64, msystem, macports_clang, cuda_available, cuda_path, vaapi_available, qsv_available, amf_available, vulkan_available, opencl_available, opencl_runtime_available, opencl_dev_available, opencl_effective_available, opencl_runtime_reason, opencl_dev_reason, opencl_effective_reason, opencl_detected_header_paths, opencl_detected_loader_paths, opencl_detected_icd_files, opencl_pkg_config_name, rocm_available, rocm_path, vulkan_sdk_available, vulkan_sdk_path |
 | `ToolInfo` | name, path, version, available |
 
 **Detection methods:**
@@ -179,7 +179,7 @@ Detects the full system environment in a single `detect_all()` call.
 | `_check_wsl2()` | WSL2 environment via `/proc/version` (Microsoft/WSL) |
 | `_check_qsv()` | Linux: QSV via vainfo/PCI Intel GPU with VAAPI. Windows UCRT64: Intel GPU + pkg-config oneVPL (`vpl`/`libvpl`) |
 | `_check_vulkan()` | pkg-config, headers, vulkaninfo |
-| `_check_opencl()` | Headers + ICD loader + vendor ICD files; WSL-aware |
+| `_check_opencl()` | Runtime+dev readiness model (`opencl_runtime_available` + `opencl_dev_available`), including ROCm/CUDA non-standard include/lib paths and WSL-aware runtime checks |
 | `_check_vaapi()` | pkg-config libva |
 | `_check_amf()` | Header paths |
 | `_detect_tools()` | 16 tools via `shutil.which()` + version extraction |
@@ -194,6 +194,8 @@ Detects the full system environment in a single `detect_all()` call.
 - `get_compiler_info()` — detects GCC/Clang/Macports Clang
 - `get_missing_required_tools()` — tools required for build
 - `get_optional_tools_status()` — optional tools (nasm, cmake, meson, etc.)
+- `get_opencl_diagnostics()` — reports effective/runtime/dev OpenCL state with reasons and discovered paths
+- `get_sdk_status()` — reports detected SDK roots (ROCm/CUDA/Vulkan SDK)
 
 **`SystemReportGenerator`** — creates `SystemReport` from raw detection data, adds build environment variables (PATH, PKG_CONFIG_PATH, CFLAGS, etc.).
 
@@ -232,7 +234,7 @@ class Component:
 |--------|-------------|
 | `get_all()` | All components in build order |
 | `get_buildable(gpl, platform, tools, ...)` | Filtered list based on config and platform |
-| `get_ffmpeg_configure_flags(built, gpl, platform)` | Collect `--enable-*` flags from built components |
+| `get_ffmpeg_configure_flags(built, gpl, platform, platform_info=None)` | Collect `--enable-*` flags from built components and platform readiness |
 
 **HW acceleration filtering** in `get_buildable()`:
 
@@ -241,7 +243,7 @@ class Component:
 | `nv-codec` | `platform_info.cuda_available` |
 | `vulkan-headers`, `glslang` | `platform_info.vulkan_available` |
 | `amf` | `platform_info.amf_available` |
-| `opencl-headers`, `opencl-icd-loader` | `platform_info.opencl_available` |
+| `opencl-headers`, `opencl-icd-loader` | `platform_info.opencl_available` **or** `platform_info.opencl_runtime_available` |
 | `onevpl` | `platform_info.qsv_available` |
 
 Windows/UCRT64 policy in current implementation:
@@ -307,7 +309,8 @@ Windows/UCRT64 policy in current implementation:
 | `gpl_enabled` | `--enable-gpl`, `--enable-nonfree` |
 | CUDA available | `--enable-cuda-nvcc`, `--enable-cuvid`, `--enable-nvenc`, `--cuda-sdk=<path>` |
 | Per built component | `--enable-libdav1d`, `--enable-libx264`, etc. |
-| macOS | `--enable-videotoolbox`, `--enable-opencl` |
+| macOS | `--enable-videotoolbox` |
+| OpenCL ready (`opencl_available` or runtime+dev ready, or OpenCL components built) | `--enable-opencl` |
 
 ### `executor.py` — Command Execution
 

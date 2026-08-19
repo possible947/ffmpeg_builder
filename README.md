@@ -399,7 +399,7 @@ The builder automatically detects available hardware acceleration and configures
 | **VAAPI** | Linux | pkg-config libva |
 | **Intel QSV** | Linux/Windows UCRT64 | Linux: vainfo or PCI Intel GPU (requires VAAPI, disabled in WSL2). Windows UCRT64: Intel GPU + pkg-config oneVPL (`vpl`/`libvpl`) |
 | **AMF** | Linux | AMD GPU detected via `lspci` or DRM sysfs; AMF headers are downloaded from GPUOpen |
-| **OpenCL** | Linux/macOS/Windows UCRT64 | Linux/Windows: headers + ICD vendor files. macOS: `OpenCL.framework` (always available) |
+| **OpenCL** | Linux/macOS/Windows UCRT64 | Runtime+dev readiness model: pkg-config (`OpenCL`/`opencl`) or headers (including `/opt/rocm` and `/usr/local/cuda`) plus ICD loader and vendor ICD files; macOS uses `OpenCL.framework` |
 | **VideoToolbox** | macOS | Always available |
 
 Windows phase-3 policy:
@@ -577,7 +577,10 @@ If `libplacebo` was already built, FFmpeg can still fail this check when `libpla
 
 ### OpenCL not detected
 
-- Install OpenCL headers: `sudo apt install opencl-headers ocl-icd-dev`
+- Install development packages: `sudo apt install opencl-headers ocl-icd-dev`
+- Ensure vendor ICD exists: `ls /etc/OpenCL/vendors/*.icd`
+- ROCm installs are supported from non-standard paths (for example `/opt/rocm/include/CL/cl.h`, `/opt/rocm/lib*/libOpenCL.so*`)
+- CUDA SDK installs are also scanned for OpenCL headers (for example `/usr/local/cuda/include/CL/cl.h`)
 - On WSL2, OpenCL is not available through the paravirtualized driver
 - On native Linux with NVIDIA: `sudo apt install nvidia-opencl-icd-<driver-version>`
 
