@@ -2671,9 +2671,6 @@ class FFmpegBuilder:
             if self.platform != "darwin":
                 extra_libs += " -lstdc++"
 
-        if "opencl-icd-loader" in built_components and self.platform == "linux":
-            extra_libs += " -lva"
-
         # libplacebo links against the system Vulkan ICD loader at runtime.
         # On Linux the loader is libvulkan.so; it must appear in extralibs so
         # the static FFmpeg binary resolves Vulkan symbols at link time.
