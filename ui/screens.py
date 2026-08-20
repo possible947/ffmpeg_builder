@@ -149,6 +149,35 @@ class SystemReportScreen(UIScreen):
         )
         if opencl_diag["effective_reason"]:
             tools_table.add_row("OpenCL reason", opencl_diag["effective_reason"])
+
+        if report.platform_info.is_linux:
+            vaapi_diag = report.get_vaapi_diagnostics()
+            vaapi_status = "yes" if vaapi_diag["available"] else "no"
+            if vaapi_diag["detected_via"]:
+                vaapi_status += f" (via {vaapi_diag['detected_via']})"
+            tools_table.add_row("VAAPI detect", vaapi_status)
+            if not vaapi_diag["available"] and vaapi_diag["reason"]:
+                tools_table.add_row("VAAPI reason", vaapi_diag["reason"])
+
+            amf_diag = report.get_amf_diagnostics()
+            amf_status = "yes" if amf_diag["available"] else "no"
+            tools_table.add_row("AMF detect", amf_status)
+            if amf_diag["reason"]:
+                tools_table.add_row("AMF reason", amf_diag["reason"])
+
+        vulkan_diag = report.get_vulkan_diagnostics()
+        vulkan_status = "yes" if vulkan_diag["available"] else "no"
+        if vulkan_diag["detected_via"]:
+            vulkan_status += f" (via {vulkan_diag['detected_via']})"
+        tools_table.add_row(
+            "Vulkan detect",
+            (
+                f"{vulkan_status}"
+                f" (runtime: {'yes' if vulkan_diag['runtime_available'] else 'no'})"
+            ),
+        )
+        if not vulkan_diag["available"] and vulkan_diag["reason"]:
+            tools_table.add_row("Vulkan reason", vulkan_diag["reason"])
         self.console.print(tools_table)
 
         config_table = Table(title="Build Configuration", show_header=False)

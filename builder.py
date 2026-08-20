@@ -537,15 +537,48 @@ class FFmpegBuilder:
                 self.env["CFLAGS"] = self.cflags
                 self.env["LDFLAGS"] = self.ldflags
 
-        # Vulkan paths
-        if self.platform_detector.platform_info.vulkan_available:
+        # Vulkan SDK paths: when a LunarG SDK is activated via VULKAN_SDK
+        # (e.g. by sourcing setup-env.sh), propagate it into the build
+        # environment. self.env is an explicit allow-list (not a copy of
+        # os.environ), so without this, VULKAN_SDK/lib and its pkgconfig
+        # directory would be invisible to subprocesses even though the
+        # detector (platform_detect.py::_check_vulkan) already recognises
+        # this as a second, independent Vulkan "environment" alongside the
+        # system loader/driver install.
+        vulkan_info = self.platform_detector.platform_info
+        if getattr(vulkan_info, "vulkan_sdk_available", False) and getattr(
+            vulkan_info, "vulkan_sdk_path", None
+        ):
+            sdk_root = Path(vulkan_info.vulkan_sdk_path)
+            sdk_include = sdk_root / "include"
+            sdk_lib = sdk_root / "lib"
+            sdk_bin = sdk_root / "bin"
+            sdk_pkgconfig = sdk_lib / "pkgconfig"
+
+            self.env["VULKAN_SDK"] = str(sdk_root)
+            if sdk_include.is_dir():
+                self.cflags += f" -I{sdk_include}"
+                self.cxxflags += f" -I{sdk_include}"
+            if sdk_lib.is_dir():
+                self.ldflags += f" -L{sdk_lib}"
+            if sdk_pkgconfig.is_dir():
+                existing_pkg_config = self.env.get("PKG_CONFIG_PATH", "")
+                self.env["PKG_CONFIG_PATH"] = (
+                    f"{sdk_pkgconfig}{os.pathsep}{existing_pkg_config}"
+                    if existing_pkg_config
+                    else str(sdk_pkgconfig)
+                )
+            if sdk_bin.is_dir():
+                self.env["PATH"] = f"{sdk_bin}{os.pathsep}{self.env['PATH']}"
+
             self.env["CFLAGS"] = self.cflags
+            self.env["CXXFLAGS"] = self.cxxflags
             self.env["LDFLAGS"] = self.ldflags
 
-        # VAAPI paths (required for QSV)
-        if self.platform_detector.platform_info.vaapi_available:
-            self.env["CFLAGS"] = self.cflags
-            self.env["LDFLAGS"] = self.ldflags
+        # VAAPI (libva) needs no extra environment wiring here: it is
+        # resolved entirely through the system PKG_CONFIG_PATH entries
+        # already populated above (including the Linux multiarch pkgconfig
+        # directories), which is where libva.pc normally lives.
 
     def get_build_env(self, component: Optional[Component] = None) -> Dict[str, str]:
         """Get build environment for a component.

@@ -76,9 +76,23 @@ class PlatformInfo:
     libvmaf_cuda_supported: bool = False
     libvmaf_cuda_reason: str = ""
     vaapi_available: bool = False
+    vaapi_reason: str = ""
+    vaapi_detected_via: Optional[str] = None
+    vaapi_detected_header_paths: List[str] = field(default_factory=list)
+    vaapi_detected_loader_paths: List[str] = field(default_factory=list)
+    vaapi_render_nodes: List[str] = field(default_factory=list)
     qsv_available: bool = False
     amf_available: bool = False
+    amf_reason: str = ""
+    amf_gpu_names: List[str] = field(default_factory=list)
+    amf_headers_detected_paths: List[str] = field(default_factory=list)
     vulkan_available: bool = False
+    vulkan_dev_available: bool = False
+    vulkan_runtime_available: bool = False
+    vulkan_reason: str = ""
+    vulkan_detected_via: Optional[str] = None
+    vulkan_detected_header_paths: List[str] = field(default_factory=list)
+    vulkan_detected_icd_files: List[str] = field(default_factory=list)
     opencl_available: bool = False
     opencl_runtime_available: bool = False
     opencl_dev_available: bool = False
@@ -115,9 +129,23 @@ class PlatformInfo:
             "libvmaf_cuda_supported": self.libvmaf_cuda_supported,
             "libvmaf_cuda_reason": self.libvmaf_cuda_reason,
             "vaapi_available": self.vaapi_available,
+            "vaapi_reason": self.vaapi_reason,
+            "vaapi_detected_via": self.vaapi_detected_via,
+            "vaapi_detected_header_paths": self.vaapi_detected_header_paths,
+            "vaapi_detected_loader_paths": self.vaapi_detected_loader_paths,
+            "vaapi_render_nodes": self.vaapi_render_nodes,
             "qsv_available": self.qsv_available,
             "amf_available": self.amf_available,
+            "amf_reason": self.amf_reason,
+            "amf_gpu_names": self.amf_gpu_names,
+            "amf_headers_detected_paths": self.amf_headers_detected_paths,
             "vulkan_available": self.vulkan_available,
+            "vulkan_dev_available": self.vulkan_dev_available,
+            "vulkan_runtime_available": self.vulkan_runtime_available,
+            "vulkan_reason": self.vulkan_reason,
+            "vulkan_detected_via": self.vulkan_detected_via,
+            "vulkan_detected_header_paths": self.vulkan_detected_header_paths,
+            "vulkan_detected_icd_files": self.vulkan_detected_icd_files,
             "opencl_available": self.opencl_available,
             "opencl_runtime_available": self.opencl_runtime_available,
             "opencl_dev_available": self.opencl_dev_available,
@@ -444,12 +472,43 @@ class PlatformDetector:
 
         # Detect AMF on Linux: enable when an AMD GPU is present, since the
         # AMF headers component downloads the required headers from GPUOpen.
+        # AMF SDK headers found on the local filesystem (if any) are recorded
+        # separately in amf_headers_detected_paths purely for diagnostics -
+        # they are NOT used to gate amf_available, because the "amf"
+        # component always downloads its own headers from GPUOpen regardless
+        # of what may already be installed system-wide.
+        self.platform_info.amf_headers_detected_paths = self._check_amf_headers()
         if self.platform_info.is_linux:
+            self.platform_info.amf_gpu_names = [
+                gpu
+                for gpu in self.system_info.gpu_info
+                if "amd" in gpu.lower() or "radeon" in gpu.lower() or gpu == "AMD GPU"
+            ]
             self.platform_info.amf_available = getattr(self, "_amd_gpu_detected", False)
+            if self.platform_info.amf_available:
+                gpu_names = ", ".join(self.platform_info.amf_gpu_names) or "AMD GPU"
+                self.platform_info.amf_reason = (
+                    f"AMD GPU detected via lspci/sysfs ({gpu_names}); "
+                    "AMF headers are downloaded separately by the amf component"
+                )
+            else:
+                self.platform_info.amf_reason = (
+                    "No AMD GPU detected via lspci -nn / /sys/class/drm "
+                    "(AMF requires an AMD GPU on Linux)"
+                )
         elif self.platform_info.is_windows:
-            self.platform_info.amf_available = any(
-                "amd" in gpu.lower() or "radeon" in gpu.lower() for gpu in self.system_info.gpu_info
-            )
+            self.platform_info.amf_gpu_names = [
+                gpu
+                for gpu in self.system_info.gpu_info
+                if "amd" in gpu.lower() or "radeon" in gpu.lower()
+            ]
+            self.platform_info.amf_available = bool(self.platform_info.amf_gpu_names)
+            if self.platform_info.amf_available:
+                self.platform_info.amf_reason = (
+                    f"AMD GPU detected ({', '.join(self.platform_info.amf_gpu_names)})"
+                )
+            else:
+                self.platform_info.amf_reason = "No AMD GPU detected via WMIC/CIM enumeration"
 
         # Detect macports clang on macOS
         if self.platform_info.is_macos:
@@ -753,58 +812,146 @@ class PlatformDetector:
         )
 
     def _check_vaapi(self) -> bool:
-        """Check if VAAPI is available.
+        """Check if VAAPI development files are available on Linux.
+
+        Detection is a three-tier fallback chain, each tier populating
+        ``vaapi_detected_via``/``vaapi_reason`` for diagnostics so a negative
+        result is always explainable instead of a silent False:
+
+        1. ``pkg-config --exists libva`` (authoritative dev-readiness signal).
+        2. Header file (``va/va.h``) + loader library (``libva.so``,
+           multiarch-aware) presence, for systems where pkg-config itself is
+           missing or the ``.pc`` file is not indexed (PKG_CONFIG_PATH issue).
+        3. Otherwise, reports which piece (headers/loader/render node) was
+           missing so the cause is visible in diagnostics/logs.
 
         Returns:
-            True if VAAPI is available.
+            True if VAAPI development files are available for building.
         """
+        self.platform_info.vaapi_reason = ""
+        self.platform_info.vaapi_detected_via = None
+        self.platform_info.vaapi_detected_header_paths = []
+        self.platform_info.vaapi_detected_loader_paths = []
+        dri_dir = Path("/dev/dri")
+        self.platform_info.vaapi_render_nodes = (
+            sorted(str(p) for p in dri_dir.glob("renderD*")) if dri_dir.exists() else []
+        )
+
         if not self.platform_info.is_linux:
+            self.platform_info.vaapi_reason = "VAAPI is only supported on Linux"
             return False
 
         # VAAPI is not supported in WSL2
         if self.platform_info.is_wsl2:
+            self.platform_info.vaapi_reason = (
+                "VAAPI is disabled under WSL2 (no supported DRM/VAAPI passthrough "
+                "in current build policy)"
+            )
             return False
 
         try:
             result = subprocess.run(
                 ["pkg-config", "--exists", "libva"], capture_output=True, timeout=5
             )
-            return result.returncode == 0
+            if result.returncode == 0:
+                self.platform_info.vaapi_detected_via = "pkg-config (libva)"
+                return True
         except Exception:
-            return False
+            pass
 
-    def _check_amf(self) -> bool:
-        """Check if AMF headers are available.
+        # Fallback: header + loader library presence, for environments where
+        # pkg-config is missing or PKG_CONFIG_PATH does not index libva.pc.
+        header_paths = [
+            Path("/usr/include/va/va.h"),
+            Path("/usr/local/include/va/va.h"),
+        ]
+        existing_headers = [str(p) for p in header_paths if p.exists()]
+        self.platform_info.vaapi_detected_header_paths = existing_headers
+
+        loader_paths = [
+            Path("/usr/lib/libva.so"),
+            Path("/usr/lib64/libva.so"),
+        ]
+        multiarch = self.get_multiarch_dir()
+        if multiarch:
+            loader_paths.extend(
+                [
+                    Path(f"/usr/lib/{multiarch}/libva.so"),
+                    Path(f"/usr/lib/{multiarch}/libva.so.2"),
+                ]
+            )
+        existing_loaders = [str(p) for p in loader_paths if p.exists()]
+        self.platform_info.vaapi_detected_loader_paths = existing_loaders
+
+        if existing_headers and existing_loaders:
+            self.platform_info.vaapi_detected_via = "headers+loader (pkg-config unavailable)"
+            return True
+
+        if not existing_headers:
+            reason = "libva development headers not found (install libva-dev / libva-devel)"
+        elif not existing_loaders:
+            reason = "libva runtime loader library (libva.so) not found"
+        else:
+            reason = "libva not detected via pkg-config, headers, or loader library"
+        if not self.platform_info.vaapi_render_nodes:
+            reason += "; no /dev/dri/renderD* nodes present (no GPU render node)"
+        self.platform_info.vaapi_reason = reason
+        return False
+
+    def _check_amf_headers(self) -> List[str]:
+        """Check for AMF SDK headers on common filesystem locations.
+
+        This is diagnostics-only: it does NOT gate ``amf_available`` (see
+        ``_detect_platform_info``), because the ``amf`` component always
+        downloads its own headers from GPUOpen regardless of what may
+        already be installed system-wide.
 
         Returns:
-            True if AMF is available.
+            List of existing AMF header directory paths, if any.
         """
-        # Check common locations for AMF headers
         amf_paths = [
             Path("/usr/include/AMF"),
             Path("/usr/local/include/AMF"),
             Path("/opt/AMF/amf/public/include"),
         ]
-
-        return any(path.exists() for path in amf_paths)
+        return [str(path) for path in amf_paths if path.exists()]
 
     def _check_vulkan(self) -> bool:
-        """Check if Vulkan SDK/headers are available.
+        """Check if Vulkan development files and runtime are available.
+
+        Development readiness (``vulkan_dev_available``, what gates the
+        ``vulkan-headers``/``glslang`` build components and the returned
+        bool) is decided by pkg-config or a real header file - a bare
+        ``vulkaninfo`` binary on PATH is NOT sufficient evidence that Vulkan
+        development headers exist, so it is downgraded to a runtime-only
+        diagnostic signal (``vulkan_runtime_available``).
+
+        On Linux, a LunarG SDK activated via ``VULKAN_SDK`` (e.g. by
+        sourcing ``setup-env.sh``) is honoured in addition to the system
+        Vulkan-Loader/mesa-vulkan-drivers install, so both "environments"
+        described in the field (system + LunarG SDK) are detected.
 
         Returns:
-            True if Vulkan is available.
+            True if Vulkan development files are available.
         """
-        # Check pkg-config
+        self.platform_info.vulkan_reason = ""
+        self.platform_info.vulkan_detected_via = None
+        self.platform_info.vulkan_detected_header_paths = []
+        self.platform_info.vulkan_detected_icd_files = []
+        self.platform_info.vulkan_dev_available = False
+        self.platform_info.vulkan_runtime_available = False
+
+        # --- Development readiness -----------------------------------
         try:
             result = subprocess.run(
                 ["pkg-config", "--exists", "vulkan"], capture_output=True, timeout=5
             )
             if result.returncode == 0:
-                return True
+                self.platform_info.vulkan_dev_available = True
+                self.platform_info.vulkan_detected_via = "pkg-config (vulkan)"
         except Exception:
             pass
 
-        # Check header files
         vulkan_header_paths = [
             Path("/usr/include/vulkan/vulkan.h"),
             Path("/usr/local/include/vulkan/vulkan.h"),
@@ -819,18 +966,68 @@ class PlatformDetector:
                     Path("C:/VulkanSDK/Include/vulkan/vulkan.h"),
                 ]
             )
-            vulkan_sdk = os.environ.get("VULKAN_SDK")
-            if vulkan_sdk:
-                vulkan_header_paths.append(Path(vulkan_sdk) / "Include" / "vulkan" / "vulkan.h")
 
-        if any(path.exists() for path in vulkan_header_paths):
-            return True
+        # A LunarG SDK activated via VULKAN_SDK is a second, independent
+        # Vulkan "environment" alongside the system loader/driver install -
+        # honour it on every platform, not just Windows (the previous
+        # implementation only ever consulted VULKAN_SDK on Windows).
+        vulkan_sdk = os.environ.get("VULKAN_SDK")
+        if vulkan_sdk:
+            sdk_root = Path(vulkan_sdk)
+            vulkan_header_paths.append(sdk_root / "include" / "vulkan" / "vulkan.h")  # Linux SDK
+            vulkan_header_paths.append(sdk_root / "Include" / "vulkan" / "vulkan.h")  # Windows SDK
 
-        # Check vulkaninfo command
-        if shutil.which("vulkaninfo") is not None:
-            return True
+        existing_headers = [str(p) for p in vulkan_header_paths if p.exists()]
+        self.platform_info.vulkan_detected_header_paths = existing_headers
+        if existing_headers and not self.platform_info.vulkan_dev_available:
+            self.platform_info.vulkan_dev_available = True
+            self.platform_info.vulkan_detected_via = "headers"
 
-        return False
+        # --- Runtime readiness (diagnostics; does not gate dev result) ---
+        icd_dirs = [
+            Path("/usr/share/vulkan/icd.d"),
+            Path("/etc/vulkan/icd.d"),
+            Path.home() / ".local/share/vulkan/icd.d",
+        ]
+        if vulkan_sdk:
+            icd_dirs.append(Path(vulkan_sdk) / "etc" / "vulkan" / "icd.d")
+        icd_files: List[str] = []
+        for icd_dir in icd_dirs:
+            try:
+                if icd_dir.exists():
+                    icd_files.extend(str(p) for p in icd_dir.glob("*.json"))
+            except Exception:
+                pass
+        self.platform_info.vulkan_detected_icd_files = sorted(icd_files)
+        if self.platform_info.vulkan_detected_icd_files:
+            self.platform_info.vulkan_runtime_available = True
+
+        vulkaninfo_path = shutil.which("vulkaninfo")
+        if vulkaninfo_path:
+            try:
+                vulkaninfo_result = subprocess.run(
+                    [vulkaninfo_path, "--summary"], capture_output=True, text=True, timeout=8
+                )
+                if vulkaninfo_result.returncode == 0 and vulkaninfo_result.stdout.strip():
+                    self.platform_info.vulkan_runtime_available = True
+            except Exception:
+                pass
+
+        if not self.platform_info.vulkan_dev_available:
+            self.platform_info.vulkan_reason = (
+                "Vulkan development headers not found via pkg-config or "
+                "standard/VULKAN_SDK header paths (install libvulkan-dev / "
+                "vulkan-headers, or activate a LunarG SDK via VULKAN_SDK)"
+            )
+        elif not self.platform_info.vulkan_runtime_available:
+            self.platform_info.vulkan_reason = (
+                "Vulkan headers found but no ICD file or working vulkaninfo "
+                "detected (driver/runtime may be missing)"
+            )
+        else:
+            self.platform_info.vulkan_reason = "Supported"
+
+        return bool(self.platform_info.vulkan_dev_available)
 
     def _check_opencl(self) -> bool:
         """Check if OpenCL development files and runtime are available.
@@ -928,21 +1125,17 @@ class PlatformDetector:
 
         # Check for at least one vendor ICD file
         icd_vendors_dir = Path("/etc/OpenCL/vendors")
-        has_vendor_icd = False
         if icd_vendors_dir.exists():
             icd_files = sorted(str(path) for path in icd_vendors_dir.glob("*.icd"))
             self.platform_info.opencl_detected_icd_files = icd_files
             if icd_files:
-                has_vendor_icd = True
                 self.platform_info.opencl_runtime_available = True
                 self.platform_info.opencl_runtime_reason = "Vendor OpenCL ICD files found"
 
         # Check WSL NVIDIA OpenCL (not available in WSL)
         wsl_lib = Path("/usr/lib/wsl/lib")
-        has_wsl_nvidia_opencl = False
         if wsl_lib.exists():
             if any(wsl_lib.glob("libnvidia-opencl*")):
-                has_wsl_nvidia_opencl = True
                 self.platform_info.opencl_runtime_available = True
                 self.platform_info.opencl_runtime_reason = "NVIDIA WSL OpenCL runtime found"
             # WSL without OpenCL implementation
@@ -954,14 +1147,32 @@ class PlatformDetector:
             if not self.platform_info.opencl_runtime_reason:
                 self.platform_info.opencl_runtime_reason = "OpenCL loader found on Windows"
 
+        # Functional probe: actually query the ICD loader for platforms via
+        # `clinfo`, instead of relying purely on filesystem presence checks.
+        # This catches cases where a vendor .icd file/loader exists but is
+        # broken, and gives a positive signal on setups (e.g. ROCm) where
+        # clinfo ships under the SDK root rather than on PATH.
+        clinfo_path = shutil.which("clinfo")
+        if not clinfo_path and self.platform_info.rocm_path:
+            rocm_clinfo = Path(self.platform_info.rocm_path) / "bin" / "clinfo"
+            if rocm_clinfo.exists():
+                clinfo_path = str(rocm_clinfo)
+        if clinfo_path:
+            try:
+                clinfo_result = subprocess.run(
+                    [clinfo_path, "-l"], capture_output=True, text=True, timeout=8
+                )
+                if clinfo_result.returncode == 0 and clinfo_result.stdout.strip():
+                    self.platform_info.opencl_runtime_available = True
+                    self.platform_info.opencl_runtime_reason = (
+                        f"clinfo ({clinfo_path}) reports: "
+                        f"{clinfo_result.stdout.strip().splitlines()[0]}"
+                    )
+            except Exception:
+                pass
+
         if not self.platform_info.opencl_runtime_reason:
             self.platform_info.opencl_runtime_reason = "No OpenCL vendor ICD files found"
-        if (
-            not self.platform_info.opencl_runtime_available
-            and has_loader_any
-            and (has_vendor_icd or has_wsl_nvidia_opencl)
-        ):
-            self.platform_info.opencl_runtime_available = True
 
         return bool(
             self.platform_info.opencl_dev_available and self.platform_info.opencl_runtime_available

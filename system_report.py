@@ -118,6 +118,38 @@ class SystemReport:
             "icd_files": self.platform_info.opencl_detected_icd_files,
         }
 
+    def get_vaapi_diagnostics(self) -> Dict[str, Any]:
+        """Get VAAPI detection diagnostics."""
+        return {
+            "available": self.platform_info.vaapi_available,
+            "reason": self.platform_info.vaapi_reason,
+            "detected_via": self.platform_info.vaapi_detected_via,
+            "header_paths": self.platform_info.vaapi_detected_header_paths,
+            "loader_paths": self.platform_info.vaapi_detected_loader_paths,
+            "render_nodes": self.platform_info.vaapi_render_nodes,
+        }
+
+    def get_amf_diagnostics(self) -> Dict[str, Any]:
+        """Get AMF detection diagnostics."""
+        return {
+            "available": self.platform_info.amf_available,
+            "reason": self.platform_info.amf_reason,
+            "gpu_names": self.platform_info.amf_gpu_names,
+            "headers_detected_paths": self.platform_info.amf_headers_detected_paths,
+        }
+
+    def get_vulkan_diagnostics(self) -> Dict[str, Any]:
+        """Get Vulkan detection diagnostics."""
+        return {
+            "available": self.platform_info.vulkan_available,
+            "dev_available": self.platform_info.vulkan_dev_available,
+            "runtime_available": self.platform_info.vulkan_runtime_available,
+            "reason": self.platform_info.vulkan_reason,
+            "detected_via": self.platform_info.vulkan_detected_via,
+            "header_paths": self.platform_info.vulkan_detected_header_paths,
+            "icd_files": self.platform_info.vulkan_detected_icd_files,
+        }
+
     def get_sdk_status(self) -> Dict[str, Dict[str, Any]]:
         """Get detected SDK roots for diagnostics."""
         return {

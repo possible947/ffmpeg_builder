@@ -166,7 +166,7 @@ Detects the full system environment in a single `detect_all()` call.
 | Class | Fields |
 |-------|--------|
 | `SystemInfo` | os_name, os_version, architecture, cpu_model, cpu_cores, ram_gb |
-| `PlatformInfo` | platform, build_backend, is_macos, is_linux, is_windows, is_arm64, is_wsl2, is_msys2, is_ucrt64, msystem, macports_clang, cuda_available, cuda_path, vaapi_available, qsv_available, amf_available, vulkan_available, opencl_available, opencl_runtime_available, opencl_dev_available, opencl_effective_available, opencl_runtime_reason, opencl_dev_reason, opencl_effective_reason, opencl_detected_header_paths, opencl_detected_loader_paths, opencl_detected_icd_files, opencl_pkg_config_name, rocm_available, rocm_path, vulkan_sdk_available, vulkan_sdk_path |
+| `PlatformInfo` | platform, build_backend, is_macos, is_linux, is_windows, is_arm64, is_wsl2, is_msys2, is_ucrt64, msystem, macports_clang, cuda_available, cuda_path, vaapi_available, vaapi_reason, vaapi_detected_via, vaapi_detected_header_paths, vaapi_detected_loader_paths, vaapi_render_nodes, qsv_available, amf_available, amf_reason, amf_gpu_names, amf_headers_detected_paths, vulkan_available, vulkan_dev_available, vulkan_runtime_available, vulkan_reason, vulkan_detected_via, vulkan_detected_header_paths, vulkan_detected_icd_files, opencl_available, opencl_runtime_available, opencl_dev_available, opencl_effective_available, opencl_runtime_reason, opencl_dev_reason, opencl_effective_reason, opencl_detected_header_paths, opencl_detected_loader_paths, opencl_detected_icd_files, opencl_pkg_config_name, rocm_available, rocm_path, vulkan_sdk_available, vulkan_sdk_path |
 | `ToolInfo` | name, path, version, available |
 
 **Detection methods:**
@@ -178,13 +178,15 @@ Detects the full system environment in a single `detect_all()` call.
 | `_detect_cuda()` | nvcc in PATH, then `/usr/local/cuda*/bin/nvcc` |
 | `_check_wsl2()` | WSL2 environment via `/proc/version` (Microsoft/WSL) |
 | `_check_qsv()` | Linux: QSV via vainfo/PCI Intel GPU with VAAPI. Windows UCRT64: Intel GPU + pkg-config oneVPL (`vpl`/`libvpl`) |
-| `_check_vulkan()` | pkg-config, headers, vulkaninfo |
-| `_check_opencl()` | Runtime+dev readiness model (`opencl_runtime_available` + `opencl_dev_available`), including ROCm/CUDA non-standard include/lib paths and WSL-aware runtime checks |
-| `_check_vaapi()` | pkg-config libva |
-| `_check_amf()` | Header paths |
+| `_check_vulkan()` | Dev/runtime split: pkg-config or headers (incl. `VULKAN_SDK` on *every* platform, not just Windows) gate `vulkan_dev_available`/the returned bool; ICD JSON files and a real `vulkaninfo --summary` run are runtime-only diagnostics (`vulkan_runtime_available`) and no longer grant dev-availability by themselves |
+| `_check_opencl()` | Runtime+dev readiness model (`opencl_runtime_available` + `opencl_dev_available`), including ROCm/CUDA non-standard include/lib paths, WSL-aware runtime checks, and a functional `clinfo -l` probe (PATH or `<ROCM_PATH>/bin/clinfo`) as the strongest runtime signal |
+| `_check_vaapi()` | pkg-config libva, falling back to header (`va/va.h`) + loader (`libva.so`, multiarch-aware) presence when pkg-config/`.pc` indexing is unavailable; always records `vaapi_reason` on failure |
+| `_check_amf_headers()` | Diagnostics-only: AMF SDK header paths on disk (does **not** gate `amf_available`) |
 | `_detect_tools()` | 16 tools via `shutil.which()` + version extraction |
 
-**WSL awareness:** `_check_wsl2()` detects WSL2 by checking `/proc/version` for "Microsoft" or "WSL". `_check_opencl()` detects WSL by checking `/usr/lib/wsl/lib/` and verifies that `libnvidia-opencl*` exists there. `_check_qsv()` disables QSV in WSL2 environments. WSL2 does not expose OpenCL or QSV through its paravirtualized driver.
+**WSL awareness:** `_check_wsl2()` detects WSL2 by checking `/proc/version` for "Microsoft" or "WSL". `_check_opencl()` detects WSL by checking `/usr/lib/wsl/lib/` and verifies that `libnvidia-opencl*` exists there. `_check_qsv()` disables QSV in WSL2 environments. `_check_vaapi()` explicitly disables VAAPI in WSL2 and records the reason. WSL2 does not expose OpenCL or QSV through its paravirtualized driver.
+
+**AMF detection (Linux/Windows):** `amf_available` is decided purely by AMD GPU *presence* (`lspci -nn` / `/sys/class/drm` sysfs enumeration on Linux, WMIC/CIM `Win32_VideoController` on Windows) — **not** by AMF SDK header presence. This is intentional: the `amf` component always downloads its own headers from GPUOpen regardless of what may already be installed system-wide. `_check_amf_headers()` still exists and populates `amf_headers_detected_paths` purely for diagnostics/troubleshooting.
 
 ### `system_report.py` — Report Generation
 
@@ -195,6 +197,9 @@ Detects the full system environment in a single `detect_all()` call.
 - `get_missing_required_tools()` — tools required for build
 - `get_optional_tools_status()` — optional tools (nasm, cmake, meson, etc.)
 - `get_opencl_diagnostics()` — reports effective/runtime/dev OpenCL state with reasons and discovered paths
+- `get_vaapi_diagnostics()` — reports VAAPI availability, detection method, and failure reason
+- `get_amf_diagnostics()` — reports AMF availability, detected AMD GPU names, and failure reason
+- `get_vulkan_diagnostics()` — reports dev/runtime Vulkan state, detection method, and failure reason
 - `get_sdk_status()` — reports detected SDK roots (ROCm/CUDA/Vulkan SDK)
 
 **`SystemReportGenerator`** — creates `SystemReport` from raw detection data, adds build environment variables (PATH, PKG_CONFIG_PATH, CFLAGS, etc.).
@@ -432,6 +437,52 @@ All MSYS2 build tools (`cmake`, `ninja`, `make`, `meson`) are native Windows PE
 executables that work correctly as direct `subprocess.run()` calls. Wrapping them
 through `sh.exe` will fail with exit code 126 (`cannot execute binary file`).
 
+### Linux (native) — verified hwaccel reference build
+
+Confirmed end-to-end (58/58 components, 0 failures) on:
+
+- **Host:** Ubuntu 24.04.4 LTS ("noble"), kernel `7.0.0-29-generic` (24.04 HWE), x86_64.
+- **GPUs:** 2× AMD Radeon Pro VII / Radeon Instinct MI50 (Vega 20). ROCm 6.3.0 at
+  `/opt/rocm`. Mesa 25.2.8 with system Vulkan-Loader 1.3.275 (Wayland session);
+  a LunarG Vulkan SDK 1.4.357.1 was present on disk but not activated
+  (`VULKAN_SDK` unset) for this build — see "Dual Vulkan environments" below.
+  `libva-dev`/`libva2` 2.20.0 installed for VAAPI.
+- **Result:** `--enable-vaapi --enable-amf --enable-vulkan --enable-libglslang
+  --enable-libplacebo --enable-opencl`, and correctly `--disable-ffnvcodec` with no
+  `--enable-libvpl` (no NVIDIA/Intel GPU present). See `docs/CHANGELOG.md` →
+  "Verified — successful end-to-end build (2026-08-20)" for the full component/flag
+  breakdown and cross-check against `components.yaml`/`build_config.yaml`.
+
+#### Dual Vulkan environments (system + LunarG SDK)
+
+Linux setups commonly have two independent Vulkan "environments" available side by
+side: the distro-packaged loader/drivers (e.g. `mesa-vulkan-drivers` +
+`libvulkan-dev`) and a LunarG SDK tarball activated by sourcing its
+`setup-env.sh`, which sets `VULKAN_SDK` (and `PATH`/`LD_LIBRARY_PATH`/
+`VK_LAYER_PATH`). `_check_vulkan()` in `platform_detect.py` now honours
+`VULKAN_SDK` on **every** platform (previously Windows-only — see CHANGELOG), and
+`builder.py::_setup_environment()` propagates `$VULKAN_SDK/include`,
+`$VULKAN_SDK/lib`, and `$VULKAN_SDK/lib/pkgconfig` into the build environment
+when a LunarG SDK is active, in addition to (not instead of) the system
+Vulkan-Loader/mesa install path. If both are present, `VULKAN_SDK` takes
+precedence for header/lib resolution since its paths are prepended.
+
+#### AMD hwaccel detection specifics (VAAPI / AMF / OpenCL via ROCm)
+
+- **VAAPI** requires the `libva-dev`/`libva-devel` *development* package, not just
+  the runtime (`libva2`/`libva-drm2`/etc.) — a system with only the runtime
+  installed will correctly and explainably report VAAPI as unavailable via
+  `platform_info.vaapi_reason` (e.g. "libva development headers not found").
+- **AMF** is gated purely on AMD GPU presence (`lspci -nn` / `/sys/class/drm`
+  sysfs), not on AMF SDK headers being pre-installed — the `amf` component always
+  downloads its own headers from GPUOpen. Multi-GPU AMD systems (e.g. 2× Vega 20)
+  report all detected AMD GPU names in `platform_info.amf_gpu_names`.
+- **OpenCL via ROCm** is detected through `/opt/rocm/include/CL/cl.h` +
+  `/opt/rocm/lib*/libOpenCL.so*` header/loader paths, and additionally verified
+  with a live `clinfo -l` functional probe — using `<ROCM_PATH>/bin/clinfo` when
+  ROCm ships its own `clinfo` outside `PATH` (the common case), rather than
+  relying on filesystem presence alone.
+
 ## Data Flow
 
 ### Build Process
@@ -549,6 +600,13 @@ print(f'HW components: {hw}')
 "
 ```
 
+`tests/test_platform_detect.py` exercises the real `_check_vaapi`/`_check_vulkan`/
+`_check_opencl`/AMF-gating functions directly via `monkeypatch` (not hand-built
+`PlatformInfo` mocks, which is all `test_components.py`/`test_builder_split.py`
+cover), plus a `TestRealHardware` smoke test that runs `detect_all()` against
+whatever machine executes the suite and asserts on it when AMD/ROCm hardware is
+detected (auto-skips otherwise). Run with `pytest tests/test_platform_detect.py -v`.
+
 ## Known Limitations
 
 - **WSL2 OpenCL**: Not available through the paravirtualized NVIDIA driver. The builder correctly detects this and excludes OpenCL components.
@@ -556,6 +614,7 @@ print(f'HW components: {hw}')
 - **Component versions**: Versions are defined in `components.yaml` (externalized from Python). A future improvement could fetch latest versions from an API or config file.
 - **No dependency graph**: Components are built in a fixed order defined in `components.yaml`. There is no automatic topological sort based on `depends_on`.
 - **Large builder surface still in one module** — `builder.py` remains the main integration point and still contains many component-specific build methods. Shared plumbing has already been split to `build_steps.py`, `component_builders.py`, and `release_bundle.py`, but further decomposition should continue in small, behavior-preserving steps.
+- **Intel QSV / NVIDIA CUDA-NVENC detection unverified on real hardware** — The 2026-08-20 hwaccel detection hardening pass (VAAPI/AMF/Vulkan/OpenCL, see CHANGELOG) was validated on an AMD-only/ROCm machine. `_check_qsv()` and `_detect_cuda()`/`nv-codec` gating still have the pre-existing gaps described in `docs/CHANGELOG.md` → "Planned — Intel/NVIDIA hwaccel detection hardening" (no `qsv_reason` diagnostics, no nvcc/gcc toolchain compile-sanity probe reused for base CUDA readiness) and are pending validation on a machine with an Intel Arc A750 + NVIDIA TITAN V.
 
 ## Code Review & Refactoring Status (2026-08)
 
