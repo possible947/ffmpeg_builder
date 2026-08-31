@@ -175,6 +175,11 @@ class TestComponentRegistry:
     def test_get_by_name_returns_none_for_unknown(self):
         assert self.registry.get_by_name("nonexistent_component_xyz") is None
 
+    def test_gmp_static_build_uses_pic(self):
+        gmp = self.registry.get_by_name("gmp")
+        assert gmp is not None
+        assert "--with-pic" in gmp.configure_args
+
     def test_get_by_category(self):
         video = self.registry.get_by_category(ComponentCategory.VIDEO_CODEC)
         assert len(video) >= 8
