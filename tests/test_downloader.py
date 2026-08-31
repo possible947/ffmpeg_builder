@@ -161,3 +161,26 @@ class TestRegistryChecksums:
             if h.hexdigest() != comp.sha256:
                 mismatches.append(comp.name)
         assert mismatches == [], f"sha256 does not match mirror for: {mismatches}"
+
+    def test_component_version_profile_checksums_match_local_mirror(self):
+        """Declared optional source versions must retain independently verified hashes."""
+        import hashlib
+        from ffmpeg_builder.components import ComponentRegistry
+
+        mirror = Path(__file__).resolve().parent.parent / "third_party" / "sources"
+        if not mirror.is_dir():
+            pytest.skip("local source mirror not present in this checkout")
+
+        registry = ComponentRegistry()
+        mismatches = []
+        for component in registry.get_all():
+            for version in component.versions:
+                resolved = component.with_version(version)
+                archive = mirror / resolved.get_archive_filename()
+                if not archive.exists() or b"git-lfs.github.com" in archive.read_bytes()[:200]:
+                    continue
+                digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+                if digest != resolved.sha256:
+                    mismatches.append(f"{component.name} {version}")
+
+        assert mismatches == [], f"profile sha256 does not match mirror for: {mismatches}"

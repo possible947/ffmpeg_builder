@@ -3,9 +3,9 @@
 # Run: python _gen_components_yaml.py  (re-generates from live Python objects)
 ---
 - name: giflib
-  sha256: be7ffbd057cadebe2aa144542fd90c6838c6a083b5e8a9048b8ee3b66b29d5fb
-  version: 5.2.2
-  url: https://sf-eu-introserv-1.dl.sourceforge.net/project/giflib/giflib-5.x/giflib-{version}.tar.gz
+  sha256: b65b66b99f0424b93525f987386f22fc5efb9da2bfc92ad4a532249aaffbab0e
+  version: 6.1.3
+  url: https://downloads.sourceforge.net/project/giflib/giflib-6.x/giflib-{version}.tar.gz
   category: build_tool
   build_system: custom
   system_component: true
@@ -33,8 +33,8 @@
   system_component: true
   system_tool_name: yasm
 - name: nasm
-  sha256: b7324cbe86e767b65f26f467ed8b12ad80e124e3ccb89076855c98e43a9eddd4
-  version: '3.01'
+  sha256: 87336eba53b4acfe917424ab5d500d2b0054d9f5148d35c2273ccf2cfb712f0d
+  version: '3.02'
   url: https://www.nasm.us/pub/nasm/releasebuilds/{version}/nasm-{version}.tar.xz
   category: build_tool
   build_system: autotools
@@ -56,8 +56,8 @@
   system_component: true
   system_tool_name: zlib
 - name: m4
-  sha256: 6ac4fc31ce440debe63987c2ebbf9d7b6634e67a7c3279257dc7361de8bdb3ef
-  version: 1.4.20
+  sha256: 38ae59f7a30bf9c108193cc5c25fbb06014f21e230c7ede2eff614f7b7c37ed8
+  version: 1.4.21
   url: https://ftpmirror.gnu.org/gnu/m4/m4-{version}.tar.gz
   category: build_tool
   build_system: autotools
@@ -102,8 +102,8 @@
   system_component: true
   system_tool_name: libtool
 - name: cmake
-  sha256: 7efaccde8c5a6b2968bad6ce0fe60e19b6e10701a12fce948c2bf79bac8a11e9
-  version: 4.2.3
+  sha256: c46400618b4f1f2b43507f24fb22f3ae830c3416cf23b776e16e1d413aa892f0
+  version: 4.4.3
   url: https://github.com/Kitware/CMake/releases/download/v{version}/cmake-{version}.tar.gz
   category: build_tool
   build_system: autotools
@@ -117,8 +117,8 @@
   extra_env:
     CXXFLAGS_EXTRA: -std=c++11
 - name: meson
-  sha256: c105816d8158c76b72adcb9ff60297719096da7d07f6b1f000fd8c013cd387af
-  version: 1.8.2
+  sha256: 88afe0c20e52030218924ac37d0c81c59b4b5f3ae3752c8c6d7470c7d365886c
+  version: 1.12.0
   url: https://github.com/mesonbuild/meson/releases/download/{version}/meson-{version}.tar.gz
   category: build_tool
   build_system: custom
@@ -128,8 +128,8 @@
   system_tool_name: meson
   custom_build_fn: build_meson
 - name: ninja
-  sha256: 821bdff48a3f683bc4bb3b6f0b5fe7b2d647cf65d52aeb63328c91a6c6df285a
-  version: 1.12.1
+  sha256: 974d6b2f4eeefa25625d34da3cb36bdcebe7fbce40f4c16ac0835fd1c0cbae17
+  version: 1.13.2
   url: https://github.com/ninja-build/ninja/archive/refs/tags/v{version}.tar.gz
   category: build_tool
   build_system: custom
@@ -137,8 +137,8 @@
   system_tool_name: ninja
   custom_build_fn: build_ninja
 - name: gettext
-  sha256: ec1705b1e969b83a9f073144ec806151db88127f5e40fe5a94cb6c8fa48996a0
-  version: 0.22.5
+  sha256: 39acf4b0371e9b110b60005562aace5b3631fed9b1bb9ecccfc7f56e58bb1d7f
+  version: '0.26'
   url: https://ftpmirror.gnu.org/gettext/gettext-{version}.tar.gz
   category: crypto
   build_system: autotools
@@ -155,8 +155,8 @@
       extra_env: {}
       extra_cflags: -std=gnu11
 - name: openssl
-  sha256: f68e6e3a19902c0487d684a4122d4127bc649b4f8f51c15324bb36e0e4dc0bfa
-  version: 3.6.1
+  sha256: c6b94124bb76ac5f8aa80de121e0f922a93d3bbf1be478bd50ebc36a30dc1db1
+  version: 3.6.4
   url: https://github.com/openssl/openssl/archive/refs/tags/openssl-{version}.tar.gz
   category: crypto
   build_system: custom
@@ -192,8 +192,8 @@
   - gmp
   non_gpl_only: true
 - name: gnutls
-  sha256: a7b341421bfd459acf7a374ca4af3b9e06608dcd7bd792b2bf470bea012b8e51
-  version: 3.8.12
+  sha256: ffed8ec1bf09c2426d4f14aae377de4753b53e537d685e604e99a8b16ca9c97e
+  version: 3.8.13
   url: https://www.gnupg.org/ftp/gcrypt/gnutls/v3.8/gnutls-{version}.tar.xz
   category: crypto
   build_system: autotools
@@ -217,8 +217,8 @@
   - nettle
   non_gpl_only: true
 - name: dav1d
-  sha256: cbe212b02faf8c6eed5b6d55ef8a6e363aaab83f15112e960701a9c3df813686
-  version: 1.5.3
+  sha256: a1d5b63d2d38ec9bd03acf643caa51fa22edd1e89c5a109c4807717216bbec07
+  version: 1.5.4
   url: https://code.videolan.org/videolan/dav1d/-/archive/{version}/dav1d-{version}.tar.gz
   category: video_codec
   build_system: meson
@@ -233,8 +233,8 @@
   - ninja
   ffmpeg_configure_flag: --enable-libdav1d
 - name: svtav1
-  sha256: 9c0f9a4327334c40a76d2f39940d8a1b2dd8b1358375a11c4715d516b90a65cb
-  version: 4.0.1
+  sha256: c7b13c4a84bd3751aa35fcc72be13e6875467e7c2216879251a486e5b1e4e740
+  version: 4.2.0
   url: https://gitlab.com/AOMediaCodec/SVT-AV1/-/archive/v{version}/SVT-AV1-v{version}.tar.gz
   category: video_codec
   build_system: cmake
@@ -261,8 +261,8 @@
   - rustc
   ffmpeg_configure_flag: --enable-librav1e
 - name: x264
-  sha256: b336cdb04eeca5d15a53db323bc716fd7a1dae7bf19df0a8a41379d2d65e05d0
-  version: 0480cb05
+  sha256: cd71a7515b0e9a012e1ac9b1f8415bebcaf6fc97d4db32286642ac4c0fbe24f9
+  version: b35605ace3ddf7c1a5d67a2eb553f034aef41d55
   url: https://code.videolan.org/videolan/x264/-/archive/{version}/x264-{version}.tar.gz
   category: video_codec
   build_system: custom
@@ -281,8 +281,8 @@
   custom_build_fn: build_x265
   ffmpeg_configure_flag: --enable-libx265
 - name: libvpx
-  sha256: 7a479a3c66b9f5d5542a4c6a1b7d3768a983b1e5c14c60a9396edc9b649e015c
-  version: 1.16.0
+  sha256: 1020f184046187baa2985dbde38e0691f49c44088bca7a1842b0236c6081dc0a
+  version: 1.17.0
   url: https://github.com/webmproject/libvpx/archive/refs/tags/v{version}.tar.gz
   category: video_codec
   build_system: custom
@@ -321,8 +321,8 @@
   archive_filename: vid.stab-{version}.tar.gz
   ffmpeg_configure_flag: --enable-libvidstab
 - name: av1
-  sha256: 9261c25a49bbfa6cbe0e79dd32bb68ef964a5b552d869b596fea4cbeb1337a99
-  version: 3.12.0
+  sha256: e5eaa1f394835a5203681d812349fb4fc8d4cdad67f0ec8731431ddd331fcb54
+  version: 3.13.3
   url: https://aomedia.googlesource.com/aom/+archive/refs/tags/v{version}.tar.gz
   category: video_codec
   build_system: cmake
@@ -363,8 +363,8 @@
   - ninja
   skip_condition: disable_lv2
 - name: serd
-  sha256: c0133d878b4b1abf5cb4b2ec4501ebf688edcfefb12a602e3cc26d9e6577a01c
-  version: 0.32.8
+  sha256: d17b99ef250e4dffcdd08c8eaad2459a1519c1ff2553fa91176ce71ac0dd0739
+  version: 0.32.10
   url: https://gitlab.com/drobilla/serd/-/archive/v{version}/serd-v{version}.tar.gz
   category: audio_codec
   build_system: meson
@@ -447,8 +447,8 @@
   - ninja
   skip_condition: disable_lv2
 - name: lilv
-  sha256: 3281f33237385de3efa515e3f6463548bfb8feb358d52961c7d7350094b7d321
-  version: 0.26.4
+  sha256: 006065dcb59ccaad5463e6bb4598160e41dd6474a959838e74820f60a849bfdb
+  version: 0.28.0
   url: https://gitlab.com/lv2/lilv/-/archive/v{version}/lilv-v{version}.tar.gz
   category: audio_codec
   build_system: meson
@@ -581,8 +581,8 @@
   workdir: build
   ffmpeg_configure_flag: --enable-libsoxr
 - name: libtiff
-  sha256: b92017489bdc1db3a4c97191aa4b75366673cb746de0dce5d7a749d5954681ba
-  version: 4.7.1
+  sha256: 4996f0c4f93094719b1ca5c6279b20e588773ba8a247533e486416fb662ddb88
+  version: 4.7.2
   url: https://download.osgeo.org/libtiff/tiff-{version}.tar.xz
   category: image_codec
   build_system: autotools
@@ -596,9 +596,9 @@
   - --disable-zstd
   - --without-x
 - name: libpng
-  sha256: 4b0abab6d219e95690ebe4db7fc9aa95f4006c83baaa022373c0c8442271283d
-  version: 1.6.55
-  url: https://sourceforge.net/projects/libpng/files/libpng16/{version}/libpng-{version}.tar.gz
+  sha256: 8c9b05b675ca7301a458df2c2e46f26e1d41ff36b8863f8c33530bc58c2e6225
+  version: 1.6.58
+  url: https://downloads.sourceforge.net/project/libpng/libpng16/{version}/libpng-{version}.tar.gz
   category: image_codec
   build_system: autotools
   configure_args:
@@ -607,8 +607,8 @@
   - --enable-static
   archive_filename: libpng-{version}.tar.gz
 - name: lcms2
-  sha256: ee67be3566f459362c1ee094fde2c159d33fa0390aa4ed5f5af676f9e5004347
-  version: '2.18'
+  sha256: bfc54f7bab59fbc921012014a8032e4cba4abd46db47d46b76416a8c0b2815c8
+  version: 2.19.1
   url: https://github.com/mm2/Little-CMS/releases/download/lcms{version}/lcms2-{version}.tar.gz
   category: image_codec
   build_system: autotools
@@ -617,8 +617,8 @@
   - --disable-shared
   - --enable-static
 - name: libjxl
-  sha256: ab38928f7f6248e2a98cc184956021acb927b16a0dee71b4d260dc040a4320ea
-  version: 0.11.2
+  sha256: 03e9be69a30be4011f559da75328b6d7cea8ad921fabfbd551ce10bf45cdc992
+  version: 0.12.0
   url: https://github.com/libjxl/libjxl/archive/refs/tags/v{version}.tar.gz
   category: image_codec
   build_system: custom
@@ -662,8 +662,8 @@
   - --disable-shared
   - --enable-static
 - name: FreeType2
-  sha256: 4b62dcab4c920a1a860369933221814362e699e26f55792516d671e6ff55b5e1
-  version: 2.14.2
+  sha256: 36bc4f1cc413335368ee656c42afca65c5a3987e8768cc28cf11ba775e785a5f
+  version: 2.14.3
   url: https://downloads.sourceforge.net/freetype/freetype-{version}.tar.xz
   category: other_lib
   build_system: autotools
@@ -673,15 +673,15 @@
   - --enable-static
   ffmpeg_configure_flag: --enable-libfreetype
 - name: VapourSynth
-  sha256: 1bb8ffe31348eaf46d8f541b138f0136d10edaef0c130c1e5a13aa4a4b057280
-  version: '73'
+  sha256: cbd5aa49d43a9e5061c5ea4b03a682322065f3d9b8870c36bfb8afa0f635e066
+  version: '78'
   url: https://github.com/vapoursynth/vapoursynth/archive/R{version}.tar.gz
   category: other_lib
   build_system: headers_only
   ffmpeg_configure_flag: --enable-vapoursynth
 - name: libvmaf
-  sha256: 7178c4833639e6b989ecae73131d02f70735fdb3fc2c7d84bc36c9c3461d93b1
-  version: 3.0.0
+  sha256: a28f93f3b4fa65601be324587072e32a6a704a304ba7b1aec9b70b3f709bc1dc
+  version: 3.2.0
   url: https://github.com/Netflix/vmaf/archive/refs/tags/v{version}.tar.gz
   category: other_lib
   build_system: custom
@@ -694,8 +694,8 @@
   custom_build_fn: build_libvmaf
   ffmpeg_configure_flag: --enable-libvmaf
 - name: srt
-  sha256: d0a8b600fe1b4eaaf6277530e3cfc8f15b8ce4035f16af4a5eb5d4b123640cdd
-  version: 1.5.4
+  sha256: 2c4980c2c4cfd142d21b829d939dc51db9c6628af5967fff62fd7290769569c7
+  version: 1.5.6
   url: https://github.com/Haivision/srt/archive/v{version}.tar.gz
   category: other_lib
   build_system: custom
@@ -712,8 +712,8 @@
   custom_build_fn: build_libzmq
   ffmpeg_configure_flag: --enable-libzmq
 - name: vulkan-headers
-  sha256: d73bc5036b6556b741f6985ff600ca720308c5f2850e4a43ceb498bd3de069e7
-  version: 1.4.341.0
+  sha256: e87dce08116151f6b6d7de6b6faf41498e87e6cf848ff16fa3bd5402190ad4a3
+  version: 1.4.357.0
   url: https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/vulkan-sdk-{version}.tar.gz
   category: hw_accel
   build_system: cmake
@@ -723,8 +723,8 @@
   workdir: build
   ffmpeg_configure_flag: --enable-vulkan
 - name: glslang
-  sha256: 01985335785c97906a91afe3cb5ee015997696181ec6c125bab5555602ba08e2
-  version: 16.2.0
+  sha256: 01af17195fbeb59e39e31e9506de35bb39dfd35807ea0c9a1a99d7d1183ddd45
+  version: 16.5.0
   url: https://github.com/KhronosGroup/glslang/archive/refs/tags/{version}.tar.gz
   category: hw_accel
   build_system: custom
@@ -735,8 +735,8 @@
     '8.1':
     - --enable-libglslang
 - name: fast-float
-  sha256: 4458aae4b0eb55717968edda42987cabf5f7fc737aee8fede87a70035dba9ab0
-  version: 6.1.6
+  sha256: 76f958dd97b1cf4d8862d1f0986a47d4bdfa8845252bae15ef0f40de3b95961f
+  version: 8.2.10
   url: https://github.com/fastfloat/fast_float/archive/refs/tags/v{version}.tar.gz
   category: hw_accel
   build_system: headers_only
@@ -767,8 +767,8 @@
   custom_build_fn: build_libplacebo
   ffmpeg_configure_flag: --enable-libplacebo
 - name: nv-codec
-  sha256: 13da39edb3a40ed9713ae390ca89faa2f1202c9dda869ef306a8d4383e242bee
-  version: 13.0.19.0
+  sha256: 52532ceade3d5c1af62624986f13cf01b63c910576b08c0c278756c5e4b41ad0
+  version: 13.1.15.0
   url: https://github.com/FFmpeg/nv-codec-headers/releases/download/n{version}/nv-codec-headers-{version}.tar.gz
   category: hw_accel
   build_system: make_only
@@ -779,8 +779,8 @@
   linux_only: true
   windows_ucrt64_supported: true
 - name: amf
-  sha256: bf80ee4a77a731c5a2351b4dd74f524a18806a70099ba66a8058d91aac1150b5
-  version: 1.5.0
+  sha256: 8a70b6dc85261e6e6e57769bd81ac1e09c0a4c96bbd5e358ffbc2dee51e8e50a
+  version: 1.5.2
   url: https://github.com/GPUOpen-LibrariesAndSDKs/AMF/archive/refs/tags/v{version}.tar.gz
   category: hw_accel
   build_system: headers_only
@@ -789,8 +789,8 @@
   archive_dirname: AMF-{version}
   ffmpeg_configure_flag: --enable-amf
 - name: opencl-headers
-  sha256: 98f0a3ea26b4aec051e533cb1750db2998ab8e82eda97269ed6efe66ec94a240
-  version: 2025.07.22
+  sha256: d9e6c48357de5002da11ce45de600e0c3ffe6ab4f628a3b9fe2b38603161658a
+  version: 2026.05.29
   url: https://github.com/KhronosGroup/OpenCL-Headers/archive/refs/tags/v{version}.tar.gz
   category: hw_accel
   build_system: cmake
@@ -801,8 +801,8 @@
   archive_filename: OpenCL-Headers-{version}.tar.gz
   workdir: build
 - name: opencl-icd-loader
-  sha256: dff7a0b11ad5b63a669358e3476e3dc889a4a361674e5b69b267b944d0794142
-  version: 2025.07.22
+  sha256: 48fd0c5181db7cd046f4f731d5955694892e10998d49d09ee0d997e7e04fd939
+  version: 2026.05.29
   url: https://github.com/KhronosGroup/OpenCL-ICD-Loader/archive/refs/tags/v{version}.tar.gz
   category: hw_accel
   build_system: cmake

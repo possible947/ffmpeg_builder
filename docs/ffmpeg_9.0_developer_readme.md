@@ -247,11 +247,12 @@ Notes for the version-refresh batches (Phase B):
 3. `--enable-libglslang` is emitted only for FFmpeg 8.1; glslang remains a libplacebo dependency for both versions.
 4. The configuration screen, build component list, state, dashboard, and release manifest use the selected version.
 
-## Phase B — Refresh component versions (requested “current” set)
+## Phase B — Refresh component versions (implemented except x265)
 
-1. Update selected component pins in `components.yaml` (starting with hwaccel stack listed above).
-2. Validate source archive naming and URL patterns still match upstream release artifacts.
-3. Ensure no platform-specific breakage from updated versions (Linux/macOS/Windows UCRT64 rules remain intact).
+1. Downloaded the FFmpeg 9.0 archive and 31 verified current component archives into `third_party/sources`; each is Git LFS-tracked and has a matching `components.yaml` SHA-256.
+2. Updated the corresponding registry pins and URL templates, including the giflib 6.x and libpng SourceForge paths, the lcms2.19.1 release tag, and the x264 stable commit `b35605ace3ddf7c1a5d67a2eb553f034aef41d55`.
+3. Deferred x265 4.3: both documented source locations returned HTTP 404, so the existing verified commit pin remains until the upstream project provides a canonical release archive.
+4. Full cross-platform component builds remain required before claiming runtime compatibility for the fast-float 8.x and VapourSynth R78 updates.
 
 ## Phase C — Tests and docs
 

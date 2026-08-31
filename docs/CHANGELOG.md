@@ -8,6 +8,10 @@ All notable changes to the FFmpeg Builder project.
 
 - **Selectable FFmpeg source versions (2026-08-31)** — `ffmpeg_version` now supports `8.1` (default) and `9.0`. Each selection resolves the FFmpeg target from declarative source metadata with its own verified SHA-256. FFmpeg 9.0 omits the removed `--enable-libglslang` configure option while glslang remains available as a libplacebo dependency. Future FFmpeg version profiles must include source/checksum metadata, configuration and flag-compatibility regression tests, and an `Unreleased` changelog entry documenting the version, compatibility changes, and validation run.
 
+### Changed
+
+- **Verified source-mirror refresh for FFmpeg 9.0 integration (2026-08-31)** — Downloaded and Git LFS-tracked verified source archives for FFmpeg 9.0 and 31 current component updates. `components.yaml` now pins each refreshed component to the SHA-256 of its checked local archive; the FFmpeg 9.0 source profile is present in `third_party/sources`. Refreshed categories: build tools, crypto, video codecs (including an exact x264 stable-branch commit), LV2, image libraries, general libraries, and hardware acceleration. `x265` remains at its existing verified commit because the documented 4.3 release archives returned upstream 404 responses; it must not be bumped until a canonical, hashable upstream archive is available. Validated with readable-tar checks for every new archive, registry/downloader tests, and the FFmpeg-version-profile checksum test.
+
 ### Verified — successful end-to-end build (2026-08-20)
 
 - **First clean build after the Linux hwaccel reliability pass, on the AMD/ROCm reference machine** — Full build completed 58/58 components, 0 failures, in-process on the same hardware used to validate the detector fixes above.
