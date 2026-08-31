@@ -259,14 +259,13 @@ Notes for the version-refresh batches (Phase B):
 2. User-facing docs identify `8.1` as the default and `9.0` as an opt-in selection, including FFmpeg 9.0's removed glslang configure flag.
 3. Migration guidance is recorded in the repository changelog: existing configurations retain `8.1`; users opt into 9.0 with `ffmpeg_version: "9.0"`.
 
-## Phase D — Validation
+## Phase D — Validation (in progress)
 
-1. Run unit tests (`pytest tests/`).
-2. Run targeted static checks for modified Python files.
-3. Perform at least one smoke build path per backend policy (or dry-run checkpoints where full build is impractical):
-   - Linux
-   - macOS (MacPorts + LunarG Vulkan SDK assumptions preserved)
-   - Windows MSYS2 UCRT64
+1. Unit tests and targeted static checks pass after the FFmpeg 9 compatibility fixes.
+2. macOS validation completed on 2026-08-31: the default non-GPL FFmpeg 9.0 build completed all 49 selected components (37 source components and 12 system components) with no failures or skips. The generated `ffmpeg`, `ffprobe`, and `ffplay` binaries report FFmpeg 9.0.
+3. Remaining backend validation before stable 2.0:
+  - Linux
+  - Windows MSYS2 UCRT64
 
 ---
 

@@ -1,8 +1,12 @@
-# FFmpeg Builder
+# FFmpeg Builder 2.0 Beta
 
 Interactive Python-based build system for FFmpeg 8.1 (default) and 9.0 on macOS, Linux, and **Windows 11 + MSYS2 UCRT64**.
 
 FFmpeg Builder replaces the traditional bash `build-ffmpeg` script with a modern, interactive interface featuring real-time progress tracking, configuration management, platform-aware hardware acceleration detection, and resumable builds.
+
+## Release Status
+
+Version `2.0b0` is the FFmpeg 9 integration beta. The macOS FFmpeg 9.0 build using the default non-GPL configuration completed all 49 selected components: 37 built from source and 12 system-provided, with no failures or skips. The generated `ffmpeg`, `ffprobe`, and `ffplay` binaries report FFmpeg 9.0. Linux and Windows MSYS2 UCRT64 validation remain pending before a stable 2.0 release.
 
 ## Features
 

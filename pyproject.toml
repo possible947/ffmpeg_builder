@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ffmpeg-builder"
-version = "1.0.0"
+version = "2.0b0"
 description = "Interactive FFmpeg build system with progress tracking and configuration management"
 readme = "README.md"
 requires-python = ">=3.12"

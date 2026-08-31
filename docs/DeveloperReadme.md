@@ -2,6 +2,10 @@
 
 This document describes the internal architecture, module responsibilities, data flow, and extension points of the FFmpeg Builder system.
 
+## Release Status
+
+The current package version is `2.0b0` (FFmpeg 9 integration beta). macOS validation completed with FFmpeg 9.0 and the default non-GPL configuration: all 49 selected components completed (37 source components and 12 system components), with no failures or skips. The generated `ffmpeg`, `ffprobe`, and `ffplay` binaries report FFmpeg 9.0. Linux and Windows MSYS2 UCRT64 require separate validation before the stable 2.0 release.
+
 ## Architecture Overview
 
 ```

@@ -2,6 +2,20 @@
 
 All notable changes to the FFmpeg Builder project.
 
+## [2.0b0] - 2026-08-31
+
+### Added
+
+- **FFmpeg 9 integration beta** - Added selectable FFmpeg 9.0 source support while retaining FFmpeg 8.1 as the default. The macOS build using the default non-GPL configuration completed all 49 selected components: 37 source components and 12 system components, with no failures or skips. Generated `ffmpeg`, `ffprobe`, and `ffplay` binaries report FFmpeg 9.0.
+
+### Fixed
+
+- **FFmpeg 9 compatibility** - Fixed the macOS FFmpeg 9 build path: GMP static archives are PIC for nettle, libjxl thread probes link the C++ runtime, FFmpeg's Vulkan ffplay renderer receives its missing context header, and FFmpeg only enables libplacebo when it was built with Vulkan support.
+
+### Known Limitations
+
+- Linux and Windows MSYS2 UCRT64 FFmpeg 9 validation are pending before the stable 2.0 release.
+
 ## [Unreleased]
 
 ### Added
