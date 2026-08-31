@@ -53,6 +53,8 @@ class BuildConfig:
     download_workers: int = 4
     source_archives_dir: str = "third_party/sources"
     allow_network_downloads: bool = False
+    # H1 integrity policy: refuse network downloads that have no sha256.
+    require_sha256_for_network: bool = True
     macos: MacOSConfig = field(default_factory=MacOSConfig)
     linux: LinuxConfig = field(default_factory=LinuxConfig)
     windows: WindowsConfig = field(default_factory=WindowsConfig)
@@ -82,9 +84,7 @@ class BuildConfig:
         # Filter out nested config dicts before passing to constructor
         nested_keys = {"macos", "linux", "windows"}
         build_fields = {item.name for item in fields(cls)}
-        config_data = {
-            k: v for k, v in data.items() if k in build_fields and k not in nested_keys
-        }
+        config_data = {k: v for k, v in data.items() if k in build_fields and k not in nested_keys}
 
         macos_fields = {item.name for item in fields(MacOSConfig)}
         linux_fields = {item.name for item in fields(LinuxConfig)}

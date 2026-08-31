@@ -3,6 +3,7 @@
 # Run: python _gen_components_yaml.py  (re-generates from live Python objects)
 ---
 - name: giflib
+  sha256: be7ffbd057cadebe2aa144542fd90c6838c6a083b5e8a9048b8ee3b66b29d5fb
   version: 5.2.2
   url: https://sf-eu-introserv-1.dl.sourceforge.net/project/giflib/giflib-5.x/giflib-{version}.tar.gz
   category: build_tool
@@ -10,6 +11,7 @@
   system_component: true
   system_tool_name: giflib
 - name: pkg-config
+  sha256: 6fc69c01688c9458a57eb9a1664c9aba372ccda420a02bf4429fe610e7e7d591
   version: 0.29.2
   url: https://pkgconfig.freedesktop.org/releases/pkg-config-{version}.tar.gz
   category: build_tool
@@ -21,6 +23,7 @@
   system_component: true
   system_tool_name: pkg-config
 - name: yasm
+  sha256: 3dce6601b495f5b3d45b59f7d2492a340ee7e84b5beca17e48f862502bd5603f
   version: 1.3.0
   url: https://github.com/yasm/yasm/releases/download/v{version}/yasm-{version}.tar.gz
   category: build_tool
@@ -30,6 +33,7 @@
   system_component: true
   system_tool_name: yasm
 - name: nasm
+  sha256: b7324cbe86e767b65f26f467ed8b12ad80e124e3ccb89076855c98e43a9eddd4
   version: '3.01'
   url: https://www.nasm.us/pub/nasm/releasebuilds/{version}/nasm-{version}.tar.xz
   category: build_tool
@@ -41,6 +45,7 @@
   system_component: true
   system_tool_name: nasm
 - name: zlib
+  sha256: bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16
   version: 1.3.2
   url: https://github.com/madler/zlib/releases/download/v{version}/zlib-{version}.tar.gz
   category: build_tool
@@ -51,6 +56,7 @@
   system_component: true
   system_tool_name: zlib
 - name: m4
+  sha256: 6ac4fc31ce440debe63987c2ebbf9d7b6634e67a7c3279257dc7361de8bdb3ef
   version: 1.4.20
   url: https://ftpmirror.gnu.org/gnu/m4/m4-{version}.tar.gz
   category: build_tool
@@ -60,6 +66,7 @@
   system_component: true
   system_tool_name: m4
 - name: autoconf
+  sha256: afb181a76e1ee72832f6581c0eddf8df032b83e2e0239ef79ebedc4467d92d6e
   version: '2.72'
   url: https://ftpmirror.gnu.org/gnu/autoconf/autoconf-{version}.tar.gz
   category: build_tool
@@ -71,6 +78,7 @@
   system_component: true
   system_tool_name: autoconf
 - name: automake
+  sha256: 63e585246d0fc8772dffdee0724f2f988146d1a3f1c756a3dc5cfbefa3c01915
   version: 1.18.1
   url: https://ftpmirror.gnu.org/gnu/automake/automake-{version}.tar.gz
   category: build_tool
@@ -82,6 +90,7 @@
   system_component: true
   system_tool_name: automake
 - name: libtool
+  sha256: da8ebb2ce4dcf46b90098daf962cffa68f4b4f62ea60f798d0ef12929ede6adf
   version: 2.5.4
   url: https://ftpmirror.gnu.org/libtool/libtool-{version}.tar.gz
   category: build_tool
@@ -93,6 +102,7 @@
   system_component: true
   system_tool_name: libtool
 - name: cmake
+  sha256: 7efaccde8c5a6b2968bad6ce0fe60e19b6e10701a12fce948c2bf79bac8a11e9
   version: 4.2.3
   url: https://github.com/Kitware/CMake/releases/download/v{version}/cmake-{version}.tar.gz
   category: build_tool
@@ -107,6 +117,7 @@
   extra_env:
     CXXFLAGS_EXTRA: -std=c++11
 - name: meson
+  sha256: c105816d8158c76b72adcb9ff60297719096da7d07f6b1f000fd8c013cd387af
   version: 1.8.2
   url: https://github.com/mesonbuild/meson/releases/download/{version}/meson-{version}.tar.gz
   category: build_tool
@@ -117,6 +128,7 @@
   system_tool_name: meson
   custom_build_fn: build_meson
 - name: ninja
+  sha256: 821bdff48a3f683bc4bb3b6f0b5fe7b2d647cf65d52aeb63328c91a6c6df285a
   version: 1.12.1
   url: https://github.com/ninja-build/ninja/archive/refs/tags/v{version}.tar.gz
   category: build_tool
@@ -125,6 +137,7 @@
   system_tool_name: ninja
   custom_build_fn: build_ninja
 - name: gettext
+  sha256: ec1705b1e969b83a9f073144ec806151db88127f5e40fe5a94cb6c8fa48996a0
   version: 0.22.5
   url: https://ftpmirror.gnu.org/gettext/gettext-{version}.tar.gz
   category: crypto
@@ -142,6 +155,7 @@
       extra_env: {}
       extra_cflags: -std=gnu11
 - name: openssl
+  sha256: f68e6e3a19902c0487d684a4122d4127bc649b4f8f51c15324bb36e0e4dc0bfa
   version: 3.6.1
   url: https://github.com/openssl/openssl/archive/refs/tags/openssl-{version}.tar.gz
   category: crypto
@@ -151,6 +165,7 @@
   custom_build_fn: build_openssl
   ffmpeg_configure_flag: --enable-openssl
 - name: gmp
+  sha256: a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898
   version: 6.3.0
   url: https://ftpmirror.gnu.org/gnu/gmp/gmp-{version}.tar.xz
   category: crypto
@@ -161,6 +176,7 @@
   - --enable-static
   non_gpl_only: true
 - name: nettle
+  sha256: fe9ff51cb1f2abb5e65a6b8c10a92da0ab5ab6eaf26e7fc2b675c45f1fb519b5
   version: 3.10.2
   url: https://ftpmirror.gnu.org/gnu/nettle/nettle-{version}.tar.gz
   category: crypto
@@ -176,6 +192,7 @@
   - gmp
   non_gpl_only: true
 - name: gnutls
+  sha256: a7b341421bfd459acf7a374ca4af3b9e06608dcd7bd792b2bf470bea012b8e51
   version: 3.8.12
   url: https://www.gnupg.org/ftp/gcrypt/gnutls/v3.8/gnutls-{version}.tar.xz
   category: crypto
@@ -200,6 +217,7 @@
   - nettle
   non_gpl_only: true
 - name: dav1d
+  sha256: cbe212b02faf8c6eed5b6d55ef8a6e363aaab83f15112e960701a9c3df813686
   version: 1.5.3
   url: https://code.videolan.org/videolan/dav1d/-/archive/{version}/dav1d-{version}.tar.gz
   category: video_codec
@@ -215,6 +233,7 @@
   - ninja
   ffmpeg_configure_flag: --enable-libdav1d
 - name: svtav1
+  sha256: 9c0f9a4327334c40a76d2f39940d8a1b2dd8b1358375a11c4715d516b90a65cb
   version: 4.0.1
   url: https://gitlab.com/AOMediaCodec/SVT-AV1/-/archive/v{version}/SVT-AV1-v{version}.tar.gz
   category: video_codec
@@ -232,6 +251,7 @@
       extra_cflags: -std=gnu11
   ffmpeg_configure_flag: --enable-libsvtav1
 - name: rav1e
+  sha256: 06d1523955fb6ed9cf9992eace772121067cca7e8926988a1ee16492febbe01e
   version: 0.8.1
   url: https://github.com/xiph/rav1e/archive/refs/tags/v{version}.tar.gz
   category: video_codec
@@ -241,6 +261,7 @@
   - rustc
   ffmpeg_configure_flag: --enable-librav1e
 - name: x264
+  sha256: b336cdb04eeca5d15a53db323bc716fd7a1dae7bf19df0a8a41379d2d65e05d0
   version: 0480cb05
   url: https://code.videolan.org/videolan/x264/-/archive/{version}/x264-{version}.tar.gz
   category: video_codec
@@ -250,6 +271,7 @@
   custom_build_fn: build_x264
   ffmpeg_configure_flag: --enable-libx264
 - name: x265
+  sha256: 9dcb845f22fe75a88707781026fe4f9d170675a5a25bb5a0de9cc66f62a0a465
   version: 8be7dbf
   url: https://bitbucket.org/multicoreware/x265_git/get/8be7dbf8159ddfceea4115675a6d48e1611b8baa.tar.gz
   category: video_codec
@@ -259,6 +281,7 @@
   custom_build_fn: build_x265
   ffmpeg_configure_flag: --enable-libx265
 - name: libvpx
+  sha256: 7a479a3c66b9f5d5542a4c6a1b7d3768a983b1e5c14c60a9396edc9b649e015c
   version: 1.16.0
   url: https://github.com/webmproject/libvpx/archive/refs/tags/v{version}.tar.gz
   category: video_codec
@@ -267,6 +290,7 @@
   custom_build_fn: build_libvpx
   ffmpeg_configure_flag: --enable-libvpx
 - name: xvidcore
+  sha256: abbdcbd39555691dd1c9b4d08f0a031376a3b211652c0d8b3b8aa9be1303ce2d
   version: 1.3.7
   url: https://downloads.xvid.com/downloads/xvidcore-{version}.tar.gz
   category: video_codec
@@ -283,6 +307,7 @@
       extra_cflags: -std=gnu11
   ffmpeg_configure_flag: --enable-libxvid
 - name: vid_stab
+  sha256: 9001b6df73933555e56deac19a0f225aae152abbc0e97dc70034814a1943f3d4
   version: 1.1.1
   url: https://github.com/georgmartius/vid.stab/archive/v{version}.tar.gz
   category: video_codec
@@ -296,6 +321,7 @@
   archive_filename: vid.stab-{version}.tar.gz
   ffmpeg_configure_flag: --enable-libvidstab
 - name: av1
+  sha256: 9261c25a49bbfa6cbe0e79dd32bb68ef964a5b552d869b596fea4cbeb1337a99
   version: 3.12.0
   url: https://aomedia.googlesource.com/aom/+archive/refs/tags/v{version}.tar.gz
   category: video_codec
@@ -311,6 +337,7 @@
   workdir: aom_build
   ffmpeg_configure_flag: --enable-libaom
 - name: zimg
+  sha256: be89390f13a5c9b2388ce0f44a5e89364a20c1c57ce46d382b1fcc3967057577
   version: 3.0.6
   url: https://github.com/sekrit-twc/zimg/archive/refs/tags/release-{version}.tar.gz
   category: video_codec
@@ -320,6 +347,7 @@
   custom_build_fn: build_zimg
   ffmpeg_configure_flag: --enable-libzimg
 - name: lv2
+  sha256: 78c51bcf21b54e58bb6329accbb4dae03b2ed79b520f9a01e734bd9de530953f
   version: 1.18.10
   url: https://lv2plug.in/spec/lv2-{version}.tar.xz
   category: audio_codec
@@ -335,6 +363,7 @@
   - ninja
   skip_condition: disable_lv2
 - name: serd
+  sha256: c0133d878b4b1abf5cb4b2ec4501ebf688edcfefb12a602e3cc26d9e6577a01c
   version: 0.32.8
   url: https://gitlab.com/drobilla/serd/-/archive/v{version}/serd-v{version}.tar.gz
   category: audio_codec
@@ -350,6 +379,7 @@
   - ninja
   skip_condition: disable_lv2
 - name: pcre
+  sha256: 4e6ce03e0336e8b4a3d6c2b70b1c5e18590a5673a98186da90d4f33c23defc09
   version: '8.45'
   url: https://altushost-swe.dl.sourceforge.net/project/pcre/pcre/{version}/pcre-{version}.tar.gz
   category: audio_codec
@@ -368,6 +398,7 @@
       extra_env: {}
       extra_cflags: -D_DEFAULT_SOURCE
 - name: zix
+  sha256: 51d70d63e970214db84e32d55377d84090c02145f5768265ab140d117f2b8e24
   version: 0.8.0
   url: https://gitlab.com/drobilla/zix/-/archive/v{version}/zix-v{version}.tar.gz
   category: audio_codec
@@ -383,6 +414,7 @@
   - ninja
   skip_condition: disable_lv2
 - name: sord
+  sha256: 040fb3f369dd49a7717eb28ca0a66766352e25e760729903fc8a01e117122901
   version: 0.16.22
   url: https://gitlab.com/drobilla/sord/-/archive/v{version}/sord-v{version}.tar.gz
   category: audio_codec
@@ -398,6 +430,7 @@
   - ninja
   skip_condition: disable_lv2
 - name: sratom
+  sha256: 4a88bde345370584b279895c2cb8f7f8341d2b31b6ca50e128faea02f02d3e76
   version: 0.6.22
   url: https://gitlab.com/lv2/sratom/-/archive/v{version}/sratom-v{version}.tar.gz
   category: audio_codec
@@ -414,6 +447,7 @@
   - ninja
   skip_condition: disable_lv2
 - name: lilv
+  sha256: 3281f33237385de3efa515e3f6463548bfb8feb358d52961c7d7350094b7d321
   version: 0.26.4
   url: https://gitlab.com/lv2/lilv/-/archive/v{version}/lilv-v{version}.tar.gz
   category: audio_codec
@@ -432,6 +466,7 @@
   ffmpeg_configure_flag: --enable-lv2
   skip_condition: disable_lv2
 - name: opencore
+  sha256: 483eb4061088e2b34b358e47540b5d495a96cd468e361050fae615b1809dc4a1
   version: 0.1.6
   url: https://deac-ams.dl.sourceforge.net/project/opencore-amr/opencore-amr/opencore-amr-{version}.tar.gz
   category: audio_codec
@@ -443,6 +478,7 @@
   archive_filename: opencore-amr-{version}.tar.gz
   ffmpeg_configure_flag: --enable-libopencore_amrnb --enable-libopencore_amrwb
 - name: lame
+  sha256: ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e
   version: '3.100'
   url: https://sourceforge.net/projects/lame/files/lame/{version}/lame-{version}.tar.gz/download?use_mirror=gigenet
   category: audio_codec
@@ -462,6 +498,7 @@
       - --disable-frontend
   ffmpeg_configure_flag: --enable-libmp3lame
 - name: opus
+  sha256: 6ffcb593207be92584df15b32466ed64bbec99109f007c82205f0194572411a1
   version: 1.6.1
   url: https://downloads.xiph.org/releases/opus/opus-{version}.tar.gz
   category: audio_codec
@@ -472,6 +509,7 @@
   - --enable-static
   ffmpeg_configure_flag: --enable-libopus
 - name: libogg
+  sha256: 5c8253428e181840cd20d41f3ca16557a9cc04bad4a3d04cce84808677fa1061
   version: 1.3.6
   url: https://ftp.osuosl.org/pub/xiph/releases/ogg/libogg-{version}.tar.xz
   category: audio_codec
@@ -481,6 +519,7 @@
   - --disable-shared
   - --enable-static
 - name: libvorbis
+  sha256: 0e982409a9c3fc82ee06e08205b1355e5c6aa4c36bca58146ef399621b0ce5ab
   version: 1.3.7
   url: https://ftp.osuosl.org/pub/xiph/releases/vorbis/libvorbis-{version}.tar.gz
   category: audio_codec
@@ -490,6 +529,7 @@
   custom_build_fn: build_libvorbis
   ffmpeg_configure_flag: --enable-libvorbis
 - name: libtheora
+  sha256: 279327339903b544c28a92aeada7d0dcfd0397b59c2f368cc698ac56f515906e
   version: 1.2.0
   url: https://ftp.osuosl.org/pub/xiph/releases/theora/libtheora-{version}.tar.gz
   category: audio_codec
@@ -511,6 +551,7 @@
   - libvorbis
   ffmpeg_configure_flag: --enable-libtheora
 - name: fdk_aac
+  sha256: 829b6b89eef382409cda6857fd82af84fabb63417b08ede9ea7a553f811cb79e
   version: 2.0.3
   url: https://sourceforge.net/projects/opencore-amr/files/fdk-aac/fdk-aac-{version}.tar.gz/download?use_mirror=gigenet
   category: audio_codec
@@ -524,6 +565,7 @@
   archive_filename: fdk-aac-{version}.tar.gz
   ffmpeg_configure_flag: --enable-libfdk-aac
 - name: soxr
+  sha256: b111c15fdc8c029989330ff559184198c161100a59312f5dc19ddeb9b5a15889
   version: 0.1.3
   url: https://sourceforge.net/projects/soxr/files/soxr-{version}-Source.tar.xz/download?use_mirror=gigenet
   category: audio_codec
@@ -539,6 +581,7 @@
   workdir: build
   ffmpeg_configure_flag: --enable-libsoxr
 - name: libtiff
+  sha256: b92017489bdc1db3a4c97191aa4b75366673cb746de0dce5d7a749d5954681ba
   version: 4.7.1
   url: https://download.osgeo.org/libtiff/tiff-{version}.tar.xz
   category: image_codec
@@ -553,6 +596,7 @@
   - --disable-zstd
   - --without-x
 - name: libpng
+  sha256: 4b0abab6d219e95690ebe4db7fc9aa95f4006c83baaa022373c0c8442271283d
   version: 1.6.55
   url: https://sourceforge.net/projects/libpng/files/libpng16/{version}/libpng-{version}.tar.gz
   category: image_codec
@@ -563,6 +607,7 @@
   - --enable-static
   archive_filename: libpng-{version}.tar.gz
 - name: lcms2
+  sha256: ee67be3566f459362c1ee094fde2c159d33fa0390aa4ed5f5af676f9e5004347
   version: '2.18'
   url: https://github.com/mm2/Little-CMS/releases/download/lcms{version}/lcms2-{version}.tar.gz
   category: image_codec
@@ -572,6 +617,7 @@
   - --disable-shared
   - --enable-static
 - name: libjxl
+  sha256: ab38928f7f6248e2a98cc184956021acb927b16a0dee71b4d260dc040a4320ea
   version: 0.11.2
   url: https://github.com/libjxl/libjxl/archive/refs/tags/v{version}.tar.gz
   category: image_codec
@@ -581,6 +627,7 @@
   ffmpeg_configure_flag: --enable-libjxl
   extra_libs: -llcms2
 - name: libwebp
+  sha256: e4ab7009bf0629fd11982d4c2aa83964cf244cffba7347ecd39019a9e38c4564
   version: 1.6.0
   url: https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-{version}.tar.gz
   category: image_codec
@@ -605,6 +652,7 @@
   workdir: build
   ffmpeg_configure_flag: --enable-libwebp
 - name: libsdl
+  sha256: ac356ea55e8b9dd0b2d1fa27da40ef7e238267ccf9324704850d5d47375b48ea
   version: 2.30.12
   url: https://github.com/libsdl-org/SDL/releases/download/release-{version}/SDL2-{version}.tar.gz
   category: other_lib
@@ -614,6 +662,7 @@
   - --disable-shared
   - --enable-static
 - name: FreeType2
+  sha256: 4b62dcab4c920a1a860369933221814362e699e26f55792516d671e6ff55b5e1
   version: 2.14.2
   url: https://downloads.sourceforge.net/freetype/freetype-{version}.tar.xz
   category: other_lib
@@ -624,12 +673,14 @@
   - --enable-static
   ffmpeg_configure_flag: --enable-libfreetype
 - name: VapourSynth
+  sha256: 1bb8ffe31348eaf46d8f541b138f0136d10edaef0c130c1e5a13aa4a4b057280
   version: '73'
   url: https://github.com/vapoursynth/vapoursynth/archive/R{version}.tar.gz
   category: other_lib
   build_system: headers_only
   ffmpeg_configure_flag: --enable-vapoursynth
 - name: libvmaf
+  sha256: 7178c4833639e6b989ecae73131d02f70735fdb3fc2c7d84bc36c9c3461d93b1
   version: 3.0.0
   url: https://github.com/Netflix/vmaf/archive/refs/tags/v{version}.tar.gz
   category: other_lib
@@ -643,6 +694,7 @@
   custom_build_fn: build_libvmaf
   ffmpeg_configure_flag: --enable-libvmaf
 - name: srt
+  sha256: d0a8b600fe1b4eaaf6277530e3cfc8f15b8ce4035f16af4a5eb5d4b123640cdd
   version: 1.5.4
   url: https://github.com/Haivision/srt/archive/v{version}.tar.gz
   category: other_lib
@@ -652,6 +704,7 @@
   custom_build_fn: build_srt
   ffmpeg_configure_flag: --enable-libsrt
 - name: libzmq
+  sha256: 6653ef5910f17954861fe72332e68b03ca6e4d9c7160eb3a8de5a5a913bfab43
   version: 4.3.5
   url: https://github.com/zeromq/libzmq/releases/download/v{version}/zeromq-{version}.tar.gz
   category: other_lib
@@ -659,6 +712,7 @@
   custom_build_fn: build_libzmq
   ffmpeg_configure_flag: --enable-libzmq
 - name: vulkan-headers
+  sha256: d73bc5036b6556b741f6985ff600ca720308c5f2850e4a43ceb498bd3de069e7
   version: 1.4.341.0
   url: https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/vulkan-sdk-{version}.tar.gz
   category: hw_accel
@@ -669,6 +723,7 @@
   workdir: build
   ffmpeg_configure_flag: --enable-vulkan
 - name: glslang
+  sha256: 01985335785c97906a91afe3cb5ee015997696181ec6c125bab5555602ba08e2
   version: 16.2.0
   url: https://github.com/KhronosGroup/glslang/archive/refs/tags/{version}.tar.gz
   category: hw_accel
@@ -678,6 +733,7 @@
   custom_build_fn: build_glslang
   ffmpeg_configure_flag: --enable-libglslang
 - name: fast-float
+  sha256: 4458aae4b0eb55717968edda42987cabf5f7fc737aee8fede87a70035dba9ab0
   version: 6.1.6
   url: https://github.com/fastfloat/fast_float/archive/refs/tags/v{version}.tar.gz
   category: hw_accel
@@ -685,6 +741,7 @@
   archive_filename: fast_float-{version}.tar.gz
   archive_dirname: fast_float-{version}
 - name: libplacebo
+  sha256: d05fdf90bea2f629eaa2d115e909fd356388ac639e54f77b87a018a6d76224bd
   version: 7.360.1
   url: https://github.com/haasn/libplacebo/archive/refs/tags/v{version}.tar.gz
   category: hw_accel
@@ -708,6 +765,7 @@
   custom_build_fn: build_libplacebo
   ffmpeg_configure_flag: --enable-libplacebo
 - name: nv-codec
+  sha256: 13da39edb3a40ed9713ae390ca89faa2f1202c9dda869ef306a8d4383e242bee
   version: 13.0.19.0
   url: https://github.com/FFmpeg/nv-codec-headers/releases/download/n{version}/nv-codec-headers-{version}.tar.gz
   category: hw_accel
@@ -719,6 +777,7 @@
   linux_only: true
   windows_ucrt64_supported: true
 - name: amf
+  sha256: bf80ee4a77a731c5a2351b4dd74f524a18806a70099ba66a8058d91aac1150b5
   version: 1.5.0
   url: https://github.com/GPUOpen-LibrariesAndSDKs/AMF/archive/refs/tags/v{version}.tar.gz
   category: hw_accel
@@ -728,6 +787,7 @@
   archive_dirname: AMF-{version}
   ffmpeg_configure_flag: --enable-amf
 - name: opencl-headers
+  sha256: 98f0a3ea26b4aec051e533cb1750db2998ab8e82eda97269ed6efe66ec94a240
   version: 2025.07.22
   url: https://github.com/KhronosGroup/OpenCL-Headers/archive/refs/tags/v{version}.tar.gz
   category: hw_accel
@@ -739,6 +799,7 @@
   archive_filename: OpenCL-Headers-{version}.tar.gz
   workdir: build
 - name: opencl-icd-loader
+  sha256: dff7a0b11ad5b63a669358e3476e3dc889a4a361674e5b69b267b944d0794142
   version: 2025.07.22
   url: https://github.com/KhronosGroup/OpenCL-ICD-Loader/archive/refs/tags/v{version}.tar.gz
   category: hw_accel
@@ -756,6 +817,7 @@
   workdir: build
   ffmpeg_configure_flag: --enable-opencl
 - name: onevpl
+  sha256: 4de3e2faf1e8307fb282e4a43f443191810f6a6b0a484fffa7995ba1c814c6ec
   version: 2.17.0
   url: https://github.com/intel/libvpl/archive/refs/tags/v{version}.tar.gz
   category: hw_accel
@@ -771,6 +833,7 @@
   system_tool_name: vpl
   ffmpeg_configure_flag: --enable-libvpl
 - name: ffmpeg
+  sha256: dd308201bb1239a1b73185f80c6b4121f4efdfa424a009ce544fd00bf736bb2e
   version: '8.1'
   url: https://github.com/FFmpeg/FFmpeg/archive/refs/tags/n{version}.tar.gz
   category: target

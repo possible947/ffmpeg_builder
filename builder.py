@@ -83,6 +83,7 @@ class FFmpegBuilder:
             source_archives_dir=self.source_archives,
             allow_network_downloads=config.allow_network_downloads,
             on_log=on_log,
+            require_sha256_for_network=config.require_sha256_for_network,
         )
         self.on_download_status = on_download_status
         self.on_log = on_log

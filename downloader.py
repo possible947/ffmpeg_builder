@@ -22,6 +22,7 @@ class Downloader:
         source_archives_dir: Optional[Path] = None,
         allow_network_downloads: bool = False,
         on_log: Optional[Callable[[str], None]] = None,
+        require_sha256_for_network: bool = True,
     ):
         """Initialize downloader.
 
@@ -31,6 +32,11 @@ class Downloader:
             allow_network_downloads: Whether network fallback is allowed when
                 the archive is not found in local storage.
             on_log: Optional log callback.
+            require_sha256_for_network: When True (default), refuse to fetch an
+                archive over the network unless a sha256 is supplied, so an
+                unverified (corrupt or tampered) download can never be used.
+                Archives already present in local storage are still accepted
+                without a checksum (they are trusted local files).
         """
         self.packages_dir = packages_dir
         self.packages_dir.mkdir(parents=True, exist_ok=True)
@@ -39,6 +45,7 @@ class Downloader:
             self.source_archives_dir.mkdir(parents=True, exist_ok=True)
         self.allow_network_downloads = allow_network_downloads
         self.on_log = on_log
+        self.require_sha256_for_network = require_sha256_for_network
         self._locks: Dict[str, threading.Lock] = {}
         self._locks_guard = threading.Lock()
 
@@ -77,7 +84,9 @@ class Downloader:
             Path to downloaded file.
 
         Raises:
-            RuntimeError: If download fails after all retries.
+            RuntimeError: If download fails after all retries, or if a network
+                fetch is required but no sha256 was supplied while
+                ``require_sha256_for_network`` is enabled.
         """
         if filename is None:
             filename = url.split("/")[-1].split("?")[0]
@@ -88,9 +97,11 @@ class Downloader:
 
         with lock:
             if target_path.exists() and target_path.stat().st_size > 0:
+                self._warn_if_unverified_local(target_path, expected_sha256)
                 self._verify_sha256(target_path, expected_sha256)
                 return target_path
             if source_path is not None and source_path.exists() and source_path.stat().st_size > 0:
+                self._warn_if_unverified_local(source_path, expected_sha256)
                 self._verify_sha256(source_path, expected_sha256)
                 return source_path
 
@@ -99,6 +110,17 @@ class Downloader:
                 raise RuntimeError(
                     f"Archive {filename} is missing in local source storage ({location}). "
                     "Populate third_party/sources or set allow_network_downloads=true."
+                )
+
+            # H1 integrity policy: never fetch an unverified archive from the
+            # network. A missing/empty sha256 means corruption or tampering
+            # would go undetected, so fail fast instead of downloading.
+            if self.require_sha256_for_network and not (expected_sha256 or "").strip():
+                raise RuntimeError(
+                    f"Refusing to download {filename} over the network without a sha256 "
+                    "checksum. Add a 'sha256' entry for this component in components.yaml "
+                    "(or place the archive in the local source mirror), or explicitly set "
+                    "require_sha256_for_network=false to allow unverified downloads."
                 )
 
             destination_path = source_path or target_path
@@ -242,6 +264,21 @@ class Downloader:
                 hasher.update(chunk)
         return hasher.hexdigest()
 
+    def _warn_if_unverified_local(self, path: Path, expected_sha256: Optional[str]) -> None:
+        """Log a warning when a locally-stored archive is used without a checksum.
+
+        Local mirror archives are trusted (they were placed there deliberately),
+        so a missing sha256 is not fatal — but it means integrity is not being
+        verified, which is worth surfacing for production builds.
+        """
+        if (expected_sha256 or "").strip():
+            return
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "Using local archive %s without sha256 verification.", path.name
+        )
+
     def _verify_sha256(
         self,
         path: Path,
@@ -264,9 +301,7 @@ class Downloader:
                 path.unlink()
             except OSError:
                 pass
-        raise RuntimeError(
-            f"SHA256 mismatch for {path.name}: expected {normalized}, got {actual}"
-        )
+        raise RuntimeError(f"SHA256 mismatch for {path.name}: expected {normalized}, got {actual}")
 
 
 class AsyncDownloadManager:
