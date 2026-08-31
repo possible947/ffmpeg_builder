@@ -125,7 +125,9 @@ def _read_runtime_dependencies(builder: "FFmpegBuilder", binary_path: Path) -> L
 
 
 def _read_windows_dependencies(builder: "FFmpegBuilder", binary_path: Path) -> List[str]:
-    result = builder.executor.execute(["objdump", "-p", str(binary_path)], env=builder.get_build_env())
+    result = builder.executor.execute(
+        ["objdump", "-p", str(binary_path)], env=builder.get_build_env()
+    )
     if not result.success:
         raise BuildError(
             "release",
@@ -173,7 +175,9 @@ def _read_linux_dependencies(builder: "FFmpegBuilder", binary_path: Path) -> Lis
 
 
 def _read_macos_dependencies(builder: "FFmpegBuilder", binary_path: Path) -> List[str]:
-    result = builder.executor.execute(["otool", "-L", str(binary_path)], env=builder.get_build_env())
+    result = builder.executor.execute(
+        ["otool", "-L", str(binary_path)], env=builder.get_build_env()
+    )
     if not result.success:
         raise BuildError(
             "release",
@@ -282,7 +286,9 @@ def _is_system_runtime_library(builder: "FFmpegBuilder", lib_path: Path) -> bool
         return _is_under(path, windir)
 
     if builder.platform == "linux":
-        return any(_is_under(path, Path(prefix)) for prefix in ("/lib", "/lib64", "/usr/lib", "/usr/lib64"))
+        return any(
+            _is_under(path, Path(prefix)) for prefix in ("/lib", "/lib64", "/usr/lib", "/usr/lib64")
+        )
 
     if builder.platform == "darwin":
         return _is_under(path, Path("/usr/lib")) or _is_under(path, Path("/System/Library"))

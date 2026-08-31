@@ -291,7 +291,9 @@ def test_build_libplacebo_merges_windows_pkg_config_path_and_patches_glslang(
 
     captured_env = {}
 
-    def _run_step(self, component, status, detail, error_msg, command, step_name, work_dir, env, stdin=None):
+    def _run_step(
+        self, component, status, detail, error_msg, command, step_name, work_dir, env, stdin=None
+    ):
         if step_name == "configure":
             captured_env["value"] = dict(env)
         return object(), tmp_path / f"{step_name}.log"
@@ -308,9 +310,7 @@ def test_build_libplacebo_merges_windows_pkg_config_path_and_patches_glslang(
         + ";"
         + str(tmp_path / "workspace" / "lib64" / "pkgconfig").replace("\\", "/")
     )
-    assert env["PKG_CONFIG_PATH"].startswith(
-        expected_prefix
-    )
+    assert env["PKG_CONFIG_PATH"].startswith(expected_prefix)
     assert "C:/deps/pkgconfig" in env["PKG_CONFIG_PATH"]
     assert "dirs: vulkan_lib_dirs" in glsl_meson.read_text(encoding="utf-8")
 
