@@ -5,6 +5,7 @@ import platform
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -167,7 +168,7 @@ class PlatformInfo:
 class PlatformDetector:
     """Detects platform and system information."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize platform detector."""
         self.system_info = SystemInfo()
         self.platform_info = PlatformInfo()
@@ -357,6 +358,8 @@ class PlatformDetector:
 
     def _get_windows_ram_gb(self) -> float:
         """Read total RAM on Windows using GlobalMemoryStatusEx."""
+        if sys.platform != "win32":
+            return 0.0
         try:
             import ctypes
 
@@ -376,7 +379,7 @@ class PlatformDetector:
             status = MEMORYSTATUSEX()
             status.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
             ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status))
-            return status.ullTotalPhys / (1024**3)
+            return float(status.ullTotalPhys) / (1024**3)
         except Exception:
             return 0.0
 
@@ -758,9 +761,15 @@ class PlatformDetector:
         # Check for Intel GPU via vainfo
         if shutil.which("vainfo"):
             try:
-                result = subprocess.run(["vainfo"], capture_output=True, text=True, timeout=5)
+                vainfo_result = subprocess.run(
+                    ["vainfo"], capture_output=True, text=True, timeout=5
+                )
                 # Check for Intel driver (iHD or i965)
-                if "Intel" in result.stdout or "iHD" in result.stdout or "i965" in result.stdout:
+                if (
+                    "Intel" in vainfo_result.stdout
+                    or "iHD" in vainfo_result.stdout
+                    or "i965" in vainfo_result.stdout
+                ):
                     return True
             except Exception:
                 pass

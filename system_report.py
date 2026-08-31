@@ -207,16 +207,24 @@ class SystemReport:
             if self.platform_info.macports_clang and self.platform_info.macports_clang.available:
                 return {
                     "compiler": "Macports Clang",
-                    "version": self.platform_info.macports_clang.version,
-                    "path": self.platform_info.macports_clang.path,
+                    "version": self.platform_info.macports_clang.version or "Unknown",
+                    "path": self.platform_info.macports_clang.path or "Unknown",
                 }
             elif self.tools.get("clang++", ToolInfo(name="clang++")).available:
                 clang = self.tools["clang++"]
-                return {"compiler": "System Clang", "version": clang.version, "path": clang.path}
+                return {
+                    "compiler": "System Clang",
+                    "version": clang.version or "Unknown",
+                    "path": clang.path or "Unknown",
+                }
         elif self.platform_info.is_linux or self.platform_info.is_windows:
             if self.tools.get("g++", ToolInfo(name="g++")).available:
                 gcc = self.tools["g++"]
-                return {"compiler": "GCC", "version": gcc.version, "path": gcc.path}
+                return {
+                    "compiler": "GCC",
+                    "version": gcc.version or "Unknown",
+                    "path": gcc.path or "Unknown",
+                }
 
         return {"compiler": "Unknown", "version": "Unknown", "path": "Unknown"}
 

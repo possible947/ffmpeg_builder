@@ -215,7 +215,9 @@ class ComponentRegistry:
             archive_dirname=data.get("archive_dirname"),
             sha256=data.get("sha256"),
             workdir=data.get("workdir"),
-            platform_overrides=cls._platform_overrides_from_dict(data.get("platform_overrides")),
+            platform_overrides=cls._platform_overrides_from_dict(
+                data.get("platform_overrides") or {}
+            ),
             extra_env=dict(data.get("extra_env") or {}),
             post_install=data.get("post_install") or None,
             custom_build_fn=data.get("custom_build_fn"),

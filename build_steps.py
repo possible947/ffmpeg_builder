@@ -1,19 +1,19 @@
 """Shared build-step execution helpers."""
 
 from pathlib import Path
-from typing import Dict, Optional, Protocol, Tuple, Union
+from typing import Dict, Optional, Protocol, Tuple
 
 from .build_types import BuildError
 from .components import Component
-from .executor import ExecutionResult
-from .state import ComponentStatus
+from .executor import CommandExecutor, ExecutionResult
+from .state import ComponentStatus, StateManager
 
 
 class BuildStepContext(Protocol):
     """Minimal builder surface required by shared build-step helpers."""
 
-    executor: object
-    state_manager: object
+    executor: CommandExecutor
+    state_manager: StateManager
 
 
 def run_step(
@@ -47,7 +47,7 @@ def run_make(
     detail: str,
     error_msg: str,
     work_dir: Path,
-    jobs: Union[str, int],
+    jobs: int,
     env: Dict[str, str],
     timeout: Optional[int] = None,
 ) -> Tuple[ExecutionResult, Path]:

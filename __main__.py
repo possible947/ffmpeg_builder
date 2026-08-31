@@ -11,7 +11,7 @@ from .app import FFmpegBuilderApp
 PROJECT_ROOT = Path(__file__).resolve().parent
 
 
-def main():
+def main() -> None:
     """Main entry point."""
     workspace = PROJECT_ROOT / "workspace"
     workspace.mkdir(exist_ok=True)

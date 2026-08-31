@@ -7,9 +7,11 @@ import shlex
 import shutil
 import stat
 import subprocess
+import sys
 import tarfile
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple, Union
+from types import TracebackType
+from typing import Any, Callable, Dict, List, Optional, Tuple, Type
 
 from .build_steps import run_install, run_make, run_step
 from .build_types import BuildError, SkipComponent
@@ -38,7 +40,11 @@ def _rmtree(path: Path) -> None:
     [WinError 5] on Windows without an onerror handler.
     """
 
-    def _on_error(func, fpath, exc_info):
+    def _on_error(
+        func: Callable[..., Any],
+        fpath: str,
+        exc_info: Tuple[Type[BaseException], BaseException, TracebackType],
+    ) -> None:
         # Clear the read-only bit and retry.
         try:
             os.chmod(fpath, stat.S_IWRITE)
@@ -172,7 +178,7 @@ class FFmpegBuilder:
         detail: str,
         error_msg: str,
         work_dir: Path,
-        jobs: Union[str, int],
+        jobs: int,
         env: Dict[str, str],
         timeout: Optional[int] = None,
     ) -> Tuple[ExecutionResult, Path]:
@@ -304,17 +310,18 @@ class FFmpegBuilder:
         if " " not in normalized:
             return normalized
 
-        try:
-            import ctypes
+        if sys.platform == "win32":
+            try:
+                import ctypes
 
-            buffer = ctypes.create_unicode_buffer(32768)
-            result = ctypes.windll.kernel32.GetShortPathNameW(native, buffer, len(buffer))
-            if result:
-                short_path = buffer.value.replace("\\", "/")
-                if short_path:
-                    return short_path
-        except Exception:
-            pass
+                buffer = ctypes.create_unicode_buffer(32768)
+                result = ctypes.windll.kernel32.GetShortPathNameW(native, buffer, len(buffer))
+                if result:
+                    short_path = buffer.value.replace("\\", "/")
+                    if short_path:
+                        return short_path
+            except Exception:
+                pass
 
         return normalized.replace(" ", "\\ ")
 
@@ -591,10 +598,9 @@ class FFmpegBuilder:
         # this as a second, independent Vulkan "environment" alongside the
         # system loader/driver install.
         vulkan_info = self.platform_detector.platform_info
-        if getattr(vulkan_info, "vulkan_sdk_available", False) and getattr(
-            vulkan_info, "vulkan_sdk_path", None
-        ):
-            sdk_root = Path(vulkan_info.vulkan_sdk_path)
+        vulkan_sdk_path = getattr(vulkan_info, "vulkan_sdk_path", None)
+        if getattr(vulkan_info, "vulkan_sdk_available", False) and vulkan_sdk_path:
+            sdk_root = Path(vulkan_sdk_path)
             sdk_include = sdk_root / "include"
             sdk_lib = sdk_root / "lib"
             sdk_bin = sdk_root / "bin"

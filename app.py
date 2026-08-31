@@ -2,7 +2,8 @@
 
 import os
 from pathlib import Path
-from typing import List, Optional
+from types import TracebackType
+from typing import Any, Callable, List, Optional, Tuple, Type
 
 from rich.console import Console
 from rich.live import Live
@@ -290,7 +291,11 @@ class FFmpegBuilderApp:
         import stat
 
         def _rmtree(path: Path) -> None:
-            def _on_error(func, fpath, exc_info):
+            def _on_error(
+                func: Callable[..., Any],
+                fpath: str,
+                exc_info: Tuple[Type[BaseException], BaseException, TracebackType],
+            ) -> None:
                 try:
                     os.chmod(fpath, stat.S_IWRITE)
                     func(fpath)

@@ -4,6 +4,7 @@ import hashlib
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
+from functools import partial
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
@@ -379,12 +380,11 @@ class AsyncDownloadManager:
                 self.on_status(component_name, "downloading")
             if self.on_log is not None:
                 self.on_log(f"Queued download for {component_name}")
-            future.add_done_callback(
-                lambda done, name=component_name: self._download_done(name, done)
-            )
+            future.add_done_callback(partial(self._download_done, component_name))
 
     def _make_progress_cb(self, component_name: str) -> Optional[ProgressCB]:
-        if self.on_progress is None:
+        on_progress = self.on_progress
+        if on_progress is None:
             return None
 
         last_emit = [0.0]
@@ -398,7 +398,7 @@ class AsyncDownloadManager:
                 return
             last_emit[0] = now
             try:
-                self.on_progress(component_name, downloaded, total)
+                on_progress(component_name, downloaded, total)
             except Exception:
                 pass
 
@@ -436,7 +436,7 @@ class AsyncDownloadManager:
         Returns:
             Path to downloaded archive.
         """
-        filename = component.get_archive_filename()
+        filename: str = component.get_archive_filename()
         with self._lock:
             event = self._events.get(filename)
 
