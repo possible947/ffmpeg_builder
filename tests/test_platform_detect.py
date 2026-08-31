@@ -273,6 +273,34 @@ class TestOpenclClinfoProbe:
         assert str(clinfo_path) in d.platform_info.opencl_runtime_reason
 
 
+class TestNumJobs:
+    """get_num_jobs(): valid values pass through, invalid ones fall back."""
+
+    def _detector_with_cores(self, cores):
+        d = PlatformDetector()
+        d.system_info.cpu_cores = cores
+        return d
+
+    def test_auto_uses_core_count(self):
+        assert self._detector_with_cores(16).get_num_jobs("auto") == 16
+
+    def test_valid_number_passes_through(self):
+        assert self._detector_with_cores(16).get_num_jobs("4") == 4
+
+    def test_invalid_string_falls_back_to_cores(self):
+        assert self._detector_with_cores(16).get_num_jobs("abc") == 16
+
+    def test_zero_falls_back_to_cores(self):
+        # -j0 means unlimited parallelism in make; must never be returned.
+        assert self._detector_with_cores(16).get_num_jobs("0") == 16
+
+    def test_negative_falls_back_to_cores(self):
+        assert self._detector_with_cores(16).get_num_jobs("-2") == 16
+
+    def test_zero_cores_falls_back_to_four(self):
+        assert self._detector_with_cores(0).get_num_jobs("auto") == 4
+
+
 class TestCudaComputeCapability:
     """_detect_cuda_compute_capability(): numeric min across mixed GPUs."""
 

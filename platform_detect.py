@@ -1285,9 +1285,17 @@ class PlatformDetector:
             config_num_jobs: Configuration value ("auto" or number).
 
         Returns:
-            Number of jobs.
+            Number of jobs, always >= 1. Invalid or non-positive values
+            (e.g. a hand-edited build_config.yaml) fall back to the
+            auto-detected core count instead of crashing the build with
+            a ValueError or producing `make -j0` (unlimited).
         """
-        if config_num_jobs != "auto":
-            return int(config_num_jobs)
+        if config_num_jobs is not None and str(config_num_jobs).strip().lower() != "auto":
+            try:
+                requested = int(str(config_num_jobs).strip())
+            except ValueError:
+                requested = 0
+            if requested >= 1:
+                return requested
 
-        return self.system_info.cpu_cores or 4
+        return max(1, self.system_info.cpu_cores or 4)

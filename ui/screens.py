@@ -42,6 +42,22 @@ _DASHBOARD_KEYS: List[tuple] = [
 ]
 
 
+def _parse_positive_int(raw: str) -> Optional[int]:
+    """Parse raw input as a positive integer.
+
+    Args:
+        raw: User input string.
+
+    Returns:
+        The integer value if raw is a valid positive integer, else None.
+    """
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+    return value if value >= 1 else None
+
+
 class UIScreen:
     """Base UI screen."""
 
@@ -405,13 +421,30 @@ class ConfigScreen(UIScreen):
             default=config.enable_libplacebo_vulkan,
         )
         config.disable_lv2 = Confirm.ask("Disable LV2 libraries?", default=config.disable_lv2)
-        jobs = Prompt.ask("Number of parallel jobs", default=str(config.num_jobs))
-        config.num_jobs = jobs
+        while True:
+            jobs = Prompt.ask("Number of parallel jobs", default=str(config.num_jobs))
+            if jobs.strip().lower() == "auto":
+                config.num_jobs = "auto"
+                break
+            parsed_jobs = _parse_positive_int(jobs)
+            if parsed_jobs is None:
+                self.console.print(
+                    f"[red]'{jobs}' is not valid: use a positive integer or 'auto'.[/red]"
+                )
+                continue
+            config.num_jobs = str(parsed_jobs)
+            break
         config.async_downloads = Confirm.ask(
             "Enable async source downloads?", default=config.async_downloads
         )
-        workers = Prompt.ask("Number of download workers", default=str(config.download_workers))
-        config.download_workers = int(workers)
+        while True:
+            workers = Prompt.ask("Number of download workers", default=str(config.download_workers))
+            parsed_workers = _parse_positive_int(workers)
+            if parsed_workers is None:
+                self.console.print(f"[red]'{workers}' is not a valid positive integer.[/red]")
+                continue
+            config.download_workers = parsed_workers
+            break
 
         self.console.print()
         self.console.print("[green]Configuration updated.[/green]")
