@@ -295,6 +295,27 @@ class FFmpegBuilder:
                 f"({context}). The component version may have changed.",
             )
 
+    def _patch_ffmpeg_9_vulkan_renderer(self, component: Component, source_dir: Path) -> None:
+        """Add the Vulkan context API include required by FFmpeg 9 ffplay."""
+        if component.version != "9.0":
+            return
+
+        renderer = source_dir / "fftools" / "ffplay_renderer.c"
+        include = '#include "libavutil/hwcontext_vulkan.h"'
+        anchor = '#include "libavutil/internal.h"'
+        content = renderer.read_text(encoding="utf-8")
+        if include not in content and anchor in content:
+            renderer.write_text(
+                content.replace(anchor, f"{anchor}\n{include}", 1), encoding="utf-8"
+            )
+
+        self._assert_patch_present(
+            component,
+            renderer,
+            include,
+            "FFmpeg 9 ffplay Vulkan context declarations",
+        )
+
     def _normalize_windows_path_for_flags(self, path: str) -> str:
         """Normalize Windows path for shell-expanded build flags.
 
@@ -2730,6 +2751,7 @@ class FFmpegBuilder:
             component: Component to build.
             source_dir: Source directory.
         """
+        self._patch_ffmpeg_9_vulkan_renderer(component, source_dir)
         env = self.get_build_env(component)
 
         built_components = [
@@ -2745,6 +2767,7 @@ class FFmpegBuilder:
 
         extra_libs = self.extralibs
         extra_ldflags = self.ldflags
+        placebo_vulkan = False
 
         # Add libraries conditionally based on built components
         if "libvmaf" in built_components:
@@ -2795,6 +2818,8 @@ class FFmpegBuilder:
             self.platform_detector.platform_info,
             self.config.ffmpeg_version,
         )
+        if "libplacebo" in built_components and not placebo_vulkan:
+            configure_flags = [flag for flag in configure_flags if flag != "--enable-libplacebo"]
 
         configure_args = [
             "--disable-debug",

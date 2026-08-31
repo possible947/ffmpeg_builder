@@ -425,6 +425,36 @@ def test_build_ffmpeg_links_libjxl_threads_with_darwin_cxx_runtime(
     assert "-lc++" in extra_libs
 
 
+def test_build_ffmpeg_omits_libplacebo_without_vulkan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    builder = _make_libplacebo_builder(tmp_path, platform="darwin")
+    builder.config.enable_libplacebo_vulkan = False
+    component = _make_patch_component("ffmpeg")
+    source_dir = tmp_path / "ffmpeg"
+    builder.state_manager.mark_component_status("libplacebo", ComponentStatus.COMPLETED)
+    builder.registry.get_ffmpeg_configure_flags = lambda *args: [
+        "--enable-vulkan",
+        "--enable-libplacebo",
+    ]
+    monkeypatch.setattr(FFmpegBuilder, "_run_make", lambda *args: None)
+    monkeypatch.setattr(FFmpegBuilder, "_run_install", lambda *args: None)
+    monkeypatch.setattr(FFmpegBuilder, "_patch_libplacebo_pc", lambda self: None)
+
+    commands = []
+
+    def _run_step(self, component, status, detail, error_msg, command, *args):
+        commands.append(command)
+        return None
+
+    monkeypatch.setattr(FFmpegBuilder, "_run_step", _run_step)
+
+    builder.build_ffmpeg(component, source_dir)
+
+    assert "--enable-vulkan" in commands[0]
+    assert "--enable-libplacebo" not in commands[0]
+
+
 def test_build_libplacebo_merges_windows_pkg_config_path_and_patches_glslang(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -544,6 +574,31 @@ class TestSourcePatchAssertions:
         f.write_text("#include <string>\n", encoding="utf-8")
         with pytest.raises(BuildError, match="version may have changed"):
             builder._assert_patch_present(_make_patch_component(), f, "#include <cstdint>", "ctx")
+
+    def test_patch_ffmpeg_9_vulkan_renderer_adds_context_include(self, tmp_path):
+        builder = _make_libplacebo_builder(tmp_path)
+        component = _make_patch_component("ffmpeg")
+        component.version = "9.0"
+        renderer = tmp_path / "fftools" / "ffplay_renderer.c"
+        renderer.parent.mkdir()
+        renderer.write_text('#include "libavutil/internal.h"\n', encoding="utf-8")
+
+        builder._patch_ffmpeg_9_vulkan_renderer(component, tmp_path)
+
+        assert renderer.read_text(encoding="utf-8") == (
+            '#include "libavutil/internal.h"\n' '#include "libavutil/hwcontext_vulkan.h"\n'
+        )
+
+    def test_patch_ffmpeg_9_vulkan_renderer_fails_when_anchor_is_missing(self, tmp_path):
+        builder = _make_libplacebo_builder(tmp_path)
+        component = _make_patch_component("ffmpeg")
+        component.version = "9.0"
+        renderer = tmp_path / "fftools" / "ffplay_renderer.c"
+        renderer.parent.mkdir()
+        renderer.write_text('#include "libavutil/mem.h"\n', encoding="utf-8")
+
+        with pytest.raises(BuildError, match="version may have changed"):
+            builder._patch_ffmpeg_9_vulkan_renderer(component, tmp_path)
 
     def test_build_x265_fails_when_json11_anchor_missing(self, tmp_path):
         # json11.cpp without the `#include <limits>` anchor and without

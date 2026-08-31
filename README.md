@@ -444,7 +444,7 @@ Windows phase-3 policy:
 - `enable_libplacebo_vulkan: true` in `build_config.yaml` enables Vulkan GPU acceleration inside libplacebo; software features (tone mapping, colour space conversion, scaling) are always available regardless
 - Disabled when `full_static: true` on Linux (system `libvulkan.so` cannot be bundled statically); on macOS `libvulkan.dylib` is linked normally
 - On macOS with Vulkan enabled, `LIBRARY_PATH` and `PKG_CONFIG_PATH` are extended with LunarG SDK paths (`/usr/local/lib`, `/usr/local/lib/pkgconfig`)
-- Adds `--enable-libplacebo` to FFmpeg configure; exposes the `libplacebo` filter (`N->V`)
+- Enables FFmpeg's `libplacebo` filter (`N->V`) only when `enable_libplacebo_vulkan: true`; a software-only libplacebo build remains available for other consumers
 - Built with: `-Dopengl=disabled -Dd3d11=disabled -Dshaderc=disabled -Dlibdovi=disabled -Dlcms=disabled`
 - Requires Python `jinja2` for GLSL preprocessing; installed with project dependencies (`pip install -e .`) or via distro package `python3-jinja2`
 - Requires `mingw-w64-ucrt-x86_64-python-jinja` on MSYS2 UCRT64 (GLSL preprocessor); installed by the bootstrap script automatically
