@@ -418,7 +418,9 @@ def test_build_ffmpeg_links_libjxl_threads_with_darwin_cxx_runtime(
     builder.build_ffmpeg(component, source_dir)
 
     configure_command = commands[0]
-    extra_libs = next(argument for argument in configure_command if argument.startswith("--extra-libs="))
+    extra_libs = next(
+        argument for argument in configure_command if argument.startswith("--extra-libs=")
+    )
     assert "-llcms2" in extra_libs
     assert "-lc++" in extra_libs
 
