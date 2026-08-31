@@ -11,7 +11,7 @@ from ffmpeg_builder.components import BuildSystem, Component, ComponentCategory
 from ffmpeg_builder.config import BuildConfig
 from ffmpeg_builder.component_builders import get_custom_builder
 from ffmpeg_builder.release_bundle import make_release_bundle
-from ffmpeg_builder.state import StateManager
+from ffmpeg_builder.state import ComponentStatus, StateManager
 
 
 def test_builder_module_reexports_shared_exceptions():
@@ -394,6 +394,33 @@ def test_build_cargo_installs_pinned_cargo_c(tmp_path: Path, monkeypatch: pytest
 
     assert commands[0] == ["cargo", "install", "cargo-c", "--version", CARGO_C_VERSION]
     assert commands[1][:2] == ["cargo", "cinstall"]
+
+
+def test_build_ffmpeg_links_libjxl_threads_with_darwin_cxx_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    builder = _make_libplacebo_builder(tmp_path, platform="darwin")
+    component = _make_patch_component("ffmpeg")
+    source_dir = tmp_path / "ffmpeg"
+    builder.state_manager.mark_component_status("libjxl", ComponentStatus.COMPLETED)
+    builder.registry.get_ffmpeg_configure_flags = lambda *args: []
+    monkeypatch.setattr(FFmpegBuilder, "_run_make", lambda *args: None)
+    monkeypatch.setattr(FFmpegBuilder, "_run_install", lambda *args: None)
+
+    commands = []
+
+    def _run_step(self, component, status, detail, error_msg, command, *args):
+        commands.append(command)
+        return None
+
+    monkeypatch.setattr(FFmpegBuilder, "_run_step", _run_step)
+
+    builder.build_ffmpeg(component, source_dir)
+
+    configure_command = commands[0]
+    extra_libs = next(argument for argument in configure_command if argument.startswith("--extra-libs="))
+    assert "-llcms2" in extra_libs
+    assert "-lc++" in extra_libs
 
 
 def test_build_libplacebo_merges_windows_pkg_config_path_and_patches_glslang(

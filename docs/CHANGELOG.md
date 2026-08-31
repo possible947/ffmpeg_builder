@@ -26,6 +26,8 @@ All notable changes to the FFmpeg Builder project.
 
 ### Fixed
 
+- **FFmpeg 9 static libjxl probe links the macOS C++ runtime (2026-08-31)** — `libjxl_threads.pc` omits its static C++ runtime dependency. FFmpeg 9 correctly finds the package but its configure probe failed on macOS with unresolved `std::__1` symbols because the builder supplied `-llcms2` without `-lc++`. The FFmpeg extra-library assembly now adds `-lc++` on macOS and `-lstdc++` elsewhere whenever libjxl is built. Regression coverage asserts the Darwin configure command includes both libjxl dependencies.
+
 - **Nettle build links PIC GMP archives on macOS (2026-08-31)** — The non-GPL FFmpeg 9.0 build path selects GMP, nettle, and GnuTLS. Nettle builds helper executables that link the workspace `libgmp.a`; macOS rejected GMP's non-PIC assembly objects with `ld: Found illegal text-relocations`. GMP now receives its portable `--with-pic` configure option for every platform, producing static archives that can be linked into these executables. Regression coverage asserts the declarative GMP build option.
 
 - **Installed package startup no longer misses `components.yaml` (2026-08-31)** — `components.yaml` is now declared as setuptools package data, so normal wheel installs place the declarative component registry beside `ffmpeg_builder.components`. This fixes `python -m ffmpeg_builder` failing at startup with `FileNotFoundError` when `ComponentRegistry` resolves its registry path. Regression coverage checks the package resource; verified by building a wheel, reinstalling it in `.venv`, and initializing the registry with all 63 components.

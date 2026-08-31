@@ -2754,12 +2754,11 @@ class FFmpegBuilder:
                 extra_libs += " -lstdc++"
 
         if "libjxl" in built_components:
-            # libjxl_threads.a uses std::thread — needs -lstdc++ for static
-            # linking on all non-Apple platforms, including MinGW/UCRT64.
+            # libjxl_threads.a uses std::thread and omits the C++ runtime from
+            # its static pkg-config metadata.
             # lcms2 is a private dependency of libjxl not listed in Libs:.
             extra_libs += " -llcms2"
-            if self.platform != "darwin":
-                extra_libs += " -lstdc++"
+            extra_libs += " -lc++" if self.platform == "darwin" else " -lstdc++"
 
         # libplacebo links against the system Vulkan ICD loader at runtime.
         # On Linux the loader is libvulkan.so; it must appear in extralibs so
