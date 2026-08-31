@@ -143,6 +143,12 @@ def _read_windows_dependencies(builder: "FFmpegBuilder", binary_path: Path) -> L
 def _read_linux_dependencies(builder: "FFmpegBuilder", binary_path: Path) -> List[str]:
     result = builder.executor.execute(["ldd", str(binary_path)], env=builder.get_build_env())
     if not result.success:
+        combined = f"{result.stdout}\n{result.stderr}".lower()
+        if "not a dynamic executable" in combined or "not a valid dynamic program" in combined:
+            # Fully static binary (full_static build): ldd exits non-zero
+            # with "not a dynamic executable". There is nothing to bundle
+            # beyond the binary itself.
+            return []
         raise BuildError(
             "release",
             f"Failed to inspect dependencies for {binary_path.name}: {result.stderr.strip()}",

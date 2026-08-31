@@ -1,5 +1,6 @@
 """Tests for builder module split compatibility."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -80,6 +81,65 @@ def test_release_bundle_wrapper_creates_manifest(tmp_path: Path):
 
     assert release_dir == tmp_path / "release"
     assert (release_dir / "manifest.json").exists()
+
+
+def test_release_bundle_wrapper_static_binary_skips_dependency_scan(tmp_path: Path):
+    """A fully static binary makes ldd fail; the bundle must still succeed."""
+
+    class _Result:
+        def __init__(self, stdout: str = "", stderr: str = "", success: bool = True):
+            self.stdout = stdout
+            self.stderr = stderr
+            self.success = success
+
+    class _Executor:
+        def execute(self, command, env=None):
+            if command[0] == "ldd":
+                # ldd on a fully static ELF: exit 1, "not a dynamic executable"
+                return _Result(stdout="", stderr="not a dynamic executable", success=False)
+            raise AssertionError(f"Unexpected command: {command}")
+
+    class _PlatformDetector:
+        def get_build_backend_name(self):
+            return "linux-native"
+
+    class _Config:
+        ffmpeg_version = "8.1"
+
+        class windows:
+            msys2_root = "C:/msys64"
+
+    class _Builder:
+        platform = "linux"
+        workspace = tmp_path
+        config = _Config()
+        platform_detector = _PlatformDetector()
+        executor = _Executor()
+
+        @staticmethod
+        def _rmtree(path: Path) -> None:
+            if path.exists():
+                for child in sorted(path.rglob("*"), reverse=True):
+                    if child.is_file():
+                        child.unlink()
+                    else:
+                        child.rmdir()
+                path.rmdir()
+
+        def get_build_env(self):
+            return {}
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for name in ("ffmpeg", "ffprobe", "ffplay"):
+        (bin_dir / name).write_text("binary", encoding="utf-8")
+
+    release_dir = make_release_bundle(_Builder())
+
+    manifest = json.loads((release_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["missing_binaries"] == []
+    assert manifest["dependencies"] == []
+    assert manifest["missing_dependencies"] == []
 
 
 class _PlatformInfo:
