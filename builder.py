@@ -243,6 +243,40 @@ class FFmpegBuilder:
             return False
         return component.name in {"gettext", "openssl"}
 
+    def _assert_patch_absent(
+        self, component: Component, path: Path, marker: str, context: str
+    ) -> None:
+        """Verify a source patch removed `marker` from `path`.
+
+        Raises BuildError if the marker is still present, so a component
+        version bump that changed the patched source fails fast with a
+        clear message instead of an obscure compile/link error.
+        """
+        text = path.read_text(encoding="utf-8")
+        if marker in text:
+            raise BuildError(
+                component.name,
+                f"Source patch did not take effect in {path}: '{marker}' still present "
+                f"({context}). The component version may have changed.",
+            )
+
+    def _assert_patch_present(
+        self, component: Component, path: Path, marker: str, context: str
+    ) -> None:
+        """Verify a source patch added `marker` to `path`.
+
+        Raises BuildError if the marker is missing, so a component version
+        bump that moved the patch anchor fails fast with a clear message
+        instead of an obscure compile error.
+        """
+        text = path.read_text(encoding="utf-8")
+        if marker not in text:
+            raise BuildError(
+                component.name,
+                f"Source patch did not take effect in {path}: '{marker}' missing "
+                f"({context}). The component version may have changed.",
+            )
+
     def _normalize_windows_path_for_flags(self, path: str) -> str:
         """Normalize Windows path for shell-expanded build flags.
 
@@ -1067,6 +1101,16 @@ class FFmpegBuilder:
                 )
                 if legacy in content and patched not in content:
                     encoder_h.write_text(content.replace(legacy, patched, 1))
+                # An unguarded `typedef int bool;` breaks GCC 16 (C23)
+                # builds, so fail loudly if the patch did not take effect.
+                final = encoder_h.read_text()
+                if legacy in final and patched not in final:
+                    raise BuildError(
+                        component.name,
+                        f"Source patch did not take effect in {encoder_h}: unguarded "
+                        f"'{legacy}' still present (C23 bool typedef gate). "
+                        f"The xvidcore version may have changed.",
+                    )
 
         configure_args = [
             arg.replace("{workspace}", self._ws_str()).replace("{num_jobs}", str(self.num_jobs))
@@ -1430,6 +1474,9 @@ class FFmpegBuilder:
             content = configdata.read_text()
             content = content.replace("-std=c11", "-std=gnu11")
             configdata.write_text(content)
+            self._assert_patch_absent(
+                component, configdata, "-std=c11", "configdata.pm -std=c11 -> -std=gnu11"
+            )
             result2 = self.executor.execute(
                 ["perl", str(configdata)],
                 cwd=source_dir,
@@ -1548,6 +1595,12 @@ class FFmpegBuilder:
                 if insert_idx is not None:
                     lines.insert(insert_idx, "#include <cstdint>")
                     json11_cpp.write_text("\n".join(lines))
+            # uint8_t is undeclared without <cstdint> on GCC 15/16, so fail
+            # loudly if the include could not be added (e.g. the anchor
+            # `#include <limits>` moved in a newer x265).
+            self._assert_patch_present(
+                component, json11_cpp, "#include <cstdint>", "json11.cpp cstdint include"
+            )
 
         build_linux = source_dir / "build" / "linux"
         if not build_linux.exists():
@@ -1703,6 +1756,9 @@ class FFmpegBuilder:
                 content = x265_pc.read_text()
                 content = content.replace("-lgcc_s", "-lgcc_eh")
                 x265_pc.write_text(content)
+                self._assert_patch_absent(
+                    component, x265_pc, "-lgcc_s", "x265.pc -lgcc_s -> -lgcc_eh (full_static)"
+                )
 
     def build_libvpx(self, component: Component, source_dir: Path) -> None:
         """Build libvpx.
@@ -1722,6 +1778,15 @@ class FFmpegBuilder:
                     "-Wl,--no-undefined -Wl,-soname", "-Wl,-undefined,error -Wl,-install_name"
                 )
                 makefile.write_text(content)
+                self._assert_patch_absent(
+                    component, makefile, ",--version-script", "libvpx darwin Makefile link flags"
+                )
+                self._assert_patch_absent(
+                    component,
+                    makefile,
+                    "-Wl,--no-undefined -Wl,-soname",
+                    "libvpx darwin Makefile link flags",
+                )
 
         self._run_step(
             component,
@@ -1884,6 +1949,12 @@ class FFmpegBuilder:
             content = configure_ac.read_text()
             content = content.replace("-force_cpusubtype_ALL", "")
             configure_ac.write_text(content)
+            self._assert_patch_absent(
+                component,
+                configure_ac,
+                "-force_cpusubtype_ALL",
+                "libvorbis configure.ac cpusubtype",
+            )
 
         self._run_step(
             component,
@@ -1949,7 +2020,8 @@ class FFmpegBuilder:
         if self.platform == "darwin" and deps_script.exists() and shutil.which("realpath") is None:
             content = deps_script.read_text()
             original = 'SELF=$(realpath "$0")'
-            if original in content:
+            guard = "command -v realpath"
+            if original in content and guard not in content:
                 portable = (
                     "if command -v realpath >/dev/null 2>&1; then\n"
                     '  SELF=$(realpath "$0")\n'
@@ -1958,6 +2030,17 @@ class FFmpegBuilder:
                     "fi"
                 )
                 deps_script.write_text(content.replace(original, portable, 1))
+            # Without realpath on this system, an unguarded
+            # `SELF=$(realpath "$0")` makes deps.sh fail, so verify the guard
+            # is in place (the anchor may have moved in a newer libjxl).
+            final = deps_script.read_text()
+            if original in final and guard not in final:
+                raise BuildError(
+                    component.name,
+                    f"Source patch did not take effect in {deps_script}: unguarded "
+                    f"'{original}' still present (realpath missing on this system). "
+                    f"The libjxl version may have changed.",
+                )
 
         self._run_step(
             component,
@@ -2198,11 +2281,13 @@ class FFmpegBuilder:
         proxy_cpp = source_dir / "src" / "proxy.cpp"
         if proxy_cpp.exists():
             content = proxy_cpp.read_text()
-            content = content.replace(
-                "stats_proxy stats = {0}",
-                "stats_proxy stats = {{{0, 0}, {0, 0}}, {{0, 0}, {0, 0}}}",
-            )
+            old_init = "stats_proxy stats = {0}"
+            new_init = "stats_proxy stats = {{{0, 0}, {0, 0}}, {{0, 0}, {0, 0}}}"
+            content = content.replace(old_init, new_init)
             proxy_cpp.write_text(content)
+            self._assert_patch_absent(
+                component, proxy_cpp, old_init, "libzmq proxy.cpp stats_proxy initializer"
+            )
 
         self._run_make(
             component,

@@ -287,3 +287,72 @@ def test_build_libplacebo_fails_when_glslang_patch_target_is_missing(
 
     with pytest.raises(BuildError, match="Expected glslang lookup pattern"):
         builder.build_libplacebo(component, source_dir)
+
+
+def _make_patch_component(name: str = "x265") -> Component:
+    return Component(
+        name=name,
+        version="1.0",
+        url=f"https://example.invalid/{name}.tar.gz",
+        category=ComponentCategory.VIDEO_CODEC,
+        build_system=BuildSystem.CUSTOM,
+    )
+
+
+class TestSourcePatchAssertions:
+    """M7: source patches must verify they took effect and fail loudly if not."""
+
+    def test_assert_patch_absent_passes_when_marker_removed(self, tmp_path):
+        builder = _make_libplacebo_builder(tmp_path)
+        f = tmp_path / "file.txt"
+        f.write_text("clean content", encoding="utf-8")
+        builder._assert_patch_absent(_make_patch_component(), f, "bad_marker", "ctx")
+
+    def test_assert_patch_absent_raises_when_marker_present(self, tmp_path):
+        builder = _make_libplacebo_builder(tmp_path)
+        f = tmp_path / "file.txt"
+        f.write_text("has bad_marker here", encoding="utf-8")
+        with pytest.raises(BuildError, match="version may have changed"):
+            builder._assert_patch_absent(_make_patch_component(), f, "bad_marker", "ctx")
+
+    def test_assert_patch_present_passes_when_marker_present(self, tmp_path):
+        builder = _make_libplacebo_builder(tmp_path)
+        f = tmp_path / "file.txt"
+        f.write_text("#include <cstdint>\n", encoding="utf-8")
+        builder._assert_patch_present(_make_patch_component(), f, "#include <cstdint>", "ctx")
+
+    def test_assert_patch_present_raises_when_marker_missing(self, tmp_path):
+        builder = _make_libplacebo_builder(tmp_path)
+        f = tmp_path / "file.txt"
+        f.write_text("#include <string>\n", encoding="utf-8")
+        with pytest.raises(BuildError, match="version may have changed"):
+            builder._assert_patch_present(_make_patch_component(), f, "#include <cstdint>", "ctx")
+
+    def test_build_x265_fails_when_json11_anchor_missing(self, tmp_path):
+        # json11.cpp without the `#include <limits>` anchor and without
+        # cstdint: the patch cannot apply, so the build must fail fast with
+        # a clear message instead of an obscure uint8_t compile error.
+        builder = _make_libplacebo_builder(tmp_path)
+        component = _make_patch_component("x265")
+        json11_dir = tmp_path / "source" / "dynamicHDR10" / "json11"
+        json11_dir.mkdir(parents=True)
+        (json11_dir / "json11.cpp").write_text(
+            "#include <string>\nnamespace json { struct object {}; }\n", encoding="utf-8"
+        )
+        with pytest.raises(BuildError, match="version may have changed"):
+            builder.build_x265(component, tmp_path)
+
+    def test_build_x265_inserts_cstdint_when_anchor_present(self, tmp_path):
+        builder = _make_libplacebo_builder(tmp_path)
+        component = _make_patch_component("x265")
+        json11_dir = tmp_path / "source" / "dynamicHDR10" / "json11"
+        json11_dir.mkdir(parents=True)
+        json11_file = json11_dir / "json11.cpp"
+        json11_file.write_text("#include <limits>\nint x;\n", encoding="utf-8")
+        # No build/linux dir: the method proceeds past the json11 patch and
+        # fails on the missing build dir, proving the patch assertion passed.
+        with pytest.raises(BuildError, match="Build directory not found"):
+            builder.build_x265(component, tmp_path)
+        patched = json11_file.read_text(encoding="utf-8")
+        assert "#include <cstdint>" in patched
+        assert patched.index("#include <limits>") < patched.index("#include <cstdint>")
