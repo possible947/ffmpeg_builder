@@ -31,12 +31,13 @@ class TestParsePositiveInt:
         assert _parse_positive_int("4.5") is None
 
 
-def _patch_prompts(monkeypatch, jobs_answers, workers_answers):
+def _patch_prompts(monkeypatch, jobs_answers, workers_answers, version_answers=None):
     """Patch Confirm.ask / Prompt.ask to feed scripted answers.
 
-    All boolean questions answer False; the jobs/workers prompts consume
-    from the provided iterators (exhaustion raises StopIteration, which
-    fails the test loudly if the prompt order changes).
+    All boolean questions answer False; version, jobs, and workers prompts
+    consume from their provided iterators. A missing version iterator accepts
+    the prompt default. Exhaustion raises StopIteration, which fails the test
+    loudly if the prompt order changes.
     """
 
     def fake_confirm_ask(prompt, **kwargs):
@@ -44,6 +45,10 @@ def _patch_prompts(monkeypatch, jobs_answers, workers_answers):
 
     def fake_prompt_ask(prompt, **kwargs):
         text = str(prompt)
+        if "FFmpeg version" in text:
+            if version_answers is None:
+                return kwargs["default"]
+            return next(version_answers)
         if "parallel jobs" in text:
             return next(jobs_answers)
         if "download workers" in text:
@@ -78,3 +83,15 @@ def test_config_screen_accepts_auto_jobs(monkeypatch):
 
     assert result.num_jobs == "auto"
     assert result.download_workers == 2
+
+
+def test_config_screen_updates_ffmpeg_version(monkeypatch):
+    console = Console(file=io.StringIO())
+    screen = ConfigScreen(console)
+    config = BuildConfig()
+
+    _patch_prompts(monkeypatch, iter(["auto"]), iter(["2"]), iter(["9.0"]))
+
+    result = screen.show(config)
+
+    assert result.ffmpeg_version == "9.0"

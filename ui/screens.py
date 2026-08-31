@@ -9,7 +9,7 @@ from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
 from ..components import Component
-from ..config import BuildConfig
+from ..config import BuildConfig, SUPPORTED_FFMPEG_VERSIONS
 from ..state import BuildState, ComponentStatus
 from ..system_report import SystemReport
 
@@ -397,6 +397,11 @@ class ConfigScreen(UIScreen):
         self.console.print("[bold blue]Edit Build Configuration[/bold blue]")
         self.console.print()
 
+        config.ffmpeg_version = Prompt.ask(
+            "FFmpeg version",
+            choices=list(SUPPORTED_FFMPEG_VERSIONS),
+            default=config.ffmpeg_version,
+        )
         config.gpl_enabled = Confirm.ask(
             "Enable GPL and non-free codecs?", default=config.gpl_enabled
         )
