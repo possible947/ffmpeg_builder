@@ -59,6 +59,9 @@ py-modules = ["app", "build_steps", "build_types", "builder", "component_builder
 ffmpeg_builder = "."
 "ffmpeg_builder.ui" = "ui"
 
+[tool.setuptools.package-data]
+ffmpeg_builder = ["components.yaml"]
+
 [tool.black]
 line-length = 100
 target-version = ['py312']

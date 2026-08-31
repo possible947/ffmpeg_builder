@@ -1,5 +1,7 @@
 """Tests for Component registry, filtering, and URL helpers."""
 
+from importlib.resources import files
+
 import pytest
 
 from ffmpeg_builder.components import (
@@ -13,6 +15,9 @@ from ffmpeg_builder.components import (
 
 class TestComponentUrlHelpers:
     """Test URL and archive-filename derivation methods."""
+
+    def test_component_registry_is_available_as_package_data(self):
+        assert files("ffmpeg_builder").joinpath("components.yaml").is_file()
 
     def test_get_url_substitutes_version(self):
         c = Component(
