@@ -18,6 +18,10 @@ All notable changes to the FFmpeg Builder project.
 
 ## [Unreleased]
 
+### Fixed
+
+- **gettext build fails on macOS with Apple clang 17 (GPL FFmpeg 9 path, 2026-08-31)** — Building `gettext` for the GPL crypto stack failed compiling gnulib's `libtextstyle/lib/iconv-ostream.c`: `configure`'s `AM_ICONV` check found Apple's system `iconv` "not working" (a known limitation of Apple's BSD-derived iconv vs. GNU iconv semantics) and set `HAVE_ICONV=0`, which selects gnulib's stub `iconv_ostream__flush` — a stub whose signature (missing the `ostream_flush_scope_t` parameter) does not match the `iconv_ostream_vtable` function-pointer slot, an upstream gnulib bug that only surfaces when the non-iconv branch is actually compiled. Apple clang 17 treats this as a hard `-Wincompatible-function-pointer-types` error (not merely a warning), aborting the build. Fixed by adding a `darwin` `configure_args_override` for `gettext` that swaps `--without-libiconv-prefix` for `--with-libiconv-prefix=/opt/local`, pointing configure at the MacPorts GNU libiconv already required for `macports-clang-17`; GNU libiconv passes the "working" check, so `HAVE_ICONV=1` and the buggy stub branch is never compiled. Verified: `am_cv_func_iconv_works=yes` in the libtextstyle `config.log`, `-liconv` now links cleanly with no `iconv-ostream.c` errors, and the resumed macOS FFmpeg 9 GPL build progressed `gettext` from `failed` to `completed` and continued into `openssl`.
+
 ### Added
 
 - **Selectable FFmpeg source versions (2026-08-31)** — `ffmpeg_version` now supports `8.1` (default) and `9.0`. Each selection resolves the FFmpeg target from declarative source metadata with its own verified SHA-256. FFmpeg 9.0 omits the removed `--enable-libglslang` configure option while glslang remains available as a libplacebo dependency. Future FFmpeg version profiles must include source/checksum metadata, configuration and flag-compatibility regression tests, and an `Unreleased` changelog entry documenting the version, compatibility changes, and validation run.

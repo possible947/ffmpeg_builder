@@ -154,6 +154,15 @@
     linux:
       extra_env: {}
       extra_cflags: -std=gnu11
+    darwin:
+      extra_env: {}
+      configure_args_override:
+      - --prefix={workspace}
+      - --enable-static
+      - --disable-shared
+      - --with-libiconv-prefix=/opt/local
+      - --without-libintl-prefix
+      - --disable-c++
 - name: openssl
   sha256: c6b94124bb76ac5f8aa80de121e0f922a93d3bbf1be478bd50ebc36a30dc1db1
   version: 3.6.4
