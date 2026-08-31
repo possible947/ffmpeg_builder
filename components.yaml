@@ -271,9 +271,9 @@
   custom_build_fn: build_x264
   ffmpeg_configure_flag: --enable-libx264
 - name: x265
-  sha256: 9dcb845f22fe75a88707781026fe4f9d170675a5a25bb5a0de9cc66f62a0a465
-  version: 8be7dbf
-  url: https://bitbucket.org/multicoreware/x265_git/get/8be7dbf8159ddfceea4115675a6d48e1611b8baa.tar.gz
+  sha256: 0a3d41f6b4e2fe5a49d783d6631bd1a49c44cdf999074a3ff09e2cb71ac8ed33
+  version: 4.2
+  url: https://bitbucket.org/multicoreware/x265_git/get/{version}.tar.gz
   category: video_codec
   build_system: custom
   gpl_only: true

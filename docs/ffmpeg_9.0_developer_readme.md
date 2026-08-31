@@ -147,7 +147,7 @@ All 63 components in `components.yaml` were checked against upstream release pag
 | svtav1 | 4.0.1 | 4.2.0 (2026-07-14) | BUMP | 4.1.0 was 2026-03-23 |
 | rav1e | 0.8.1 | 0.8.1 (2025-06-16) | UP-TO-DATE | Weekly pre-releases exist (latest p20250902); 0.8.1 remains the latest stable |
 | x264 | 0480cb05 (commit) | rolling git | ROLLING | No versioned releases; latest official prebuilt is r3222 (b35605a, 2025-06-08) — re-pin to a current `stable`-branch commit with a fresh sha256 |
-| x265 | 8be7dbf (commit) | 4.3 (2026-07-31) | BUMP | Move from commit hash to a versioned release (4.2 was 2026-04-19) |
+| x265 | 8be7dbf (commit) | 4.2 (2026-04-19) | BUMP | Current canonical versioned release; 4.3 is not published upstream |
 | libvpx | 1.16.0 | 1.17.0 (2026-08-07) | BUMP | ABI incompatible with 1.16 |
 | xvidcore | 1.3.7 | 1.3.7 | FINAL | |
 | vid_stab | 1.1.1 | 1.1.1 | FINAL | |
@@ -219,7 +219,7 @@ All 63 components in `components.yaml` were checked against upstream release pag
 
 - **Build tools (6):** giflib 5.2.2→6.1.3 (URL folder change), nasm 3.01→3.02, m4 1.4.20→1.4.21, cmake 4.2.3→4.4.3, meson 1.8.2→1.12.0, ninja 1.12.1→1.13.2
 - **Crypto (3):** gettext 0.22.5→0.26, openssl 3.6.1→3.6.4, gnutls 3.8.12→3.8.13
-- **Video codecs (6):** dav1d 1.5.3→1.5.4, svtav1 4.0.1→4.2.0, x264 (re-pin commit), x265 (commit→4.3), libvpx 1.16.0→1.17.0, libaom 3.12.0→3.13.3
+- **Video codecs (6):** dav1d 1.5.3→1.5.4, svtav1 4.0.1→4.2.0, x264 (re-pin commit), x265 (commit→4.2), libvpx 1.16.0→1.17.0, libaom 3.12.0→3.13.3
 - **Audio (2):** serd 0.32.8→0.32.10, lilv 0.26.4→0.28.0
 - **Image (4):** libtiff 4.7.1→4.7.2, libpng 1.6.55→1.6.58, lcms2 2.18→2.19.1, libjxl 0.11.2→0.12.0
 - **Other (4):** FreeType2 2.14.2→2.14.3, VapourSynth R73→R78, libvmaf 3.0.0→3.2.0, srt 1.5.4→1.5.6
@@ -232,7 +232,7 @@ Notes for the version-refresh batches (Phase B):
 
 1. Every bump requires a fresh `sha256` for the archive (see `require_sha256_for_network` policy) and a check that the `url`/`archive_filename` patterns still match the upstream artifact name.
 2. giflib is the only bump that changes the download URL path, not just the version.
-3. x264 and x265 move from commit-hash pins to (x265) a versioned release or (x264) a newer verified stable-branch commit; both need new sha256 values.
+3. x264 and x265 move from commit-hash pins to (x265) a versioned release or (x264) a newer verified stable-branch commit; both require new SHA-256 values.
 4. fast-float (6.1.6→8.2.10) and VapourSynth (R73→R78, C++20 requirement) are the two bumps with real compatibility risk and should be validated in a dry build before landing.
 5. libvpx 1.17.0 is ABI-incompatible with 1.16.0 — fine for a from-source build, but note it for anyone reusing a cached workspace.
 
@@ -247,12 +247,11 @@ Notes for the version-refresh batches (Phase B):
 3. `--enable-libglslang` is emitted only for FFmpeg 8.1; glslang remains a libplacebo dependency for both versions.
 4. The configuration screen, build component list, state, dashboard, and release manifest use the selected version.
 
-## Phase B — Refresh component versions (implemented except x265)
+## Phase B — Refresh component versions (implemented)
 
-1. Downloaded the FFmpeg 9.0 archive and 31 verified current component archives into `third_party/sources`; each is Git LFS-tracked and has a matching `components.yaml` SHA-256.
-2. Updated the corresponding registry pins and URL templates, including the giflib 6.x and libpng SourceForge paths, the lcms2.19.1 release tag, and the x264 stable commit `b35605ace3ddf7c1a5d67a2eb553f034aef41d55`.
-3. Deferred x265 4.3: both documented source locations returned HTTP 404, so the existing verified commit pin remains until the upstream project provides a canonical release archive.
-4. Full cross-platform component builds remain required before claiming runtime compatibility for the fast-float 8.x and VapourSynth R78 updates.
+1. Downloaded the FFmpeg 9.0 archive and 32 verified current component archives into `third_party/sources`; each is Git LFS-tracked and has a matching `components.yaml` SHA-256.
+2. Updated the corresponding registry pins and URL templates, including the giflib 6.x and libpng SourceForge paths, the lcms2.19.1 release tag, the x264 stable commit `b35605ace3ddf7c1a5d67a2eb553f034aef41d55`, and the canonical x265 4.2 release.
+3. Full cross-platform component builds remain required before claiming runtime compatibility for the fast-float 8.x and VapourSynth R78 updates.
 
 ## Phase C — Tests and docs
 
