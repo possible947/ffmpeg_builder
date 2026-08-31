@@ -10,6 +10,8 @@ All notable changes to the FFmpeg Builder project.
 
 ### Changed
 
+- **FFmpeg 9.0 migration guidance (2026-08-31)** — Existing configurations retain the `8.1` default. To use the FFmpeg 9.0 source profile, set `ffmpeg_version: "9.0"` in `build_config.yaml`; its source archive and checksum are resolved from the declared version profile. Configuration save/load regression coverage now verifies both supported versions remain selected.
+
 - **Verified source-mirror refresh for FFmpeg 9.0 integration (2026-08-31)** — Downloaded and Git LFS-tracked verified source archives for FFmpeg 9.0 and 32 current component updates. `components.yaml` now pins each refreshed component to the SHA-256 of its checked local archive; the FFmpeg 9.0 source profile is present in `third_party/sources`. Refreshed categories: build tools, crypto, video codecs (including an exact x264 stable-branch commit and x265 4.2), LV2, image libraries, general libraries, and hardware acceleration. The previously documented x265 4.3 archive was not published upstream; the canonical 4.2 release archive is now used instead. Validated with readable-tar checks for every new archive, registry/downloader tests, and the FFmpeg-version-profile checksum test.
 
 ### Verified — successful end-to-end build (2026-08-20)

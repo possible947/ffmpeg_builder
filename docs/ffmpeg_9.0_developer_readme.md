@@ -253,11 +253,11 @@ Notes for the version-refresh batches (Phase B):
 2. Updated the corresponding registry pins and URL templates, including the giflib 6.x and libpng SourceForge paths, the lcms2.19.1 release tag, the x264 stable commit `b35605ace3ddf7c1a5d67a2eb553f034aef41d55`, and the canonical x265 4.2 release.
 3. Full cross-platform component builds remain required before claiming runtime compatibility for the fast-float 8.x and VapourSynth R78 updates.
 
-## Phase C — Tests and docs
+## Phase C — Tests and docs (implemented)
 
-1. Update tests expecting `8.1` literals.
-2. Update user-facing docs (`README.md`, `docs/README.md`, `docs/DeveloperReadme.md`) where version is hard-coded.
-3. Add migration note to changelog/release notes in this repository.
+1. Configuration tests derive supported values from `SUPPORTED_FFMPEG_VERSIONS` and verify that each selected version persists through save/load.
+2. User-facing docs identify `8.1` as the default and `9.0` as an opt-in selection, including FFmpeg 9.0's removed glslang configure flag.
+3. Migration guidance is recorded in the repository changelog: existing configurations retain `8.1`; users opt into 9.0 with `ffmpeg_version: "9.0"`.
 
 ## Phase D — Validation
 

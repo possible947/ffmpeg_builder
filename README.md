@@ -342,6 +342,8 @@ windows:
 Supported `ffmpeg_version` values are `8.1` (the default) and `9.0`. Each version
 uses a separately verified source archive checksum. Add its archive to the local
 source mirror or enable verified network downloads before building it.
+Existing configurations remain on `8.1`; set `ffmpeg_version: "9.0"` to opt in
+to the FFmpeg 9.0 source profile.
 
 By default, builds are **offline-first**: every archive must exist in `third_party/sources`.
 To allow fetching missing archives from the network, set `allow_network_downloads: true`.

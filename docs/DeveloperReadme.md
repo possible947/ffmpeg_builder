@@ -120,6 +120,9 @@ completed profile and validation results under `Unreleased` in `docs/CHANGELOG.m
 Run tests through the project virtual environment and commit each discrete version
 profile step atomically after its focused validation.
 
+Existing configurations without an `ffmpeg_version` field retain the `8.1` default.
+Set `ffmpeg_version: "9.0"` explicitly to select the FFmpeg 9.0 source profile.
+
 **`ConfigManager`** — loads/saves YAML configuration:
 
 - `load()` — reads `build_config.yaml`, returns `BuildConfig`
