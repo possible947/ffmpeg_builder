@@ -11,9 +11,9 @@
 - Install: `pip install -e .`
 - Env check: `./scripts/check_python_env.sh`
 - Run: `python -m ffmpeg_builder` (or `./ffmpeg_builder`, or the `ffmpeg-builder` entry point). It takes **no CLI arguments** — the `--help`/`--workspace`/`--config` options documented in the README do not exist.
-- Tests: `pytest tests/` (66 unit tests, ~2 s; config/state/components/builder-split/downloader surface). Do NOT run bare `pytest` at the root: it also collects `workspace/packages/` (extracted third-party sources, gitignored) and crashes on their test programs. Single test: `pytest tests/test_state.py::test_name`.
-- Lint/typecheck: `black .` (line-length 100), `mypy <files>`. mypy enforces `disallow_untyped_defs = true` and has a pre-existing baseline of ~33 errors (missing `tqdm`/`yaml` stubs, untyped defs); `black --check` currently flags 3 files (`tests/test_builder_split.py`, `component_builders.py`, `release_bundle.py`). Run mypy on specific files, not `.`, to avoid crawling `workspace/`.
-- No CI workflow, no pre-commit. A full FFmpeg build is a long, hardware-dependent manual process (~20–60 min, ~10 GB); verify code changes with unit tests.
+- Tests: `pytest tests/` (135 tests, ~4 s; config/state/components/builder-split/downloader surface). Do NOT run bare `pytest` at the root: it also collects `workspace/packages/` (extracted third-party sources, gitignored) and crashes on their test programs. Single test: `pytest tests/test_state.py::test_name`.
+- Lint/typecheck: dev tools are pinned in `requirements-dev.txt` (CI installs exactly these; bump a pin only deliberately, then re-run `black .` and `python scripts/check_mypy_baseline.py --update` and commit the results together). `black --check .` must pass. mypy is checked with `python scripts/check_mypy_baseline.py` — a frozen baseline (`mypy_baseline.txt`, 34 errors / 26 unique after normalisation; missing `tqdm`/`yaml` stubs, untyped defs): new errors fail, fixed errors stay green until the baseline is refreshed. Never run mypy on `.` — it crawls `workspace/`.
+- CI: `.github/workflows/ci.yml` runs pytest + `black --check .` + the mypy baseline on push to `master` and on PRs (ubuntu, Python 3.12, pinned tools). No pre-commit. A full FFmpeg build is a long, hardware-dependent manual process (~20–60 min, ~10 GB); verify code changes with unit tests.
 - On this Windows machine, tests run under the MSYS2 venv: `C:\msys64\usr\bin\bash.exe -lc "cd /e/Projects/ffmpeg_builder && source ./.venv-msys2-ucrt64/bin/activate && python -m pytest tests/ -q"`.
 
 ## Conventions
