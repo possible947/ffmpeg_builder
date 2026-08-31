@@ -302,12 +302,19 @@ def _make_macos_bundle_relocatable(
 
         for dep in referenced:
             resolved = _resolve_runtime_dependency(builder, dep, macho)
-            if resolved is None or resolved.resolve() not in bundled:
+            if resolved is None:
                 continue
-            if resolved.name == macho.name:
+            # The bundle copies files under their resolved (symlink-followed)
+            # names, so @rpath targets must use the resolved name too —
+            # e.g. a reference to /opt/local/lib/libxcb.1.dylib (a symlink)
+            # must target the copied file libxcb.1.1.0.dylib.
+            real = resolved.resolve()
+            if real not in bundled:
+                continue
+            if real.name == macho.name:
                 # The dylib's own install name (id); handled by -id below.
                 continue
-            target = f"@rpath/{resolved.name}"
+            target = f"@rpath/{real.name}"
             if dep == target:
                 continue
             _run_install_name_tool(builder, macho, ["-change", dep, target])

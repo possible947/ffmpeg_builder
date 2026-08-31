@@ -159,7 +159,9 @@ def test_release_bundle_macos_rewrites_install_names_and_rpaths(tmp_path: Path):
     References to bundled dylibs are rewritten to @rpath/<name>, each
     bundled dylib's install name is set to @rpath/<name>, @loader_path is
     added as an rpath to every Mach-O file, and each file is re-signed
-    ad-hoc. References to system libraries are left untouched.
+    ad-hoc. References to system libraries are left untouched. The dylib
+    is a symlink (MacPorts-style install name -> versioned file), so the
+    rewrite must target the copied file's real name, not the link name.
     """
 
     class _Result:
@@ -168,7 +170,8 @@ def test_release_bundle_macos_rewrites_install_names_and_rpaths(tmp_path: Path):
             self.stderr = stderr
             self.success = success
 
-    bundled_dylib = tmp_path / "lib" / "libfoo.dylib"
+    real_dylib = tmp_path / "lib" / "libfoo.1.2.3.dylib"
+    bundled_link = tmp_path / "lib" / "libfoo.dylib"
 
     class _Executor:
         def __init__(self):
@@ -178,12 +181,12 @@ def test_release_bundle_macos_rewrites_install_names_and_rpaths(tmp_path: Path):
         def execute(self, command, env=None):
             if command[0] == "otool" and command[1] == "-L":
                 # Like real otool, the dylib lists its own install name
-                # (bundled_dylib) as the first entry. /usr/lib/* is a
-                # dyld-shared-cache reference (no file on disk, not
+                # (bundled_link, a symlink) as the first entry. /usr/lib/*
+                # is a dyld-shared-cache reference (no file on disk, not
                 # missing); /opt/local/lib/libFakeMissing is genuinely
                 # missing.
                 deps = [
-                    str(bundled_dylib),
+                    str(bundled_link),
                     "/usr/lib/libFakeSystem.dylib",
                     "/opt/local/lib/libFakeMissing.dylib",
                 ]
@@ -241,13 +244,16 @@ def test_release_bundle_macos_rewrites_install_names_and_rpaths(tmp_path: Path):
     bin_dir.mkdir()
     for name in ("ffmpeg", "ffprobe", "ffplay"):
         (bin_dir / name).write_text("binary", encoding="utf-8")
-    bundled_dylib.parent.mkdir(parents=True)
-    bundled_dylib.write_text("dylib", encoding="utf-8")
+    real_dylib.parent.mkdir(parents=True)
+    real_dylib.write_text("dylib", encoding="utf-8")
+    bundled_link.symlink_to(real_dylib)
 
     release_dir = make_release_bundle(_Builder())
 
     manifest = json.loads((release_dir / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["dependencies"] == [str(release_dir / "libfoo.dylib")]
+    # The symlink is resolved: the bundle contains the real file, under
+    # its real name.
+    assert manifest["dependencies"] == [str(release_dir / "libfoo.1.2.3.dylib")]
     # System (dyld shared cache) references are not reported as missing;
     # only genuinely missing dylibs are.
     assert manifest["missing_dependencies"] == ["/opt/local/lib/libFakeMissing.dylib"]
@@ -257,12 +263,18 @@ def test_release_bundle_macos_rewrites_install_names_and_rpaths(tmp_path: Path):
     changes = [call for call in calls if call[1] == "-change"]
     assert len(changes) == 3
     for call in changes:
-        assert call[2] == str(bundled_dylib)
-        assert call[3] == "@rpath/libfoo.dylib"
+        assert call[2] == str(bundled_link)
+        # Target the copied file's real name, not the symlink name.
+        assert call[3] == "@rpath/libfoo.1.2.3.dylib"
 
     ids = [call for call in calls if call[1] == "-id"]
     assert ids == [
-        ["install_name_tool", "-id", "@rpath/libfoo.dylib", str(release_dir / "libfoo.dylib")]
+        [
+            "install_name_tool",
+            "-id",
+            "@rpath/libfoo.1.2.3.dylib",
+            str(release_dir / "libfoo.1.2.3.dylib"),
+        ]
     ]
 
     rpaths = [call for call in calls if call[1] == "-add_rpath"]
