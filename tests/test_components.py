@@ -302,6 +302,98 @@ class TestComponentRegistry:
         assert "opencl-headers" in names
         assert "opencl-icd-loader" in names
 
+    # ------------------------------------------------------------------
+    # H2: tool-aware buildability (build-provided tools satisfy later needs)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _tools(**availability):
+        """Build a tools dict where named tools are unavailable unless set True."""
+
+        class Tool:
+            def __init__(self, available):
+                self.available = available
+
+        defaults = {name: True for name in ("python3", "meson", "ninja", "cargo", "rustc", "cmake")}
+        defaults.update(availability)
+        return {name: Tool(available) for name, available in defaults.items()}
+
+    def test_get_buildable_uses_build_provided_meson_ninja(self, mock_platform_info):
+        """Without system meson/ninja, consumers are still buildable because the
+        meson/ninja components earlier in order provide them (H2)."""
+        tools = self._tools(meson=False, ninja=False)
+        buildable = self.registry.get_buildable(
+            gpl_enabled=True,
+            platform="linux",
+            tools=tools,
+            platform_info=mock_platform_info,
+        )
+        names = {c.name for c in buildable}
+        # Providers are present...
+        assert "meson" in names
+        assert "ninja" in names
+        # ...so their consumers must be included, not silently dropped.
+        for consumer in ("dav1d", "lv2", "serd", "zix", "sord", "sratom", "lilv", "libvmaf"):
+            assert consumer in names, f"{consumer} should be buildable via built meson/ninja"
+
+    def test_get_buildable_still_excludes_when_provider_absent(self, mock_platform_info):
+        """A tool with no provider component (python3) still gates on the system."""
+        tools = self._tools(python3=False)
+        buildable = self.registry.get_buildable(
+            gpl_enabled=True,
+            platform="linux",
+            tools=tools,
+            platform_info=mock_platform_info,
+        )
+        names = {c.name for c in buildable}
+        # glslang requires python3 and nothing in the registry provides it.
+        assert "glslang" not in names
+        # dav1d also requires python3 -> excluded even though meson/ninja exist.
+        assert "dav1d" not in names
+
+    def test_get_buildable_rav1e_special_case_preserved(self, mock_platform_info):
+        """rav1e is kept in the list even without cargo/rustc (skipped at build time)."""
+        tools = self._tools(cargo=False, rustc=False)
+        buildable = self.registry.get_buildable(
+            gpl_enabled=True,
+            platform="linux",
+            tools=tools,
+            platform_info=mock_platform_info,
+        )
+        names = {c.name for c in buildable}
+        assert "rav1e" in names
+
+    def test_tool_provided_by_system_component(self):
+        reg = ComponentRegistry()
+        assert reg._tool_provided_by(reg.get_by_name("meson")) == "meson"
+        assert reg._tool_provided_by(reg.get_by_name("onevpl")) == "vpl"
+        # Non-system components do not provide reusable tools.
+        assert reg._tool_provided_by(reg.get_by_name("dav1d")) is None
+
+
+class TestComponentRegistryToolAwareness:
+    """Ordering guarantee: a provider must precede its consumer to count."""
+
+    @pytest.fixture(autouse=True)
+    def _registry(self):
+        self.registry = ComponentRegistry()
+
+    def test_provider_before_consumer_in_registry_order(self):
+        """meson/ninja appear before every component that consumes them."""
+        all_c = self.registry.get_all()
+        order = {c.name: i for i, c in enumerate(all_c)}
+        for consumer in ("dav1d", "lv2", "serd", "zix", "sord", "sratom", "lilv", "libvmaf"):
+            assert order["meson"] < order[consumer], f"meson must precede {consumer}"
+            assert order["ninja"] < order[consumer], f"ninja must precede {consumer}"
+
+
+class TestFfmpegConfigureFlags:
+    """Tests for get_ffmpeg_configure_flags."""
+
+    @pytest.fixture(autouse=True)
+    def _registry(self):
+        self.registry = ComponentRegistry()
+
     def test_get_ffmpeg_configure_flags(self):
         flags = self.registry.get_ffmpeg_configure_flags(
             built_components=["x264", "libvpx", "opus"],
@@ -342,6 +434,14 @@ class TestComponentRegistry:
             platform_info=OpenCLSystemReady(),
         )
         assert "--enable-opencl" in flags
+
+
+class TestBuildOrder:
+    """Tests for registry build ordering."""
+
+    @pytest.fixture(autouse=True)
+    def _registry(self):
+        self.registry = ComponentRegistry()
 
     def test_build_order_ffmpeg_last(self):
         all_c = self.registry.get_all()

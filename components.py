@@ -281,10 +281,19 @@ class ComponentRegistry:
     ) -> List[Component]:
         """Get list of components that should be built.
 
+        Tool requirements are evaluated against the *effective* toolset the
+        build will actually have at each point, not just the pre-build system
+        tools. Some tools (``meson``, ``ninja``, ``cmake``, ...) are themselves
+        components earlier in the build order; when absent from the system they
+        are built from source into the workspace and become available for every
+        later component. A component is therefore included when each of its
+        ``requires_tools`` is either present on the system or provided by an
+        earlier component that is itself buildable.
+
         Args:
             gpl_enabled: Whether GPL is enabled.
             platform: Platform name ("linux", "darwin", "windows").
-            tools: Available tools dict.
+            tools: Available system tools dict.
             disable_lv2: Whether LV2 is disabled.
             enable_libvmaf: Whether libvmaf is enabled.
             platform_info: PlatformInfo for HW acceleration filtering.
@@ -292,60 +301,93 @@ class ComponentRegistry:
         Returns:
             List of components to build.
         """
+        # Pass 1: everything except the tool gate, preserving registry order.
+        candidates = [
+            comp
+            for comp in self._components
+            if self._is_eligible(
+                comp, gpl_enabled, platform, tools, platform_info, disable_lv2, enable_libvmaf
+            )
+        ]
+
+        # Tools already available on the system before the build starts.
+        available_tools = {
+            name for name, info in tools.items() if getattr(info, "available", False)
+        }
+
         result = []
-
-        for comp in self._components:
-            if not comp.is_available(gpl_enabled, platform, tools, platform_info):
-                continue
-
-            if not self._is_component_allowed_for_platform_policy(comp, platform, platform_info):
-                continue
-
-            if comp.skip_condition == "disable_lv2" and disable_lv2:
-                continue
-
-            if comp.name == "libvmaf" and not enable_libvmaf:
-                continue
-
+        for comp in candidates:
             if comp.requires_tools:
-                has_tools = all(
-                    tools.get(tool, type("", (), {"available": False})).available
-                    for tool in comp.requires_tools
-                )
-                if not has_tools and comp.name not in ("rav1e",):
+                missing = [t for t in comp.requires_tools if t not in available_tools]
+                if missing and comp.name not in ("rav1e",):
                     continue
-
-            # Filter HW acceleration components by availability
-            if platform_info is not None:
-                if comp.name == "nv-codec" and not platform_info.cuda_available:
-                    continue
-                if (
-                    comp.name in ("vulkan-headers", "glslang")
-                    and not platform_info.vulkan_available
-                ):
-                    continue
-                if comp.name == "amf" and not platform_info.amf_available:
-                    continue
-                if comp.name in ("opencl-headers", "opencl-icd-loader"):
-                    opencl_runtime_available = getattr(
-                        platform_info, "opencl_runtime_available", False
-                    )
-                    if not (platform_info.opencl_available or opencl_runtime_available):
-                        continue
-                if comp.name == "onevpl" and not platform_info.qsv_available:
-                    continue
-
-            # libplacebo: permanent component; Vulkan acceleration is opt-in.
-            # On Linux full_static, Vulkan must be disabled (no static libvulkan.so).
-            # On all other platforms (macOS, Windows UCRT64), Vulkan follows
-            # enable_libplacebo_vulkan + vulkan_available.
-            if comp.name == "libplacebo":
-                # Always include; -Dvulkan= flag is resolved in build_libplacebo()
-                pass
 
             result.append(comp)
 
+            # Once accepted, any tool this component provides becomes available
+            # for subsequent components in the build order.
+            provided = self._tool_provided_by(comp)
+            if provided is not None:
+                available_tools.add(provided)
+
         return result
+
+    def _is_eligible(
+        self,
+        comp: Component,
+        gpl_enabled: bool,
+        platform: str,
+        tools: Dict,
+        platform_info: Optional[Any],
+        disable_lv2: bool,
+        enable_libvmaf: bool,
+    ) -> bool:
+        """Return whether a component passes every filter except ``requires_tools``.
+
+        The tool gate is applied separately (see :meth:`get_buildable`) so that
+        tools provided by earlier build steps can satisfy later requirements.
+        """
+        if not comp.is_available(gpl_enabled, platform, tools, platform_info):
+            return False
+
+        if not self._is_component_allowed_for_platform_policy(comp, platform, platform_info):
+            return False
+
+        if comp.skip_condition == "disable_lv2" and disable_lv2:
+            return False
+
+        if comp.name == "libvmaf" and not enable_libvmaf:
+            return False
+
+        # Filter HW acceleration components by availability
+        if platform_info is not None:
+            if comp.name == "nv-codec" and not platform_info.cuda_available:
+                return False
+            if comp.name in ("vulkan-headers", "glslang") and not platform_info.vulkan_available:
+                return False
+            if comp.name == "amf" and not platform_info.amf_available:
+                return False
+            if comp.name in ("opencl-headers", "opencl-icd-loader"):
+                opencl_runtime_available = getattr(platform_info, "opencl_runtime_available", False)
+                if not (platform_info.opencl_available or opencl_runtime_available):
+                    return False
+            if comp.name == "onevpl" and not platform_info.qsv_available:
+                return False
+
+        return True
+
+    @staticmethod
+    def _tool_provided_by(component: Component) -> Optional[str]:
+        """Return the tool name a component makes available once built.
+
+        System-provided build-tool components (``system_component`` with a
+        ``system_tool_name``) install their tool into the workspace when the
+        system copy is missing, making it usable by later components. Returns
+        ``None`` for components that do not provide a reusable tool.
+        """
+        if not component.system_component:
+            return None
+        return component.system_tool_name or component.name
 
     def _is_component_allowed_for_platform_policy(
         self,
