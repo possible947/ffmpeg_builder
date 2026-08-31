@@ -10,6 +10,7 @@ from ffmpeg_builder.config import (
     ConfigManager,
     LinuxConfig,
     MacOSConfig,
+    SUPPORTED_FFMPEG_VERSIONS,
     WindowsConfig,
 )
 
@@ -33,7 +34,7 @@ class TestBuildConfigDefaults:
         assert cfg.source_archives_dir == "third_party/sources"
         assert cfg.allow_network_downloads is False
 
-    @pytest.mark.parametrize("version", ("8.1", "9.0"))
+    @pytest.mark.parametrize("version", SUPPORTED_FFMPEG_VERSIONS)
     def test_supported_ffmpeg_versions(self, version):
         assert BuildConfig(ffmpeg_version=version).ffmpeg_version == version
 
@@ -147,6 +148,15 @@ class TestConfigManager:
         loaded = mgr2.load()
         assert loaded.gpl_enabled is True
         assert loaded.full_static is True
+
+    @pytest.mark.parametrize("version", SUPPORTED_FFMPEG_VERSIONS)
+    def test_save_and_reload_preserves_ffmpeg_version(self, tmp_path, version):
+        path = tmp_path / "config.yaml"
+        ConfigManager(path).save(BuildConfig(ffmpeg_version=version))
+
+        loaded = ConfigManager(path).load()
+
+        assert loaded.ffmpeg_version == version
 
     def test_save_without_config_raises(self, tmp_path):
         path = tmp_path / "config.yaml"
