@@ -59,6 +59,12 @@ def make_release_bundle(builder: "FFmpegBuilder") -> Path:
         shutil.copy2(dep, destination)
         copied_dependencies.append(str(destination))
 
+    install_name_rewrites: List[str] = []
+    if builder.platform == "darwin":
+        install_name_rewrites = _make_macos_bundle_relocatable(
+            builder, release_dir, source_binaries, dependencies
+        )
+
     manifest = {
         "generated_at": datetime.now().isoformat(),
         "platform": builder.platform,
@@ -68,6 +74,7 @@ def make_release_bundle(builder: "FFmpegBuilder") -> Path:
         "missing_binaries": sorted(missing_binaries),
         "dependencies": copied_dependencies,
         "missing_dependencies": sorted(missing_dependencies),
+        "install_name_rewrites": install_name_rewrites,
     }
     (release_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
@@ -97,6 +104,8 @@ def _collect_runtime_dependencies(
         for dep in _read_runtime_dependencies(builder, current):
             resolved = _resolve_runtime_dependency(builder, dep, current)
             if resolved is None:
+                if _is_system_dependency_reference(builder, dep):
+                    continue
                 missing.add(dep)
                 continue
 
@@ -175,6 +184,17 @@ def _read_linux_dependencies(builder: "FFmpegBuilder", binary_path: Path) -> Lis
 
 
 def _read_macos_dependencies(builder: "FFmpegBuilder", binary_path: Path) -> List[str]:
+    return _read_macos_install_names(builder, binary_path)[1]
+
+
+def _read_macos_install_names(builder: "FFmpegBuilder", binary_path: Path) -> Tuple[str, List[str]]:
+    """Return (header line, indented entries) from `otool -L` output.
+
+    The header is the path passed to otool; for a dylib the first
+    indented entry is its own install name (id) and the rest are
+    dependencies, while for an executable all indented entries are
+    dependencies.
+    """
     result = builder.executor.execute(
         ["otool", "-L", str(binary_path)], env=builder.get_build_env()
     )
@@ -184,14 +204,127 @@ def _read_macos_dependencies(builder: "FFmpegBuilder", binary_path: Path) -> Lis
             f"Failed to inspect dependencies for {binary_path.name}: {result.stderr.strip()}",
         )
 
-    dependencies: List[str] = []
-    for index, raw_line in enumerate(result.stdout.splitlines()):
-        if index == 0:
+    header = ""
+    entries: List[str] = []
+    for raw_line in result.stdout.splitlines():
+        if not raw_line.strip():
             continue
-        dep = raw_line.strip().split(" (", 1)[0].strip()
-        if dep:
-            dependencies.append(dep)
-    return dependencies
+        if not raw_line[0].isspace():
+            header = raw_line.strip().rstrip(":").strip()
+            continue
+        entry = raw_line.strip().split(" (", 1)[0].strip()
+        if entry:
+            entries.append(entry)
+    return header, entries
+
+
+def _read_macos_rpaths(builder: "FFmpegBuilder", binary_path: Path) -> List[str]:
+    result = builder.executor.execute(
+        ["otool", "-l", str(binary_path)], env=builder.get_build_env()
+    )
+    if not result.success:
+        raise BuildError(
+            "release",
+            f"Failed to inspect rpaths for {binary_path.name}: {result.stderr.strip()}",
+        )
+
+    rpaths: List[str] = []
+    lines = result.stdout.splitlines()
+    for index, line in enumerate(lines):
+        if "LC_RPATH" not in line:
+            continue
+        for follow in lines[index + 1 : index + 3]:
+            stripped = follow.strip()
+            if stripped.startswith("path "):
+                rpaths.append(stripped.split("path", 1)[1].split(" (", 1)[0].strip())
+                break
+    return rpaths
+
+
+def _run_install_name_tool(builder: "FFmpegBuilder", macho: Path, args: List[str]) -> None:
+    result = builder.executor.execute(
+        ["install_name_tool", *args, str(macho)], env=builder.get_build_env()
+    )
+    if not result.success:
+        raise BuildError(
+            "release",
+            f"install_name_tool {' '.join(args)} failed for {macho.name}: "
+            f"{result.stderr.strip()}",
+        )
+
+
+def _ad_hoc_sign(builder: "FFmpegBuilder", macho: Path) -> None:
+    """Re-sign a modified Mach-O ad-hoc (Apple Silicon refuses to load a
+    Mach-O whose signature was invalidated by install_name_tool)."""
+    result = builder.executor.execute(
+        ["codesign", "--force", "-s", "-", str(macho)], env=builder.get_build_env()
+    )
+    if not result.success:
+        raise BuildError(
+            "release",
+            f"codesign failed for {macho.name}: {result.stderr.strip()}",
+        )
+
+
+def _make_macos_bundle_relocatable(
+    builder: "FFmpegBuilder",
+    release_dir: Path,
+    source_binaries: List[Path],
+    dependencies: Set[Path],
+) -> List[str]:
+    """Rewrite install names and rpaths so the bundle runs from any location.
+
+    References to bundled dylibs are rewritten to @rpath/<name> (only
+    references that resolve to a file actually copied into the bundle are
+    touched, so system libraries keep their original references), each
+    bundled dylib's own install name is set to @rpath/<name>, @loader_path
+    is added as an rpath to every Mach-O file, and each modified file is
+    re-signed ad-hoc. Returns a human-readable list of the rewrites.
+    """
+    bundled = {path.resolve() for path in dependencies}
+    bundled.update(path.resolve() for path in source_binaries)
+    binary_names = {path.name for path in source_binaries}
+    rewrites: List[str] = []
+
+    macho_files = [
+        path
+        for path in sorted(release_dir.iterdir())
+        if path.is_file() and path.name != "manifest.json"
+    ]
+
+    for macho in macho_files:
+        _header, entries = _read_macos_install_names(builder, macho)
+        is_dylib = macho.name not in binary_names
+        if is_dylib and entries:
+            own_id, referenced = entries[0], entries[1:]
+        else:
+            own_id, referenced = "", entries
+
+        for dep in referenced:
+            resolved = _resolve_runtime_dependency(builder, dep, macho)
+            if resolved is None or resolved.resolve() not in bundled:
+                continue
+            if resolved.name == macho.name:
+                # The dylib's own install name (id); handled by -id below.
+                continue
+            target = f"@rpath/{resolved.name}"
+            if dep == target:
+                continue
+            _run_install_name_tool(builder, macho, ["-change", dep, target])
+            rewrites.append(f"{macho.name}: {dep} -> {target}")
+
+        if macho.name not in binary_names:
+            target_id = f"@rpath/{macho.name}"
+            if own_id != target_id:
+                _run_install_name_tool(builder, macho, ["-id", target_id])
+                rewrites.append(f"{macho.name}: id -> {target_id}")
+
+        if "@loader_path" not in _read_macos_rpaths(builder, macho):
+            _run_install_name_tool(builder, macho, ["-add_rpath", "@loader_path"])
+
+        _ad_hoc_sign(builder, macho)
+
+    return rewrites
 
 
 def _resolve_runtime_dependency(
@@ -273,6 +406,15 @@ def _runtime_search_dirs(builder: "FFmpegBuilder", binary_path: Path) -> List[Pa
         if path.exists():
             unique.append(path)
     return unique
+
+
+def _is_system_dependency_reference(builder: "FFmpegBuilder", dep: str) -> bool:
+    """True for references dyld resolves from the system even when the
+    literal path does not exist on disk (dyld shared cache: /usr/lib
+    libraries and /System/Library frameworks on macOS)."""
+    if builder.platform != "darwin":
+        return False
+    return dep.startswith("/System/Library/") or dep.startswith("/usr/lib/")
 
 
 def _is_system_runtime_library(builder: "FFmpegBuilder", lib_path: Path) -> bool:

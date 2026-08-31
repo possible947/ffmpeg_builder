@@ -153,6 +153,128 @@ def test_release_bundle_wrapper_static_binary_skips_dependency_scan(tmp_path: Pa
     assert manifest["missing_dependencies"] == []
 
 
+def test_release_bundle_macos_rewrites_install_names_and_rpaths(tmp_path: Path):
+    """M8: the macOS bundle must be relocatable.
+
+    References to bundled dylibs are rewritten to @rpath/<name>, each
+    bundled dylib's install name is set to @rpath/<name>, @loader_path is
+    added as an rpath to every Mach-O file, and each file is re-signed
+    ad-hoc. References to system libraries are left untouched.
+    """
+
+    class _Result:
+        def __init__(self, stdout: str = "", stderr: str = "", success: bool = True):
+            self.stdout = stdout
+            self.stderr = stderr
+            self.success = success
+
+    bundled_dylib = tmp_path / "lib" / "libfoo.dylib"
+
+    class _Executor:
+        def __init__(self):
+            self.install_name_tool_calls = []
+            self.codesign_calls = []
+
+        def execute(self, command, env=None):
+            if command[0] == "otool" and command[1] == "-L":
+                # Like real otool, the dylib lists its own install name
+                # (bundled_dylib) as the first entry. /usr/lib/* is a
+                # dyld-shared-cache reference (no file on disk, not
+                # missing); /opt/local/lib/libFakeMissing is genuinely
+                # missing.
+                deps = [
+                    str(bundled_dylib),
+                    "/usr/lib/libFakeSystem.dylib",
+                    "/opt/local/lib/libFakeMissing.dylib",
+                ]
+                stdout = f"{command[2]}:\n" + "".join(
+                    f"\t{dep} (compatibility version 1.0.0)\n" for dep in deps
+                )
+                return _Result(stdout=stdout)
+            if command[0] == "otool" and command[1] == "-l":
+                return _Result(
+                    stdout="      cmd LC_RPATH\n  cmdsize 32\n"
+                    "     path /opt/local/lib/libomp (offset 12)\n"
+                )
+            if command[0] == "install_name_tool":
+                self.install_name_tool_calls.append(list(command))
+                return _Result()
+            if command[0] == "codesign":
+                self.codesign_calls.append(list(command))
+                return _Result()
+            raise AssertionError(f"Unexpected command: {command}")
+
+    class _PlatformDetector:
+        def get_build_backend_name(self):
+            return "macos-native"
+
+    class _Config:
+        ffmpeg_version = "8.1"
+
+        class windows:
+            msys2_root = "C:/msys64"
+
+    executor = _Executor()
+
+    class _Builder:
+        platform = "darwin"
+        workspace = tmp_path
+        config = _Config()
+        platform_detector = _PlatformDetector()
+
+        @staticmethod
+        def _rmtree(path: Path) -> None:
+            if path.exists():
+                for child in sorted(path.rglob("*"), reverse=True):
+                    if child.is_file():
+                        child.unlink()
+                    else:
+                        child.rmdir()
+                path.rmdir()
+
+        def get_build_env(self):
+            return {}
+
+    _Builder.executor = executor
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for name in ("ffmpeg", "ffprobe", "ffplay"):
+        (bin_dir / name).write_text("binary", encoding="utf-8")
+    bundled_dylib.parent.mkdir(parents=True)
+    bundled_dylib.write_text("dylib", encoding="utf-8")
+
+    release_dir = make_release_bundle(_Builder())
+
+    manifest = json.loads((release_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["dependencies"] == [str(release_dir / "libfoo.dylib")]
+    # System (dyld shared cache) references are not reported as missing;
+    # only genuinely missing dylibs are.
+    assert manifest["missing_dependencies"] == ["/opt/local/lib/libFakeMissing.dylib"]
+    assert len(manifest["install_name_rewrites"]) == 4
+
+    calls = executor.install_name_tool_calls
+    changes = [call for call in calls if call[1] == "-change"]
+    assert len(changes) == 3
+    for call in changes:
+        assert call[2] == str(bundled_dylib)
+        assert call[3] == "@rpath/libfoo.dylib"
+
+    ids = [call for call in calls if call[1] == "-id"]
+    assert ids == [
+        ["install_name_tool", "-id", "@rpath/libfoo.dylib", str(release_dir / "libfoo.dylib")]
+    ]
+
+    rpaths = [call for call in calls if call[1] == "-add_rpath"]
+    assert len(rpaths) == 4
+    for call in rpaths:
+        assert call[2] == "@loader_path"
+
+    assert len(executor.codesign_calls) == 4
+    for call in executor.codesign_calls:
+        assert call[1:4] == ["--force", "-s", "-"]
+
+
 class _PlatformInfo:
     cuda_available = False
     cuda_path = None
