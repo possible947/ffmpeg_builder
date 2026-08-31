@@ -1,11 +1,12 @@
 """Tests for builder module split compatibility."""
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
 
-from ffmpeg_builder.builder import BuildError, FFmpegBuilder
+from ffmpeg_builder.builder import BuildError, CARGO_C_VERSION, FFmpegBuilder
 from ffmpeg_builder.components import BuildSystem, Component, ComponentCategory
 from ffmpeg_builder.config import BuildConfig
 from ffmpeg_builder.component_builders import get_custom_builder
@@ -233,6 +234,32 @@ def test_absolute_source_archives_dir_kept(tmp_path: Path):
     archives = tmp_path / "archives"
     builder = _make_builder_with_archives(tmp_path, str(archives))
     assert builder.source_archives == archives
+
+
+def test_build_cargo_installs_pinned_cargo_c(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """M6: the cargo-c install must pin an explicit version."""
+    builder = _make_builder_with_archives(tmp_path, str(tmp_path / "archives"))
+    component = _make_libplacebo_component()
+    source_dir = tmp_path / "src"
+
+    monkeypatch.setattr(FFmpegBuilder, "_get_rustc_version", lambda self: (1, 95, 0))
+    monkeypatch.setattr(shutil, "which", lambda name, path=None: None)
+
+    commands = []
+
+    class _Result:
+        success = True
+
+    def _execute_with_log(command, component_name, step, cwd, env, timeout=None, stdin=None):
+        commands.append(list(command))
+        return _Result(), tmp_path / f"{component_name}_{step}.log"
+
+    builder.executor.execute_with_log = _execute_with_log
+
+    builder._build_cargo(component, source_dir)
+
+    assert commands[0] == ["cargo", "install", "cargo-c", "--version", CARGO_C_VERSION]
+    assert commands[1][:2] == ["cargo", "cinstall"]
 
 
 def test_build_libplacebo_merges_windows_pkg_config_path_and_patches_glslang(

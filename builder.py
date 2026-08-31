@@ -26,6 +26,10 @@ from .state import ComponentStatus, StateManager
 # source-archive paths are anchored to it so they do not depend on the CWD.
 PROJECT_ROOT = Path(__file__).resolve().parent
 
+# Pinned so builds are reproducible; bump deliberately when a new cargo-c
+# release is validated.
+CARGO_C_VERSION = "0.10.25"
+
 
 def _rmtree(path: Path) -> None:
     """Remove a directory tree, handling read-only files on Windows.
@@ -1373,9 +1377,9 @@ class FFmpegBuilder:
             self._run_step(
                 component,
                 ComponentStatus.BUILDING,
-                "cargo install cargo-c",
+                f"cargo install cargo-c --version {CARGO_C_VERSION}",
                 "Failed to install cargo-c",
-                ["cargo", "install", "cargo-c"],
+                ["cargo", "install", "cargo-c", "--version", CARGO_C_VERSION],
                 "install-cargo-c",
                 source_dir,
                 env,
