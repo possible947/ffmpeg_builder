@@ -4,6 +4,10 @@ All notable changes to the FFmpeg Builder project.
 
 ## [Unreleased]
 
+### Added
+
+- **Selectable FFmpeg source versions (2026-08-31)** — `ffmpeg_version` now supports `8.1` (default) and `9.0`. Each selection resolves the FFmpeg target from declarative source metadata with its own verified SHA-256. FFmpeg 9.0 omits the removed `--enable-libglslang` configure option while glslang remains available as a libplacebo dependency. Future FFmpeg version profiles must include source/checksum metadata, configuration and flag-compatibility regression tests, and an `Unreleased` changelog entry documenting the version, compatibility changes, and validation run.
+
 ### Verified — successful end-to-end build (2026-08-20)
 
 - **First clean build after the Linux hwaccel reliability pass, on the AMD/ROCm reference machine** — Full build completed 58/58 components, 0 failures, in-process on the same hardware used to validate the detector fixes above.

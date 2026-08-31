@@ -356,9 +356,11 @@ class ComponentRegistry:
         """
         # Pass 1: everything except the tool gate, preserving registry order.
         candidates = [
-            self.get_ffmpeg_component(ffmpeg_version)
-            if comp.category == ComponentCategory.TARGET
-            else comp
+            (
+                self.get_ffmpeg_component(ffmpeg_version)
+                if comp.category == ComponentCategory.TARGET
+                else comp
+            )
             for comp in self._components
             if self._is_eligible(
                 comp, gpl_enabled, platform, tools, platform_info, disable_lv2, enable_libvmaf

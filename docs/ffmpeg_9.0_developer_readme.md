@@ -2,7 +2,7 @@
 
 ## 1) Goal
 
-Add **FFmpeg 9.0** build support to `ffmpeg_builder` while preserving the current architecture and behavior used for FFmpeg 8.1, and refreshing component versions to current stable releases where practical.
+Add **FFmpeg 9.0** build support to `ffmpeg_builder` while preserving FFmpeg 8.1 as the default configuration and refreshing component versions to current stable releases where practical.
 
 ---
 
@@ -238,16 +238,14 @@ Notes for the version-refresh batches (Phase B):
 
 ---
 
-## 6) Preliminary implementation plan
+## 6) Implementation status
 
-## Phase A — Safe FFmpeg 9.0 baseline (minimum viable integration)
+## Phase A — Safe FFmpeg 9.0 baseline (implemented)
 
-1. Update FFmpeg target version in `components.yaml` to `9.0`.
-2. Update defaults in:
-   - `config.py` (`BuildConfig.ffmpeg_version`)
-   - `build_config.yaml`
-3. Remove or version-gate obsolete FFmpeg flags (starting with `--enable-libglslang`).
-4. Keep libplacebo/glslang build chain intact for Vulkan, but decouple it from FFmpeg configure flags.
+1. `ffmpeg_version` remains `8.1` by default and supports `8.1` and `9.0` as validated selections.
+2. The FFmpeg registry target has declared source/checksum profiles for both versions.
+3. `--enable-libglslang` is emitted only for FFmpeg 8.1; glslang remains a libplacebo dependency for both versions.
+4. The configuration screen, build component list, state, dashboard, and release manifest use the selected version.
 
 ## Phase B — Refresh component versions (requested “current” set)
 

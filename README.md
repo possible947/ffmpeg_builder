@@ -1,6 +1,6 @@
 # FFmpeg Builder
 
-Interactive Python-based build system for FFmpeg 8.1 on macOS, Linux, and **Windows 11 + MSYS2 UCRT64**.
+Interactive Python-based build system for FFmpeg 8.1 (default) and 9.0 on macOS, Linux, and **Windows 11 + MSYS2 UCRT64**.
 
 FFmpeg Builder replaces the traditional bash `build-ffmpeg` script with a modern, interactive interface featuring real-time progress tracking, configuration management, platform-aware hardware acceleration detection, and resumable builds.
 
@@ -339,6 +339,10 @@ windows:
   prefer_system_packages: true
 ```
 
+Supported `ffmpeg_version` values are `8.1` (the default) and `9.0`. Each version
+uses a separately verified source archive checksum. Add its archive to the local
+source mirror or enable verified network downloads before building it.
+
 By default, builds are **offline-first**: every archive must exist in `third_party/sources`.
 To allow fetching missing archives from the network, set `allow_network_downloads: true`.
 For archive integrity validation, components in `components.yaml` may define optional
@@ -385,7 +389,7 @@ vulkan-headers, glslang, fast-float (libplacebo dependency), libplacebo (always 
 
 ### Target
 
-FFmpeg 8.1
+FFmpeg 8.1 (default) or 9.0, selected with `ffmpeg_version`
 
 ## Hardware Acceleration
 
@@ -427,7 +431,9 @@ Windows phase-3 policy:
 
 - Requires Vulkan SDK or at minimum vulkan-headers and loader
 - The builder compiles vulkan-headers and glslang from source when Vulkan is available
-- Adds `--enable-vulkan` and `--enable-libglslang` to FFmpeg configure
+- Adds `--enable-vulkan` to FFmpeg configure. FFmpeg 8.1 also receives
+  `--enable-libglslang`; FFmpeg 9.0 omits that removed configure option while retaining
+  glslang as a libplacebo dependency
 
 ### libplacebo Notes
 

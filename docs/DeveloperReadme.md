@@ -113,6 +113,13 @@ class BuildConfig:
     linux: LinuxConfig          # c_standard, cxx_standard
 ```
 
+`ffmpeg_version` supports `8.1` (default) and `9.0`. Adding a version requires a
+declared FFmpeg source profile with its archive name and verified SHA-256, a matching
+configuration validation entry, and version-specific configure-flag tests. Record the
+completed profile and validation results under `Unreleased` in `docs/CHANGELOG.md`.
+Run tests through the project virtual environment and commit each discrete version
+profile step atomically after its focused validation.
+
 **`ConfigManager`** — loads/saves YAML configuration:
 
 - `load()` — reads `build_config.yaml`, returns `BuildConfig`
@@ -239,7 +246,8 @@ class Component:
 |--------|-------------|
 | `get_all()` | All components in build order |
 | `get_buildable(gpl, platform, tools, ...)` | Filtered list based on config and platform |
-| `get_ffmpeg_configure_flags(built, gpl, platform, platform_info=None)` | Collect `--enable-*` flags from built components and platform readiness |
+| `get_ffmpeg_component(version)` | FFmpeg target resolved to its declared source profile |
+| `get_ffmpeg_configure_flags(built, gpl, platform, platform_info=None, ffmpeg_version="8.1")` | Collect version-compatible `--enable-*` flags from built components and platform readiness |
 
 **HW acceleration filtering** in `get_buildable()`:
 
@@ -316,6 +324,8 @@ Windows/UCRT64 policy in current implementation:
 | Per built component | `--enable-libdav1d`, `--enable-libx264`, etc. |
 | macOS | `--enable-videotoolbox` |
 | OpenCL ready (`opencl_available` or runtime+dev ready, or OpenCL components built) | `--enable-opencl` |
+| glslang with FFmpeg 8.1 | `--enable-libglslang` |
+| glslang with FFmpeg 9.0 | omitted; the option was removed upstream |
 
 ### `executor.py` — Command Execution
 
@@ -563,6 +573,16 @@ State is saved after every component status change and progress update.
 4. Add filtering in `components.py` `get_buildable()` if needed
 
 ## Testing
+
+For implementation changes, use the project virtual environment; do not run bare
+`pytest`, which can collect extracted third-party packages under `workspace/`:
+
+```bash
+source .venv/bin/activate
+python -m pytest tests/ -q
+black --check .
+python scripts/check_mypy_baseline.py
+```
 
 Run the environment check:
 
