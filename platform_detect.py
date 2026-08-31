@@ -640,8 +640,13 @@ class PlatformDetector:
                     if cap and "." in cap:
                         capabilities.append(cap.replace(".", ""))
 
-                if capabilities:
-                    self.platform_info.cuda_compute_capability = min(capabilities)
+                numeric = [int(cap) for cap in capabilities if cap.isdigit()]
+                if numeric:
+                    # Numeric (not lexicographic) minimum: with string
+                    # comparison "120" < "86", which would emit
+                    # -gencode arch=compute_120 only and break builds for
+                    # mixed-generation GPU systems (e.g. sm_86 + sm_120).
+                    self.platform_info.cuda_compute_capability = str(min(numeric))
         except Exception:
             pass
 

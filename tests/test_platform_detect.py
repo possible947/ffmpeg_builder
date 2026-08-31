@@ -273,6 +273,43 @@ class TestOpenclClinfoProbe:
         assert str(clinfo_path) in d.platform_info.opencl_runtime_reason
 
 
+class TestCudaComputeCapability:
+    """_detect_cuda_compute_capability(): numeric min across mixed GPUs."""
+
+    def _run_with_caps(self, monkeypatch, caps):
+        d = PlatformDetector()
+        stdout = "\n".join(caps)
+
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            lambda *a, **k: subprocess.CompletedProcess(a, 0, stdout=stdout),
+        )
+        d._detect_cuda_compute_capability()
+        return d
+
+    def test_single_gpu_capability(self, monkeypatch):
+        d = self._run_with_caps(monkeypatch, ["8.6"])
+        assert d.platform_info.cuda_compute_capability == "86"
+
+    def test_mixed_generation_uses_numeric_min(self, monkeypatch):
+        # Lexicographic min() would pick "120" over "86" here.
+        d = self._run_with_caps(monkeypatch, ["8.6", "12.0"])
+        assert d.platform_info.cuda_compute_capability == "86"
+
+    def test_order_independent(self, monkeypatch):
+        d = self._run_with_caps(monkeypatch, ["12.0", "8.6", "9.0"])
+        assert d.platform_info.cuda_compute_capability == "86"
+
+    def test_non_numeric_lines_ignored(self, monkeypatch):
+        d = self._run_with_caps(monkeypatch, ["N/A", "8.6"])
+        assert d.platform_info.cuda_compute_capability == "86"
+
+    def test_no_valid_caps_leaves_none(self, monkeypatch):
+        d = self._run_with_caps(monkeypatch, ["N/A"])
+        assert d.platform_info.cuda_compute_capability is None
+
+
 @pytest.mark.skipif(
     platform.system() != "Linux",
     reason="Real-hardware smoke test only meaningful on the target Linux dev box",
