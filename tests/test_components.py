@@ -435,6 +435,23 @@ class TestFfmpegConfigureFlags:
         )
         assert "--enable-opencl" in flags
 
+    @pytest.mark.parametrize(
+        ("ffmpeg_version", "expects_glslang"),
+        (("8.1", True), ("9.0", False)),
+    )
+    def test_glslang_flag_is_version_compatible(self, ffmpeg_version, expects_glslang):
+        flags = self.registry.get_ffmpeg_configure_flags(
+            built_components=["glslang"],
+            gpl_enabled=False,
+            platform="linux",
+            ffmpeg_version=ffmpeg_version,
+        )
+
+        assert ("--enable-libglslang" in flags) is expects_glslang
+        if ffmpeg_version == "9.0":
+            assert "--enable-libshaderc" not in flags
+            assert "--enable-libcelt" not in flags
+
 
 class TestFfmpegTargetVersions:
     """Tests for selecting declared FFmpeg source profiles."""

@@ -95,6 +95,7 @@ class Component:
     post_install: Optional[str] = ""
     custom_build_fn: Optional[str] = None
     ffmpeg_configure_flag: Optional[str] = None
+    ffmpeg_configure_flags_by_version: Dict[str, List[str]] = field(default_factory=dict)
     skip_condition: Optional[str] = None
     extra_libs: str = ""
     sed_patches: Dict[str, str] = field(default_factory=dict)
@@ -257,6 +258,10 @@ class ComponentRegistry:
             post_install=data.get("post_install") or None,
             custom_build_fn=data.get("custom_build_fn"),
             ffmpeg_configure_flag=data.get("ffmpeg_configure_flag"),
+            ffmpeg_configure_flags_by_version={
+                str(version): list(flags)
+                for version, flags in (data.get("ffmpeg_configure_flags_by_version") or {}).items()
+            },
             skip_condition=data.get("skip_condition"),
             extra_libs=data.get("extra_libs") or "",
             sed_patches=dict(data.get("sed_patches") or {}),
@@ -478,6 +483,7 @@ class ComponentRegistry:
         gpl_enabled: bool,
         platform: str,
         platform_info: Optional[Any] = None,
+        ffmpeg_version: str = "8.1",
     ) -> List[str]:
         """Get FFmpeg configure flags based on built components.
 
@@ -494,6 +500,8 @@ class ComponentRegistry:
         for comp in self._components:
             if comp.name in built_components and comp.ffmpeg_configure_flag:
                 flags.extend(comp.ffmpeg_configure_flag.split())
+            if comp.name in built_components:
+                flags.extend(comp.ffmpeg_configure_flags_by_version.get(ffmpeg_version, []))
 
         if platform == "darwin":
             flags.append("--enable-videotoolbox")

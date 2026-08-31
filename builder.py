@@ -2794,6 +2794,7 @@ class FFmpegBuilder:
             self.config.gpl_enabled,
             self.platform,
             self.platform_detector.platform_info,
+            self.config.ffmpeg_version,
         )
 
         configure_args = [

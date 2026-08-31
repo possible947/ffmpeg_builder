@@ -731,7 +731,9 @@
   requires_tools:
   - python3
   custom_build_fn: build_glslang
-  ffmpeg_configure_flag: --enable-libglslang
+  ffmpeg_configure_flags_by_version:
+    '8.1':
+    - --enable-libglslang
 - name: fast-float
   sha256: 4458aae4b0eb55717968edda42987cabf5f7fc737aee8fede87a70035dba9ab0
   version: 6.1.6
