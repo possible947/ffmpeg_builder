@@ -840,3 +840,10 @@
   build_system: custom
   archive_filename: FFmpeg-release-{version}.tar.gz
   custom_build_fn: build_ffmpeg
+  versions:
+    '8.1':
+      sha256: dd308201bb1239a1b73185f80c6b4121f4efdfa424a009ce544fd00bf736bb2e
+      archive_filename: FFmpeg-release-{version}.tar.gz
+    '9.0':
+      sha256: d97647ace36a307f17ba2bca052d68937487bed8682e1eb9b6737076a9c442b7
+      archive_filename: FFmpeg-release-{version}.tar.gz

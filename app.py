@@ -121,6 +121,7 @@ class FFmpegBuilderApp:
             config.enable_libvmaf,
             self.platform_info,
             full_static=config.full_static,
+            ffmpeg_version=config.ffmpeg_version,
         )
 
     def _run_build(self, config: BuildConfig, resume: bool = False) -> None:

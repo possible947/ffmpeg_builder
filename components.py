@@ -1,6 +1,6 @@
 """Component registry for FFmpeg builder."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -55,6 +55,15 @@ class PlatformOverride:
     configure_args_override: Optional[List[str]] = None
 
 
+@dataclass(frozen=True)
+class ComponentVersion:
+    """Version-specific source metadata for a component."""
+
+    sha256: Optional[str] = None
+    url: Optional[str] = None
+    archive_filename: Optional[str] = None
+
+
 @dataclass
 class Component:
     """Component definition."""
@@ -89,6 +98,23 @@ class Component:
     skip_condition: Optional[str] = None
     extra_libs: str = ""
     sed_patches: Dict[str, str] = field(default_factory=dict)
+    versions: Dict[str, ComponentVersion] = field(default_factory=dict)
+
+    def with_version(self, version: str) -> "Component":
+        """Return this component resolved to a declared source version."""
+        source = self.versions.get(version)
+        if source is None:
+            versions = ", ".join(sorted(self.versions))
+            raise ValueError(
+                f"Unsupported {self.name} version {version!r}; supported versions: {versions}"
+            )
+        return replace(
+            self,
+            version=version,
+            sha256=source.sha256 or self.sha256,
+            url=source.url or self.url,
+            archive_filename=source.archive_filename or self.archive_filename,
+        )
 
     def get_url(self) -> str:
         """Get download URL with version substituted."""
@@ -192,6 +218,15 @@ class ComponentRegistry:
     @classmethod
     def _component_from_dict(cls, data: Dict[str, Any]) -> Component:
         """Build a Component dataclass from one YAML entry dict."""
+        versions_data = data.get("versions") or {}
+        versions = {
+            str(version): ComponentVersion(
+                sha256=source.get("sha256"),
+                url=source.get("url"),
+                archive_filename=source.get("archive_filename"),
+            )
+            for version, source in versions_data.items()
+        }
         return Component(
             name=data["name"],
             version=str(data["version"]),
@@ -225,6 +260,7 @@ class ComponentRegistry:
             skip_condition=data.get("skip_condition"),
             extra_libs=data.get("extra_libs") or "",
             sed_patches=dict(data.get("sed_patches") or {}),
+            versions=versions,
         )
 
     def _load_components(self, yaml_path: Path) -> None:
@@ -271,6 +307,15 @@ class ComponentRegistry:
         """Get components by category."""
         return [c for c in self._components if c.category == category]
 
+    def get_ffmpeg_component(self, version: str) -> Component:
+        """Get the FFmpeg target resolved to a supported source version."""
+        component = next(
+            (item for item in self._components if item.category == ComponentCategory.TARGET), None
+        )
+        if component is None:
+            raise ValueError("FFmpeg target component is missing from the registry")
+        return component.with_version(version)
+
     def get_buildable(
         self,
         gpl_enabled: bool,
@@ -280,6 +325,7 @@ class ComponentRegistry:
         enable_libvmaf: bool = True,
         platform_info: Optional[Any] = None,
         full_static: bool = False,
+        ffmpeg_version: str = "8.1",
     ) -> List[Component]:
         """Get list of components that should be built.
 
@@ -305,7 +351,9 @@ class ComponentRegistry:
         """
         # Pass 1: everything except the tool gate, preserving registry order.
         candidates = [
-            comp
+            self.get_ffmpeg_component(ffmpeg_version)
+            if comp.category == ComponentCategory.TARGET
+            else comp
             for comp in self._components
             if self._is_eligible(
                 comp, gpl_enabled, platform, tools, platform_info, disable_lv2, enable_libvmaf

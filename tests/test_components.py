@@ -436,6 +436,45 @@ class TestFfmpegConfigureFlags:
         assert "--enable-opencl" in flags
 
 
+class TestFfmpegTargetVersions:
+    """Tests for selecting declared FFmpeg source profiles."""
+
+    @pytest.fixture(autouse=True)
+    def _registry(self):
+        self.registry = ComponentRegistry()
+
+    @pytest.mark.parametrize(
+        ("version", "sha256"),
+        (
+            ("8.1", "dd308201bb1239a1b73185f80c6b4121f4efdfa424a009ce544fd00bf736bb2e"),
+            ("9.0", "d97647ace36a307f17ba2bca052d68937487bed8682e1eb9b6737076a9c442b7"),
+        ),
+    )
+    def test_get_ffmpeg_component_resolves_declared_source(self, version, sha256):
+        component = self.registry.get_ffmpeg_component(version)
+
+        assert component.version == version
+        assert component.sha256 == sha256
+        assert component.get_url().endswith(f"n{version}.tar.gz")
+        assert component.get_archive_filename() == f"FFmpeg-release-{version}.tar.gz"
+
+    def test_get_ffmpeg_component_rejects_unsupported_version(self):
+        with pytest.raises(ValueError, match="Unsupported ffmpeg version"):
+            self.registry.get_ffmpeg_component("10.0")
+
+    def test_get_buildable_resolves_configured_ffmpeg_version(self, mock_tools, mock_platform_info):
+        components = self.registry.get_buildable(
+            gpl_enabled=False,
+            platform="linux",
+            tools=mock_tools,
+            platform_info=mock_platform_info,
+            ffmpeg_version="9.0",
+        )
+
+        ffmpeg = next(component for component in components if component.name == "ffmpeg")
+        assert ffmpeg.version == "9.0"
+
+
 class TestBuildOrder:
     """Tests for registry build ordering."""
 
