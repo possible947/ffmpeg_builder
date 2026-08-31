@@ -150,6 +150,10 @@ class TestRegistryChecksums:
             archive = mirror / comp.get_archive_filename()
             if not archive.exists():
                 continue
+            # Un-pulled Git LFS pointer (e.g. CI checkouts without `git lfs pull`):
+            # nothing real to verify against.
+            if b"git-lfs.github.com" in archive.read_bytes()[:200]:
+                continue
             h = hashlib.sha256()
             with open(archive, "rb") as fh:
                 for chunk in iter(lambda: fh.read(1 << 20), b""):
