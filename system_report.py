@@ -46,7 +46,7 @@ class SystemReport:
         Returns:
             List of missing tool names.
         """
-        required = ["make", "pkg-config", "curl"]
+        required = ["make", "pkg-config"]
 
         # Platform-specific requirements
         if self.platform_info.is_macos:

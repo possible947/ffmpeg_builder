@@ -13,6 +13,7 @@ automatically on any other machine.
 """
 
 import platform
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -342,6 +343,16 @@ class TestCudaComputeCapability:
     platform.system() != "Linux",
     reason="Real-hardware smoke test only meaningful on the target Linux dev box",
 )
+class TestToolDetection:
+    """M9: curl is not used by the builder, so it must not be detected."""
+
+    def test_detect_tools_does_not_include_curl(self, monkeypatch):
+        detector = PlatformDetector()
+        monkeypatch.setattr(shutil, "which", lambda name: None)
+        detector._detect_tools()
+        assert "curl" not in detector.tools
+
+
 class TestRealHardware:
     """Smoke-tests the detector end-to-end on whatever Linux box runs this.
 

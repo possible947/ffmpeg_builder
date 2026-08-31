@@ -1200,7 +1200,6 @@ class PlatformDetector:
             "ninja",
             "cargo",
             "rustc",
-            "curl",
             "git",
         ]
 
