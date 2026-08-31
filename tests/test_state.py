@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from ffmpeg_builder import state as state_module
 from ffmpeg_builder.state import (
     IN_PROGRESS_STATUSES,
     TERMINAL_STATUSES,
@@ -174,6 +175,12 @@ class TestStateManager:
         mgr = StateManager(sp)
         with pytest.raises(ValueError, match="No state to save"):
             mgr.save()
+
+    def test_default_path_anchored_to_project_root(self, monkeypatch, tmp_path):
+        """M5: the default state path must not depend on the CWD."""
+        monkeypatch.chdir(tmp_path)
+        mgr = StateManager()
+        assert mgr.state_path == state_module.PROJECT_ROOT / "workspace" / "build_state.json"
 
 
 class TestStateFileRobustness:

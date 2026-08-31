@@ -22,6 +22,10 @@ from .platform_detect import PlatformDetector
 from .release_bundle import make_release_bundle as create_release_bundle
 from .state import ComponentStatus, StateManager
 
+# The package is the repository root (flat layout); relative
+# source-archive paths are anchored to it so they do not depend on the CWD.
+PROJECT_ROOT = Path(__file__).resolve().parent
+
 
 def _rmtree(path: Path) -> None:
     """Remove a directory tree, handling read-only files on Windows.
@@ -71,7 +75,11 @@ class FFmpegBuilder:
         self.config = config
         self.workspace = workspace.absolute()
         self.packages = packages.absolute()
-        self.source_archives = Path(config.source_archives_dir).absolute()
+        archives_dir = Path(config.source_archives_dir)
+        if archives_dir.is_absolute():
+            self.source_archives = archives_dir
+        else:
+            self.source_archives = PROJECT_ROOT / archives_dir
         self.state_manager = state_manager
         self.platform_detector = platform_detector
 

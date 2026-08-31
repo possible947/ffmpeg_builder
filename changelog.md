@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-08-31 — Production-readiness review, step 4: M5 + M6 + M9
+
+В рамках ревью для production-использования закрываются medium-severity пункты step 4 (M5, M6, M9). Коммит после каждого пункта.
+
+- **M5 — CWD-зависимые пути.** `workspace/`, `build_config.yaml` и `source_archives_dir: third_party/sources` резолвились относительно *текущего* рабочего каталога, тогда как `components.yaml` уже был закреплён за файлом модуля. Запуск `ffmpeg_builder` из любого каталога, кроме корня репозитория, молча использовал другие workspace/конфиг/архивы и ломал offline-first поиск архивов непонятной ошибкой. Все project-relative пути теперь закреплены за корнем проекта через `PROJECT_ROOT = Path(__file__).resolve().parent` (flat layout: пакет = корень репозитория): `__main__.py` (workspace), `app.py` (workspace + путь к конфигу), дефолт `ConfigManager` (`config.py`), дефолт `StateManager` (`state.py`), `FFmpegBuilder.source_archives` (`builder.py`) — относительный `source_archives_dir` резолвится от корня проекта, абсолютный сохраняется как есть. Явно переданные пути (например `FFmpegBuilderApp(workspace=...)`, тестовые фикстуры) не изменились. Тесты: дефолтный путь конфига, дефолтный путь состояния, якорение относительного archive-каталога, сохранение абсолютного — каждый с `monkeypatch.chdir` в временный CWD.
+
+Полный текст — в `docs/CHANGELOG.md` (авторитетный источник по истории фиксов).
+
+---
+
 ## 2026-08-31 — Production-readiness review, step 1: H1 + H2
 
 В рамках ревью для production-использования закрыты два high-severity пункта (step 1). Это **новый** пакет H1/H2 из текущего ревью; не путать с пакетом H1-H3 от 2026-08-17 выше (там другие находки: libplacebo/macOS, PATH UCRT64, Python 3.12).

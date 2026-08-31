@@ -208,6 +208,33 @@ def _make_libplacebo_component() -> Component:
     )
 
 
+def _make_builder_with_archives(tmp_path: Path, source_archives_dir: str) -> FFmpegBuilder:
+    config = BuildConfig(source_archives_dir=source_archives_dir)
+    config.windows.backend = "msys2-ucrt64"
+    return FFmpegBuilder(
+        config=config,
+        workspace=tmp_path / "workspace",
+        packages=tmp_path / "packages",
+        state_manager=StateManager(tmp_path / "state.json"),
+        platform_detector=_PlatformDetector("windows"),
+    )
+
+
+def test_relative_source_archives_dir_anchored_to_project_root(tmp_path: Path):
+    """M5: a relative source_archives_dir resolves against the project root, not the CWD."""
+    from ffmpeg_builder import builder as builder_module
+
+    builder = _make_builder_with_archives(tmp_path, "third_party/sources")
+    assert builder.source_archives == builder_module.PROJECT_ROOT / "third_party/sources"
+
+
+def test_absolute_source_archives_dir_kept(tmp_path: Path):
+    """M5: an absolute source_archives_dir is used as-is."""
+    archives = tmp_path / "archives"
+    builder = _make_builder_with_archives(tmp_path, str(archives))
+    assert builder.source_archives == archives
+
+
 def test_build_libplacebo_merges_windows_pkg_config_path_and_patches_glslang(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from ffmpeg_builder import config as config_module
 from ffmpeg_builder.config import (
     BuildConfig,
     ConfigManager,
@@ -152,3 +153,9 @@ class TestConfigManager:
         mgr = ConfigManager(path)
         cfg = mgr.load()
         assert cfg.ffmpeg_version == "8.1"
+
+    def test_default_path_anchored_to_project_root(self, monkeypatch, tmp_path):
+        """M5: the default config path must not depend on the CWD."""
+        monkeypatch.chdir(tmp_path)
+        mgr = ConfigManager()
+        assert mgr.config_path == config_module.PROJECT_ROOT / "build_config.yaml"

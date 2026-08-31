@@ -6,6 +6,10 @@ from typing import Any, Dict, Optional
 
 import yaml
 
+# The package is the repository root (flat layout); anchor the default
+# config path to it so relative paths do not depend on the CWD.
+PROJECT_ROOT = Path(__file__).resolve().parent
+
 
 @dataclass
 class MacOSConfig:
@@ -109,7 +113,7 @@ class ConfigManager:
         Args:
             config_path: Path to configuration file. If None, uses default.
         """
-        self.config_path = config_path or Path("build_config.yaml")
+        self.config_path = config_path or PROJECT_ROOT / "build_config.yaml"
         self.config: Optional[BuildConfig] = None
 
     def load(self) -> BuildConfig:

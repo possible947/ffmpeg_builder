@@ -11,6 +11,10 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
+# The package is the repository root (flat layout); anchor the default
+# state path to it so it does not depend on the CWD.
+PROJECT_ROOT = Path(__file__).resolve().parent
+
 
 class ComponentStatus(str, Enum):
     """Component build status."""
@@ -128,7 +132,7 @@ class StateManager:
         Args:
             state_path: Path to state file. If None, uses default.
         """
-        self.state_path = state_path or Path("workspace/build_state.json")
+        self.state_path = state_path or PROJECT_ROOT / "workspace" / "build_state.json"
         self.state: Optional[BuildState] = None
         self._lock = threading.RLock()
         self.status_listener: Optional[

@@ -18,6 +18,10 @@ from .ui.dashboard import BuildDashboard
 from .ui.error_handler import ErrorHandler
 from .ui.screens import ConfigScreen, FinalReportScreen, HelpScreen, InfoScreen, SystemReportScreen
 
+# The package is the repository root (flat layout); anchor the default
+# workspace/config paths to it so the app works from any CWD.
+PROJECT_ROOT = Path(__file__).resolve().parent
+
 
 class FFmpegBuilderApp:
     """Main application class."""
@@ -28,11 +32,11 @@ class FFmpegBuilderApp:
         Args:
             workspace: Workspace directory. If None, uses ./workspace.
         """
-        self.workspace = workspace or Path("workspace")
+        self.workspace = workspace or PROJECT_ROOT / "workspace"
         self.packages = self.workspace / "packages"
         self.console = Console()
 
-        self.config_manager = ConfigManager(Path("build_config.yaml"))
+        self.config_manager = ConfigManager(PROJECT_ROOT / "build_config.yaml")
         self.state_manager = StateManager(self.workspace / "build_state.json")
 
         self.platform_detector = PlatformDetector()
