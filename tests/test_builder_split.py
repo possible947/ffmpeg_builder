@@ -22,6 +22,16 @@ def test_builder_module_reexports_shared_exceptions():
     assert BuilderSkipComponent is build_types.SkipComponent
 
 
+def test_build_all_removed_dead_code_guard():
+    """build_all() was dead code that diverged from app._run_build() (H3).
+
+    The real build loop lives in FFmpegBuilderApp._run_build() with
+    retry/skip/abort handling; a second loop in the builder invites
+    divergence. Keep it deleted.
+    """
+    assert not hasattr(FFmpegBuilder, "build_all")
+
+
 def test_custom_builder_registry_contains_known_entries():
     assert get_custom_builder("build_ffmpeg") is not None
     assert get_custom_builder("build_libplacebo") is not None

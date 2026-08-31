@@ -11,8 +11,6 @@ import tarfile
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
-from tqdm import tqdm
-
 from .build_steps import run_install, run_make, run_step
 from .build_types import BuildError, SkipComponent
 from .component_builders import get_custom_builder
@@ -706,51 +704,6 @@ class FFmpegBuilder:
         """
         if self.async_download_manager is not None:
             self.async_download_manager.shutdown(wait)
-
-    def build_all(self, components: List[Component]) -> List[str]:
-        """Build all components.
-
-        Args:
-            components: List of components to build.
-
-        Returns:
-            List of successfully built component names.
-        """
-        built = []
-        total = len(components)
-
-        state = self.state_manager.get()
-        state.config = self.config.to_dict()
-        state.total_steps = total
-        self.state_manager.save()
-
-        with tqdm(total=total, desc="Building FFmpeg", unit="component") as pbar:
-            for idx, component in enumerate(components, 1):
-                state.current_step = idx
-                self.state_manager.save()
-
-                try:
-                    self.build_component(component)
-                    built.append(component.name)
-                    self.state_manager.mark_component_status(
-                        component.name,
-                        ComponentStatus.COMPLETED,
-                        component.version,
-                    )
-                except BuildError as e:
-                    self.state_manager.mark_component_status(
-                        component.name,
-                        ComponentStatus.FAILED,
-                        component.version,
-                        str(e),
-                        str(e.log_file) if e.log_file else None,
-                    )
-                    raise
-
-                pbar.update(1)
-                pbar.set_postfix_str(component.name)
-
-        return built
 
     def build_component(self, component: Component) -> None:
         """Build a single component.
