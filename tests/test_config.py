@@ -33,6 +33,14 @@ class TestBuildConfigDefaults:
         assert cfg.source_archives_dir == "third_party/sources"
         assert cfg.allow_network_downloads is False
 
+    @pytest.mark.parametrize("version", ("8.1", "9.0"))
+    def test_supported_ffmpeg_versions(self, version):
+        assert BuildConfig(ffmpeg_version=version).ffmpeg_version == version
+
+    def test_unsupported_ffmpeg_version_raises(self):
+        with pytest.raises(ValueError, match="Unsupported FFmpeg version"):
+            BuildConfig(ffmpeg_version="10.0")
+
     def test_nested_config_defaults(self):
         cfg = BuildConfig()
         assert isinstance(cfg.linux, LinuxConfig)
@@ -108,6 +116,10 @@ class TestBuildConfigRoundTrip:
     def test_from_dict_none_uses_defaults(self):
         cfg = BuildConfig.from_dict(None)
         assert cfg.ffmpeg_version == "8.1"
+
+    def test_from_dict_rejects_unsupported_ffmpeg_version(self):
+        with pytest.raises(ValueError, match="Unsupported FFmpeg version"):
+            BuildConfig.from_dict({"ffmpeg_version": "10.0"})
 
 
 class TestConfigManager:

@@ -9,6 +9,7 @@ import yaml
 # The package is the repository root (flat layout); anchor the default
 # config path to it so relative paths do not depend on the CWD.
 PROJECT_ROOT = Path(__file__).resolve().parent
+SUPPORTED_FFMPEG_VERSIONS = ("8.1", "9.0")
 
 
 @dataclass
@@ -62,6 +63,14 @@ class BuildConfig:
     macos: MacOSConfig = field(default_factory=MacOSConfig)
     linux: LinuxConfig = field(default_factory=LinuxConfig)
     windows: WindowsConfig = field(default_factory=WindowsConfig)
+
+    def __post_init__(self) -> None:
+        """Validate settings that have a fixed supported-value set."""
+        if self.ffmpeg_version not in SUPPORTED_FFMPEG_VERSIONS:
+            versions = ", ".join(SUPPORTED_FFMPEG_VERSIONS)
+            raise ValueError(
+                f"Unsupported FFmpeg version {self.ffmpeg_version!r}; supported versions: {versions}"
+            )
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
