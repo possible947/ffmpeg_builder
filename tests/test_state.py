@@ -174,3 +174,74 @@ class TestStateManager:
         mgr = StateManager(sp)
         with pytest.raises(ValueError, match="No state to save"):
             mgr.save()
+
+
+class TestStateFileRobustness:
+    """Corrupt/forward-incompatible state files must not crash the app."""
+
+    def test_from_dict_ignores_unknown_top_level_keys(self, sample_build_state_dict):
+        data = dict(sample_build_state_dict)
+        data["future_field_added_by_newer_version"] = {"x": 1}
+        state = BuildState.from_dict(data)
+        assert state.build_id == "test-build-001"
+        assert len(state.components) == 3
+
+    def test_from_dict_unknown_component_status_becomes_pending(self):
+        data = {
+            "build_id": "b",
+            "started_at": "",
+            "config": {},
+            "components": {"x264": {"status": "some_future_status", "version": "1.0"}},
+            "current_step": 1,
+            "total_steps": 1,
+        }
+        state = BuildState.from_dict(data)
+        assert state.components["x264"].status == ComponentStatus.PENDING
+
+    def test_from_dict_missing_status_becomes_pending(self):
+        data = {
+            "build_id": "b",
+            "started_at": "",
+            "config": {},
+            "components": {"x264": {"version": "1.0"}},
+            "current_step": 1,
+            "total_steps": 1,
+        }
+        state = BuildState.from_dict(data)
+        assert state.components["x264"].status == ComponentStatus.PENDING
+
+    def test_from_dict_non_dict_component_treated_as_pending(self):
+        data = {
+            "build_id": "b",
+            "started_at": "",
+            "config": {},
+            "components": {"x264": "corrupted-entry"},
+            "current_step": 1,
+            "total_steps": 1,
+        }
+        state = BuildState.from_dict(data)
+        assert state.components["x264"].status == ComponentStatus.PENDING
+
+    def test_load_corrupt_json_returns_none(self, tmp_path, caplog):
+        sp = tmp_path / "build_state.json"
+        sp.write_text("{not valid json", encoding="utf-8")
+        mgr = StateManager(sp)
+        with caplog.at_level("WARNING"):
+            assert mgr.load() is None
+        assert "Ignoring unreadable build state file" in caplog.text
+
+    def test_load_valid_state_still_works(self, state_file):
+        mgr = StateManager(state_file)
+        st = mgr.load()
+        assert st is not None
+        assert st.build_id == "test-build-001"
+
+    def test_save_leaves_no_tmp_file(self, tmp_path):
+        sp = tmp_path / "state.json"
+        mgr = StateManager(sp)
+        mgr.mark_component_status("x", ComponentStatus.COMPLETED)
+        mgr.save()
+        leftovers = [p for p in tmp_path.iterdir() if p.name != "state.json"]
+        assert leftovers == []
+        # File must be valid JSON after the atomic replace.
+        json.loads(sp.read_text(encoding="utf-8"))

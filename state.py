@@ -1,9 +1,11 @@
 """State management for build process."""
 
 import json
+import logging
+import os
 import threading
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -83,13 +85,27 @@ class BuildState:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "BuildState":
-        """Create from dictionary."""
+        """Create from dictionary.
+
+        Unknown top-level keys are ignored (forward compatibility with
+        state files written by newer versions) and unknown or corrupt
+        component status values are reset to PENDING so the component
+        is rebuilt instead of crashing the app.
+        """
         payload = dict(data)
         components_data = payload.pop("components", {})
-        state = cls(**payload)
+        if not isinstance(components_data, dict):
+            components_data = {}
+        known_fields = {item.name for item in fields(cls)}
+        state = cls(**{key: value for key, value in payload.items() if key in known_fields})
 
         for name, comp_data in components_data.items():
-            status = ComponentStatus(comp_data["status"])
+            if not isinstance(comp_data, dict):
+                comp_data = {}
+            try:
+                status = ComponentStatus(comp_data.get("status", "pending"))
+            except ValueError:
+                status = ComponentStatus.PENDING
             if status in IN_PROGRESS_STATUSES:
                 status = ComponentStatus.PENDING
             state.components[name] = ComponentState(
@@ -126,14 +142,25 @@ class StateManager:
         """Load state from file.
 
         Returns:
-            BuildState instance or None if no state file exists.
+            BuildState instance, or None if no state file exists or the
+            file is unreadable/corrupt (a corrupt file is logged and
+            treated as "no previous build" instead of crashing the app,
+            which would make the state file unrecoverable without manual
+            deletion).
         """
-        if self.state_path.exists():
+        if not self.state_path.exists():
+            return None
+        try:
             with open(self.state_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             self.state = BuildState.from_dict(data)
             return self.state
-        return None
+        except (OSError, ValueError, TypeError) as e:
+            # json.JSONDecodeError is a ValueError subclass.
+            logging.getLogger(__name__).warning(
+                "Ignoring unreadable build state file %s: %s", self.state_path, e
+            )
+            return None
 
     def save(self, state: Optional[BuildState] = None) -> None:
         """Save state to file.
@@ -150,8 +177,16 @@ class StateManager:
 
             self.state_path.parent.mkdir(parents=True, exist_ok=True)
 
-            with open(self.state_path, "w", encoding="utf-8") as f:
-                json.dump(self.state.to_dict(), f, indent=2)
+            # Atomic write: a crash mid-write must not leave a truncated
+            # state file that the next launch cannot parse.
+            tmp_path = self.state_path.with_name(f"{self.state_path.name}.{os.getpid()}.tmp")
+            try:
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    json.dump(self.state.to_dict(), f, indent=2)
+                os.replace(tmp_path, self.state_path)
+            except BaseException:
+                tmp_path.unlink(missing_ok=True)
+                raise
 
     def reset(self) -> None:
         """Reset state in memory and remove state file if it exists."""
