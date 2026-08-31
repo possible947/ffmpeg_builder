@@ -1,0 +1,11 @@
+# Pinned dev tool versions. CI (`.github/workflows/ci.yml`) installs exactly
+# these; local dev should too, so `black --check` and the mypy baseline agree
+# between machines.
+#
+# To bump a version: update the pin here, reinstall, then run
+#   black .
+#   python scripts/check_mypy_baseline.py --update
+# and commit any reformat/baseline changes together with this file.
+pytest==9.1.1
+black==26.5.1
+mypy==2.3.1
