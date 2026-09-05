@@ -8,17 +8,20 @@ All notable changes to the FFmpeg Builder project.
 
 - **Phase 1 platform strategy abstraction** — introduced the `platforms/` package with `BasePlatformStrategy` and `PlatformContext`, establishing the foundational abstraction layer for platform- and toolchain-specific behavior.
 - **Phase 2 concrete platform implementations** — added `MacOSPlatform`, `LinuxGcc13Platform`, `LinuxGcc15Platform`, and `WindowsUcrt64Platform`, plus a `PlatformStrategyResolver` that selects the correct implementation for the current OS/toolchain.
+- **Phase 3 declarative source patch engine** — added the `patches/` package with component-aware `SourcePatch` definitions, fail-fast assertion helpers, and concrete C23, C++ header, Darwin, and FFmpeg 9 patch implementations.
 
 ### Changed
 
 - **Compiler metadata detection** — `PlatformDetector` now records `gcc_major_version` and `is_c23_default` so GCC 13 vs GCC 15+ default-mode behavior is explicit and testable in the platform strategy layer.
 - **Builder integration** — `FFmpegBuilder` now resolves a platform strategy from `PlatformContext` and uses it for workspace path normalization and environment preparation.
 - **Phase 2 stabilization** — hardened the resolver for minimal mock platform-info objects, normalized Linux/MSYS2 path detection to canonical POSIX strings for detector diagnostics, and made the macOS release-bundle symlink fallback safe on Windows where symlink privileges are unavailable.
+- **Patch lifecycle integration** — `FFmpegBuilder` applies registered source patches immediately after extraction and before configure/build steps, so upstream anchor changes fail with a component-specific `BuildError`.
 
 ### Verified
 
 - `pytest tests/test_platform_detect.py tests/test_builder_split.py -q` passes with the target detector and release-bundle regression suite.
 - `pytest tests/test_platform_strategy.py -q` passes with the focused Phase 1/2 regression checks.
+- `pytest tests/test_patches.py tests/test_builder_split.py -q` passes with 23 tests.
 
 ## [2.0b0] - 2026-08-31
 

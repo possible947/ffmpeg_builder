@@ -20,6 +20,7 @@ from .components import BuildSystem, Component, ComponentRegistry
 from .config import BuildConfig
 from .downloader import AsyncDownloadManager, Downloader
 from .executor import CommandExecutor, ExecutionResult
+from .patches import get_patch_registry
 from .platform_detect import PlatformDetector
 from .platforms.context import PlatformContext
 from .platforms.resolver import PlatformStrategyResolver
@@ -870,6 +871,8 @@ class FFmpegBuilder:
         archive_path = self._download_and_extract(component)
         source_dir = self.packages / component.get_target_dir()
 
+        self._apply_component_patches(component, source_dir)
+
         if component.build_system == BuildSystem.HEADERS_ONLY:
             self.state_manager.mark_component_status(
                 component.name,
@@ -924,6 +927,10 @@ class FFmpegBuilder:
         if system == BuildSystem.CARGO:
             return "cargo"
         return ""
+
+    def _apply_component_patches(self, component: Component, source_dir: Path) -> None:
+        """Apply the declarative patch registry before configure/build steps."""
+        get_patch_registry().apply_patches(component, source_dir, self.platform_strategy)
 
     def _execute_post_install(self, component: Component, source_dir: Path) -> None:
         """Execute post-install commands if defined.

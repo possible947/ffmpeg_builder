@@ -6,17 +6,20 @@
 
 - **Phase 1 platform strategy abstraction** — introduced the `platforms/` package with `BasePlatformStrategy` and `PlatformContext`, establishing the foundation for platform/toolchain-specific build behavior.
 - **Phase 2 concrete platform implementations** — added `MacOSPlatform`, `LinuxGcc13Platform`, `LinuxGcc15Platform`, and `WindowsUcrt64Platform`, plus a resolver that picks the correct strategy for the detected OS/toolchain.
+- **Phase 3 declarative source patch engine** — added the `patches/` package with version- and component-aware `SourcePatch` definitions, fail-fast assertion helpers, and concrete C23, C++ header, Darwin, and FFmpeg 9 patch implementations.
 
 ### Changed
 
 - **Compiler metadata detection** — `PlatformDetector` now exposes `gcc_major_version` and `is_c23_default`, so GCC 13 and GCC 15+ default-mode differences are explicit and testable.
 - **Builder integration** — `FFmpegBuilder` now resolves a platform strategy from `PlatformContext` and uses it for path normalization and environment setup.
 - **Phase 2 stabilization** — tightened the strategy resolver for minimal mock platform objects, normalized Linux/MSYS2 path detection to POSIX-style values for detector diagnostics, and added the Windows-safe fallback for macOS release-bundle symlink alias handling.
+- **Patch lifecycle integration** — `FFmpegBuilder` now applies registered source patches immediately after extraction and before configure/build steps, preserving clear failures when an upstream patch anchor changes.
 
 ### Verified
 
 - `pytest tests/test_platform_detect.py tests/test_builder_split.py -q` passes with the target detector and release-bundle regression suite.
 - `pytest tests/test_platform_strategy.py -q` passes with the focused Phase 1/2 regression suite.
+- `pytest tests/test_patches.py tests/test_builder_split.py -q` passes with 23 tests.
 
 ## 2026-09-05 — Windows: автоматический выбор версии nv-codec-headers по драйверу NVENC
 
