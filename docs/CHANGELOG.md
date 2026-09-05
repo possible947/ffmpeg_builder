@@ -2,6 +2,20 @@
 
 All notable changes to the FFmpeg Builder project.
 
+## [Unreleased]
+
+### Added
+
+- **Phase 1 platform strategy abstraction** — introduced the `platforms/` package with `BasePlatformStrategy` and `PlatformContext`, establishing the foundational abstraction layer for platform- and toolchain-specific behavior.
+
+### Changed
+
+- **Compiler metadata detection** — `PlatformDetector` now records `gcc_major_version` and `is_c23_default` so GCC 13 vs GCC 15+ default-mode behavior is explicit and testable in the platform strategy layer.
+
+### Verified
+
+- `pytest tests/test_platform_strategy.py -q` passes with 4 targeted Phase 1 regression checks.
+
 ## [2.0b0] - 2026-08-31
 
 ### Added

@@ -69,6 +69,8 @@ class PlatformInfo:
     is_wsl2: bool = False
     is_msys2: bool = False
     is_ucrt64: bool = False
+    gcc_major_version: Optional[int] = None
+    is_c23_default: bool = False
     msystem: Optional[str] = None
     macports_clang: Optional[ToolInfo] = None
     cuda_available: bool = False
@@ -124,6 +126,8 @@ class PlatformInfo:
             "is_wsl2": self.is_wsl2,
             "is_msys2": self.is_msys2,
             "is_ucrt64": self.is_ucrt64,
+            "gcc_major_version": self.gcc_major_version,
+            "is_c23_default": self.is_c23_default,
             "msystem": self.msystem,
             "macports_clang": self.macports_clang.to_dict() if self.macports_clang else None,
             "cuda_available": self.cuda_available,
@@ -187,9 +191,52 @@ class PlatformDetector:
         """
         self._detect_system_info()
         self._detect_platform_info()
+        self._detect_compiler_info()
         self._detect_tools()
 
         return self.system_info, self.platform_info, self.tools
+
+    def _detect_compiler_info(self) -> None:
+        """Populate GCC major-version and C23-default metadata for platform strategy logic."""
+        tool_path = shutil.which("gcc") or shutil.which("g++")
+        if not tool_path:
+            self.platform_info.gcc_major_version = None
+            self.platform_info.is_c23_default = False
+            return
+
+        try:
+            result = subprocess.run(
+                [tool_path, "--version"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            version_output = (result.stdout or "") + (result.stderr or "")
+            if not version_output:
+                self.platform_info.gcc_major_version = None
+                self.platform_info.is_c23_default = False
+                return
+
+            gcc_major_version, is_c23_default = self._parse_compiler_version(version_output)
+            self.platform_info.gcc_major_version = gcc_major_version
+            self.platform_info.is_c23_default = is_c23_default
+        except Exception:
+            self.platform_info.gcc_major_version = None
+            self.platform_info.is_c23_default = False
+
+    def _detect_compiler_metadata(self) -> None:
+        """Backward-compatible alias for the compiler detection entry point."""
+        self._detect_compiler_info()
+
+    def _parse_compiler_version(self, version_output: str) -> Tuple[Optional[int], bool]:
+        """Parse GCC output and infer whether the default mode is C23."""
+        match = re.search(r"(?:gcc|g\+\+|clang).*?(\d+)\.(\d+)(?:\.(\d+))?", version_output, re.I)
+        if not match:
+            return None, False
+
+        major = int(match.group(1))
+        is_c23_default = major >= 15
+        return major, is_c23_default
 
     def get_platform_name(self) -> str:
         """Get normalized platform name used by component filtering/build logic."""

@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Phase 1 platform strategy abstraction** — introduced the `platforms/` package with `BasePlatformStrategy` and `PlatformContext`, establishing the foundation for platform/toolchain-specific build behavior.
+
+### Changed
+
+- **Compiler metadata detection** — `PlatformDetector` now exposes `gcc_major_version` and `is_c23_default`, so GCC 13 and GCC 15+ default-mode differences are explicit and testable.
+
+### Verified
+
+- `pytest tests/test_platform_strategy.py -q` passes with the Phase 1 regression suite.
+
 ## 2026-09-05 — Windows: автоматический выбор версии nv-codec-headers по драйверу NVENC
 
 Добавлена поддержка автоматического подбора версии `nv-codec-headers` под фактически установленный драйвер NVIDIA, поскольку закреплённая `13.0.19.0` несовместима с окружениями, где драйвер поддерживает только NVENC API до 12.2.
