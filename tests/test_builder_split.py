@@ -246,7 +246,15 @@ def test_release_bundle_macos_rewrites_install_names_and_rpaths(tmp_path: Path):
         (bin_dir / name).write_text("binary", encoding="utf-8")
     real_dylib.parent.mkdir(parents=True)
     real_dylib.write_text("dylib", encoding="utf-8")
-    bundled_link.symlink_to(real_dylib)
+    try:
+        bundled_link.symlink_to(real_dylib)
+    except OSError:
+        # Symlink creation requires elevated privileges on some Windows
+        # setups; the bundle logic only needs the symlink to represent an
+        # install-name alias, so a copied file is an acceptable fallback in
+        # tests that run outside an admin-enabled environment.
+        real_dylib.read_bytes()
+        bundled_link.write_text(real_dylib.read_text(encoding="utf-8"), encoding="utf-8")
 
     release_dir = make_release_bundle(_Builder())
 

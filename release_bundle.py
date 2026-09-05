@@ -334,6 +334,32 @@ def _make_macos_bundle_relocatable(
     return rewrites
 
 
+def _prefer_real_library_path(path: Path) -> Path:
+    """Prefer the real versioned dylib when a symlink alias has been copied
+    to disk (e.g. Windows without symlink privileges)."""
+    resolved = path.resolve()
+    if path.name != resolved.name:
+        return resolved
+
+    if path.suffix != ".dylib" or not path.parent.exists():
+        return path
+
+    stem = path.stem
+    for sibling in path.parent.iterdir():
+        if not sibling.is_file() or sibling.name == path.name:
+            continue
+        if sibling.suffix != ".dylib":
+            continue
+        if not sibling.name.startswith(stem + "."):
+            continue
+        try:
+            if path.read_bytes() == sibling.read_bytes():
+                return sibling.resolve()
+        except OSError:
+            continue
+    return path
+
+
 def _resolve_runtime_dependency(
     builder: "FFmpegBuilder", dep: str, binary_path: Path
 ) -> Optional[Path]:
@@ -342,18 +368,18 @@ def _resolve_runtime_dependency(
 
     dep_path = Path(dep)
     if dep_path.is_absolute() and dep_path.exists():
-        return dep_path
+        return _prefer_real_library_path(dep_path)
 
     if dep_path.parts and not dep_path.is_absolute():
         candidate = (binary_path.parent / dep_path).resolve()
         if candidate.exists():
-            return candidate
+            return _prefer_real_library_path(candidate)
 
     dep_name = dep_path.name if dep_path.name else dep
     for root in _runtime_search_dirs(builder, binary_path):
         candidate = root / dep_name
         if candidate.exists():
-            return candidate
+            return _prefer_real_library_path(candidate)
 
     return None
 

@@ -21,6 +21,8 @@ from .config import BuildConfig
 from .downloader import AsyncDownloadManager, Downloader
 from .executor import CommandExecutor, ExecutionResult
 from .platform_detect import PlatformDetector
+from .platforms.context import PlatformContext
+from .platforms.resolver import PlatformStrategyResolver
 from .release_bundle import make_release_bundle as create_release_bundle
 from .state import ComponentStatus, StateManager
 
@@ -117,6 +119,15 @@ class FFmpegBuilder:
 
         self.num_jobs = platform_detector.get_num_jobs(config.num_jobs)
         self.platform = platform_detector.get_platform_name()
+        self.platform_context = PlatformContext(
+            config=config,
+            workspace=self.workspace,
+            packages=self.packages,
+            platform_detector=self.platform_detector,
+            platform_info=self.platform_detector.platform_info,
+            num_jobs=self.num_jobs,
+        )
+        self.platform_strategy = PlatformStrategyResolver().resolve(self.platform_context)
 
         self._setup_environment()
 
@@ -323,6 +334,9 @@ class FFmpegBuilder:
         variables, where shell quotes embedded in env vars are not preserved.
         Prefer 8.3 short paths to remove spaces; if unavailable, escape spaces.
         """
+        if self.platform_strategy is not None:
+            return self.platform_strategy.normalize_path(path, self.platform_context)
+
         if not self._is_windows_ucrt64_backend():
             return path
 
@@ -348,6 +362,9 @@ class FFmpegBuilder:
 
     def _to_msys_path(self, path: str) -> str:
         """Convert Windows path to MSYS style when running UCRT64 backend."""
+        if self.platform_strategy is not None and self.platform == "windows":
+            return self.platform_strategy.normalize_path(path, self.platform_context)
+
         normalized = path.replace("\\", "/")
         if not self._is_windows_ucrt64_backend():
             return normalized
@@ -402,6 +419,8 @@ class FFmpegBuilder:
         POSIX-shell contexts (FFmpeg ./configure, autotools) and native Windows
         tool arguments (CMake, Meson prefix, pkg-config).
         """
+        if self.platform_strategy is not None:
+            return self.platform_strategy.normalize_path(self.workspace, self.platform_context)
         return str(self.workspace).replace("\\", "/")
 
     def _normalize_pkg_config_path_for_msys(self, value: str) -> str:
@@ -413,6 +432,10 @@ class FFmpegBuilder:
         on (^|:) avoids corrupting path components that happen to end with a
         letter (e.g. "pkgconfig:/next/path").
         """
+        if self.platform_strategy is not None:
+            context = self.platform_context
+            return self.platform_strategy.get_pkg_config_path(context, for_posix_shell=True)
+
         value = value.replace("\\", "/").replace(";", ":")
         return re.sub(
             r"(^|:)([A-Za-z]):/",

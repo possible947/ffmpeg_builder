@@ -176,6 +176,22 @@ class PlatformInfo:
 class PlatformDetector:
     """Detects platform and system information."""
 
+    @staticmethod
+    def _normalize_path(path: Path | str) -> str:
+        """Keep Linux POSIX paths canonical without flattening native Windows paths.
+
+        On Windows/MSYS2, Path("/usr/include/va/va.h") yields a rooted path whose
+        semantic representation is POSIX-like; native temp/install paths such as
+        C:\\... should remain in their original form to preserve cross-platform
+        expectations in tests.
+        """
+        text = str(path)
+        if isinstance(path, Path):
+            if text.startswith("/") or text.startswith("\\"):
+                return path.as_posix()
+            return text
+        return text.replace("\\", "/")
+
     def __init__(self) -> None:
         """Initialize platform detector."""
         self.system_info = SystemInfo()
@@ -977,7 +993,7 @@ class PlatformDetector:
             Path("/usr/include/va/va.h"),
             Path("/usr/local/include/va/va.h"),
         ]
-        existing_headers = [str(p) for p in header_paths if p.exists()]
+        existing_headers = [self._normalize_path(p) for p in header_paths if p.exists()]
         self.platform_info.vaapi_detected_header_paths = existing_headers
 
         loader_paths = [
@@ -992,7 +1008,7 @@ class PlatformDetector:
                     Path(f"/usr/lib/{multiarch}/libva.so.2"),
                 ]
             )
-        existing_loaders = [str(p) for p in loader_paths if p.exists()]
+        existing_loaders = [self._normalize_path(p) for p in loader_paths if p.exists()]
         self.platform_info.vaapi_detected_loader_paths = existing_loaders
 
         if existing_headers and existing_loaders:
@@ -1026,7 +1042,7 @@ class PlatformDetector:
             Path("/usr/local/include/AMF"),
             Path("/opt/AMF/amf/public/include"),
         ]
-        return [str(path) for path in amf_paths if path.exists()]
+        return [self._normalize_path(path) for path in amf_paths if path.exists()]
 
     def _check_vulkan(self) -> bool:
         """Check if Vulkan development files and runtime are available.
@@ -1089,7 +1105,7 @@ class PlatformDetector:
             vulkan_header_paths.append(sdk_root / "include" / "vulkan" / "vulkan.h")  # Linux SDK
             vulkan_header_paths.append(sdk_root / "Include" / "vulkan" / "vulkan.h")  # Windows SDK
 
-        existing_headers = [str(p) for p in vulkan_header_paths if p.exists()]
+        existing_headers = [self._normalize_path(p) for p in vulkan_header_paths if p.exists()]
         self.platform_info.vulkan_detected_header_paths = existing_headers
         if existing_headers and not self.platform_info.vulkan_dev_available:
             self.platform_info.vulkan_dev_available = True
@@ -1107,7 +1123,7 @@ class PlatformDetector:
         for icd_dir in icd_dirs:
             try:
                 if icd_dir.exists():
-                    icd_files.extend(str(p) for p in icd_dir.glob("*.json"))
+                    icd_files.extend(self._normalize_path(p) for p in icd_dir.glob("*.json"))
             except Exception:
                 pass
         self.platform_info.vulkan_detected_icd_files = sorted(icd_files)
@@ -1194,7 +1210,7 @@ class PlatformDetector:
                 self.platform_info.opencl_dev_reason = "OpenCL.framework found"
                 return True
 
-        existing_headers = [str(path) for path in opencl_header_paths if path.exists()]
+        existing_headers = [self._normalize_path(path) for path in opencl_header_paths if path.exists()]
         self.platform_info.opencl_detected_header_paths = existing_headers
         has_headers_any = bool(existing_headers)
         if has_headers_any and not self.platform_info.opencl_dev_available:
@@ -1229,7 +1245,7 @@ class PlatformDetector:
                 ]
             )
 
-        existing_loaders = [str(path) for path in icd_loader_paths if path.exists()]
+        existing_loaders = [self._normalize_path(path) for path in icd_loader_paths if path.exists()]
         self.platform_info.opencl_detected_loader_paths = existing_loaders
         has_loader_any = bool(existing_loaders)
         if not has_loader_any:
@@ -1238,7 +1254,7 @@ class PlatformDetector:
         # Check for at least one vendor ICD file
         icd_vendors_dir = Path("/etc/OpenCL/vendors")
         if icd_vendors_dir.exists():
-            icd_files = sorted(str(path) for path in icd_vendors_dir.glob("*.icd"))
+            icd_files = sorted(self._normalize_path(path) for path in icd_vendors_dir.glob("*.icd"))
             self.platform_info.opencl_detected_icd_files = icd_files
             if icd_files:
                 self.platform_info.opencl_runtime_available = True

@@ -22,12 +22,17 @@ import pytest
 from ffmpeg_builder.platform_detect import PlatformDetector
 
 
+def _normalize_path_string(value):
+    """Normalize slash variants so POSIX-style test fixtures work on Windows."""
+    return str(value).replace("\\", "/")
+
+
 def _patch_path_exists(monkeypatch, existing):
     """Make Path.exists() return True only for paths in `existing`."""
-    existing_strs = {str(p) for p in existing}
+    existing_strs = {_normalize_path_string(p) for p in existing}
 
     def fake_exists(self):
-        return str(self) in existing_strs
+        return _normalize_path_string(self) in existing_strs
 
     monkeypatch.setattr(Path, "exists", fake_exists)
 
@@ -36,7 +41,8 @@ def _patch_path_glob(monkeypatch, mapping):
     """Make Path.glob(pattern) return mapping[(str(self), pattern)] or []."""
 
     def fake_glob(self, pattern):
-        return iter(mapping.get((str(self), pattern), []))
+        key = (_normalize_path_string(self), _normalize_path_string(pattern))
+        return iter(mapping.get(key, []))
 
     monkeypatch.setattr(Path, "glob", fake_glob)
 
