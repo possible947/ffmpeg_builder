@@ -321,6 +321,40 @@ class ComponentRegistry:
             raise ValueError("FFmpeg target component is missing from the registry")
         return component.with_version(version)
 
+    def get_nv_codec_component(self, platform_info: Optional[Any] = None) -> Component:
+        """Get the nv-codec-headers component resolved to a driver-compatible version.
+
+        ``platform_info.nvenc_api_version`` (if set) is the maximum NVENC API
+        version ("<major>.<minor>") reported by the installed NVIDIA driver
+        (see ``PlatformDetector._detect_nvenc_api_version``). The newest
+        declared ``versions`` entry whose major.minor does not exceed that is
+        selected; if the driver reports an API older than every declared
+        release, the oldest declared release is used as a best-effort
+        fallback rather than the (likely incompatible) registry default. When
+        detection did not run or found nothing, the declared default version
+        is kept unchanged.
+        """
+        component = self.get_by_name("nv-codec")
+        if component is None:
+            raise ValueError("nv-codec component is missing from the registry")
+
+        detected = getattr(platform_info, "nvenc_api_version", None) if platform_info else None
+        if not detected or not component.versions:
+            return component
+
+        try:
+            detected_key = tuple(int(part) for part in str(detected).split(".")[:2])
+        except ValueError:
+            return component
+
+        def version_key(value: str) -> tuple:
+            return tuple(int(part) for part in value.split("."))
+
+        declared = sorted(component.versions, key=version_key)
+        compatible = [v for v in declared if version_key(v)[:2] <= detected_key]
+        selected = compatible[-1] if compatible else declared[0]
+        return component.with_version(selected)
+
     def get_buildable(
         self,
         gpl_enabled: bool,
@@ -359,7 +393,7 @@ class ComponentRegistry:
             (
                 self.get_ffmpeg_component(ffmpeg_version)
                 if comp.category == ComponentCategory.TARGET
-                else comp
+                else self.get_nv_codec_component(platform_info) if comp.name == "nv-codec" else comp
             )
             for comp in self._components
             if self._is_eligible(

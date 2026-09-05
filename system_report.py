@@ -150,6 +150,13 @@ class SystemReport:
             "icd_files": self.platform_info.vulkan_detected_icd_files,
         }
 
+    def get_nvenc_diagnostics(self) -> Dict[str, Any]:
+        """Get NVENC driver API version diagnostics."""
+        return {
+            "api_version": self.platform_info.nvenc_api_version,
+            "reason": self.platform_info.nvenc_reason,
+        }
+
     def get_sdk_status(self) -> Dict[str, Dict[str, Any]]:
         """Get detected SDK roots for diagnostics."""
         return {

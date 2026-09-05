@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-09-05 — Windows: автоматический выбор версии nv-codec-headers по драйверу NVENC
+
+Добавлена поддержка автоматического подбора версии `nv-codec-headers` под фактически установленный драйвер NVIDIA, поскольку закреплённая `13.0.19.0` несовместима с окружениями, где драйвер поддерживает только NVENC API до 12.2.
+
+- **`platform_detect.py`: `_detect_nvenc_api_version()`.** Новый детектор запрашивает `NvEncodeAPIGetMaxSupportedVersion()` из библиотеки драйвера (`nvEncodeAPI64.dll` на Windows, `libnvidia-encode.so.1` на Linux) через `ctypes` и сохраняет максимальную поддерживаемую версию NVENC API в `PlatformInfo.nvenc_api_version` (`"<major>.<minor>"`) вместе с `nvenc_reason` для диагностики. В отличие от `cuda_available` (который проверяет только наличие `nvcc` в PATH), это чисто драйверная проверка — она работает даже без установленного CUDA toolkit и корректно возвращает `None`, если `nvEncodeAPI64.dll`/`libnvidia-encode.so.1` не найдены (нет драйвера NVIDIA) или вызов вернул ненулевой `NVENCSTATUS`.
+- **`components.yaml`: `nv-codec` теперь объявляет `versions` для `13.0.19.0` (по умолчанию) и `12.2.72.0` (fallback).** Архив `nv-codec-headers-12.2.72.0.tar.gz` (sha256 `c295a2ba8a06434d4bdc5c2208f8a825285210d71d91d572329b2c51fd0d4d03`) добавлен в `third_party/sources` (Git LFS).
+- **`components.py`: `ComponentRegistry.get_nv_codec_component()`.** Выбирает из объявленных `versions` компонента `nv-codec` самую новую версию, чьи `major.minor` не превышают версию, о которой сообщил драйвер (`platform_info.nvenc_api_version`); если драйвер сообщает версию старее всех объявленных релизов, используется самый старый объявленный релиз вместо потенциально несовместимого значения по умолчанию. Если детектирование не выполнялось или ничего не нашло, сохраняется объявленная по умолчанию версия (`13.0.19.0`) — поведение не меняется на системах без NVIDIA. `get_buildable()` теперь прогоняет компонент `nv-codec` через этот резолвер так же, как `ffmpeg`-таргет резолвится через `get_ffmpeg_component()`.
+- Покрыто тестами: `tests/test_platform_detect.py::TestNvencApiVersionDetection` (Linux/Windows пути, отсутствие библиотеки драйвера, ненулевой `NVENCSTATUS`) и `tests/test_components.py::TestNvCodecVersionSelection` (fallback на 12.2, использование 13.x при поддерживающем драйвере, отсутствие детектирования, некорректное значение версии, интеграция через `get_buildable()`).
+
+Полный текст — в `docs/CHANGELOG.md` (авторитетный источник по истории фиксов).
+
+---
+
 ## 2026-09-05 — Windows MSYS2 UCRT64: nv-codec NVENC build fix + setup script fix
 
 При сборке FFmpeg 8.1 на чистом Windows 11 + MSYS2 UCRT64 обнаружены и исправлены две проблемы.

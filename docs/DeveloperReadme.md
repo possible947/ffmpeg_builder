@@ -180,7 +180,7 @@ Detects the full system environment in a single `detect_all()` call.
 | Class | Fields |
 |-------|--------|
 | `SystemInfo` | os_name, os_version, architecture, cpu_model, cpu_cores, ram_gb |
-| `PlatformInfo` | platform, build_backend, is_macos, is_linux, is_windows, is_arm64, is_wsl2, is_msys2, is_ucrt64, msystem, macports_clang, cuda_available, cuda_path, vaapi_available, vaapi_reason, vaapi_detected_via, vaapi_detected_header_paths, vaapi_detected_loader_paths, vaapi_render_nodes, qsv_available, amf_available, amf_reason, amf_gpu_names, amf_headers_detected_paths, vulkan_available, vulkan_dev_available, vulkan_runtime_available, vulkan_reason, vulkan_detected_via, vulkan_detected_header_paths, vulkan_detected_icd_files, opencl_available, opencl_runtime_available, opencl_dev_available, opencl_effective_available, opencl_runtime_reason, opencl_dev_reason, opencl_effective_reason, opencl_detected_header_paths, opencl_detected_loader_paths, opencl_detected_icd_files, opencl_pkg_config_name, rocm_available, rocm_path, vulkan_sdk_available, vulkan_sdk_path |
+| `PlatformInfo` | platform, build_backend, is_macos, is_linux, is_windows, is_arm64, is_wsl2, is_msys2, is_ucrt64, msystem, macports_clang, cuda_available, cuda_path, cuda_compute_capability, nvenc_api_version, nvenc_reason, vaapi_available, vaapi_reason, vaapi_detected_via, vaapi_detected_header_paths, vaapi_detected_loader_paths, vaapi_render_nodes, qsv_available, amf_available, amf_reason, amf_gpu_names, amf_headers_detected_paths, vulkan_available, vulkan_dev_available, vulkan_runtime_available, vulkan_reason, vulkan_detected_via, vulkan_detected_header_paths, vulkan_detected_icd_files, opencl_available, opencl_runtime_available, opencl_dev_available, opencl_effective_available, opencl_runtime_reason, opencl_dev_reason, opencl_effective_reason, opencl_detected_header_paths, opencl_detected_loader_paths, opencl_detected_icd_files, opencl_pkg_config_name, rocm_available, rocm_path, vulkan_sdk_available, vulkan_sdk_path |
 | `ToolInfo` | name, path, version, available |
 
 **Detection methods:**
@@ -254,17 +254,20 @@ class Component:
 | `get_all()` | All components in build order |
 | `get_buildable(gpl, platform, tools, ...)` | Filtered list based on config and platform |
 | `get_ffmpeg_component(version)` | FFmpeg target resolved to its declared source profile |
+| `get_nv_codec_component(platform_info=None)` | `nv-codec` resolved to the declared source version compatible with `platform_info.nvenc_api_version` (driver-reported max NVENC API), falling back to the oldest declared release if the driver is older than every declared version, or the registry default if detection didn't run |
 | `get_ffmpeg_configure_flags(built, gpl, platform, platform_info=None, ffmpeg_version="8.1")` | Collect version-compatible `--enable-*` flags from built components and platform readiness |
 
 **HW acceleration filtering** in `get_buildable()`:
 
 | Component | Condition |
 |-----------|-----------|
-| `nv-codec` | `platform_info.cuda_available` |
+| `nv-codec` | `platform_info.cuda_available` (build eligibility); actual `nv-codec-headers` version is then resolved by `get_nv_codec_component()` from `platform_info.nvenc_api_version` |
 | `vulkan-headers`, `glslang` | `platform_info.vulkan_available` |
 | `amf` | `platform_info.amf_available` |
 | `opencl-headers`, `opencl-icd-loader` | `platform_info.opencl_available` **or** `platform_info.opencl_runtime_available` |
 | `onevpl` | `platform_info.qsv_available` |
+
+**NVENC driver API version detection** (`PlatformDetector._detect_nvenc_api_version()`): queries `NvEncodeAPIGetMaxSupportedVersion()` from the installed NVIDIA driver's NVENC library (`nvEncodeAPI64.dll` on Windows, `libnvidia-encode.so.1` on Linux) via `ctypes`. This is independent of `cuda_available` (which only checks for `nvcc`), so it reflects the driver's real NVENC capability even without a CUDA toolkit install. `components.yaml`'s `nv-codec` component declares `versions` for both `13.0.19.0` (default, requires NVENC API >= 13.0) and `12.2.72.0` (fallback for older drivers); `get_nv_codec_component()` picks the newest one the detected driver supports.
 
 Windows/UCRT64 policy in current implementation:
 

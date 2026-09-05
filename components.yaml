@@ -781,6 +781,13 @@
   # were written against NVENC SDK 13.0 feature checks (nvenc.h:104). SDK 13.1
   # changed NV_ENC_CLOCK_TIMESTAMP_SET (split countingType into
   # countingTypeLSB/countingTypeMSB), which breaks the build.
+  #
+  # `versions` also declares 12.2.72.0 as a fallback: `platform_detect.py`
+  # queries the installed NVIDIA driver's max supported NVENC API version at
+  # runtime (`NvEncodeAPIGetMaxSupportedVersion`), and
+  # `ComponentRegistry.get_nv_codec_component()` resolves to whichever
+  # declared release is compatible with that driver, falling back to 12.2.72.0
+  # when the driver does not support the 13.x NVENC API.
   sha256: 13da39edb3a40ed9713ae390ca89faa2f1202c9dda869ef306a8d4383e242bee
   version: 13.0.19.0
   url: https://github.com/FFmpeg/nv-codec-headers/releases/download/n{version}/nv-codec-headers-{version}.tar.gz
@@ -792,6 +799,11 @@
   - PREFIX={workspace}
   linux_only: true
   windows_ucrt64_supported: true
+  versions:
+    '13.0.19.0':
+      sha256: 13da39edb3a40ed9713ae390ca89faa2f1202c9dda869ef306a8d4383e242bee
+    '12.2.72.0':
+      sha256: c295a2ba8a06434d4bdc5c2208f8a825285210d71d91d572329b2c51fd0d4d03
 - name: amf
   sha256: 8a70b6dc85261e6e6e57769bd81ac1e09c0a4c96bbd5e358ffbc2dee51e8e50a
   version: 1.5.2

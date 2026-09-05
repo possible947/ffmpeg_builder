@@ -339,6 +339,65 @@ class TestCudaComputeCapability:
         assert d.platform_info.cuda_compute_capability is None
 
 
+class TestNvencApiVersionDetection:
+    """_detect_nvenc_api_version(): driver-reported max NVENC API version."""
+
+    def _detector(self, is_windows=False):
+        d = PlatformDetector()
+        d.platform_info.is_linux = not is_windows
+        d.platform_info.is_windows = is_windows
+        d.platform_info.is_macos = False
+        return d
+
+    def test_linux_driver_reports_version(self, monkeypatch):
+        d = self._detector()
+
+        class _FakeLib:
+            def NvEncodeAPIGetMaxSupportedVersion(self, version_ptr):
+                # 12.2 encodes as (major << 4) | minor.
+                version_ptr._obj.value = (12 << 4) | 2
+                return 0
+
+        monkeypatch.setattr("ctypes.CDLL", lambda name: _FakeLib(), raising=False)
+        d._detect_nvenc_api_version()
+        assert d.platform_info.nvenc_api_version == "12.2"
+        assert "12.2" in d.platform_info.nvenc_reason
+
+    def test_windows_driver_reports_version(self, monkeypatch):
+        d = self._detector(is_windows=True)
+
+        class _FakeLib:
+            def NvEncodeAPIGetMaxSupportedVersion(self, version_ptr):
+                version_ptr._obj.value = (13 << 4) | 0
+                return 0
+
+        monkeypatch.setattr("ctypes.WinDLL", lambda name: _FakeLib(), raising=False)
+        d._detect_nvenc_api_version()
+        assert d.platform_info.nvenc_api_version == "13.0"
+
+    def test_missing_driver_library_leaves_none(self, monkeypatch):
+        d = self._detector()
+
+        def _raise(name):
+            raise OSError("library not found")
+
+        monkeypatch.setattr("ctypes.CDLL", _raise, raising=False)
+        d._detect_nvenc_api_version()
+        assert d.platform_info.nvenc_api_version is None
+        assert "not found" in d.platform_info.nvenc_reason
+
+    def test_nonzero_status_leaves_none(self, monkeypatch):
+        d = self._detector()
+
+        class _FakeLib:
+            def NvEncodeAPIGetMaxSupportedVersion(self, version_ptr):
+                return 4  # NV_ENC_ERR_INVALID_PARAM
+
+        monkeypatch.setattr("ctypes.CDLL", lambda name: _FakeLib(), raising=False)
+        d._detect_nvenc_api_version()
+        assert d.platform_info.nvenc_api_version is None
+
+
 @pytest.mark.skipif(
     platform.system() != "Linux",
     reason="Real-hardware smoke test only meaningful on the target Linux dev box",

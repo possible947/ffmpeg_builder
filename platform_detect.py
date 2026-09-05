@@ -74,6 +74,8 @@ class PlatformInfo:
     cuda_available: bool = False
     cuda_path: Optional[str] = None
     cuda_compute_capability: Optional[str] = None
+    nvenc_api_version: Optional[str] = None
+    nvenc_reason: str = ""
     libvmaf_cuda_supported: bool = False
     libvmaf_cuda_reason: str = ""
     vaapi_available: bool = False
@@ -127,6 +129,8 @@ class PlatformInfo:
             "cuda_available": self.cuda_available,
             "cuda_path": self.cuda_path,
             "cuda_compute_capability": self.cuda_compute_capability,
+            "nvenc_api_version": self.nvenc_api_version,
+            "nvenc_reason": self.nvenc_reason,
             "libvmaf_cuda_supported": self.libvmaf_cuda_supported,
             "libvmaf_cuda_reason": self.libvmaf_cuda_reason,
             "vaapi_available": self.vaapi_available,
@@ -521,6 +525,7 @@ class PlatformDetector:
         if self.platform_info.is_linux or self.platform_info.is_windows:
             self._detect_cuda()
             self._detect_libvmaf_cuda_support()
+            self._detect_nvenc_api_version()
             self.platform_info.qsv_available = self._check_qsv()
         # Vulkan and OpenCL are available on all platforms (including macOS via LunarG SDK / OpenCL.framework)
         self.platform_info.vulkan_available = self._check_vulkan()
@@ -652,6 +657,52 @@ class PlatformDetector:
                     self.platform_info.cuda_compute_capability = str(min(numeric))
         except Exception:
             pass
+
+    def _detect_nvenc_api_version(self) -> None:
+        """Detect the max NVENC API version supported by the installed driver.
+
+        This queries ``NvEncodeAPIGetMaxSupportedVersion()``, exported by the
+        NVIDIA driver's NVENC library (``nvEncodeAPI64.dll`` on Windows,
+        ``libnvidia-encode.so.1`` on Linux). Unlike ``cuda_available`` (which
+        only checks for the ``nvcc`` toolkit), this is a driver-only signal:
+        it works even when no CUDA toolkit is installed, and lets
+        ``ComponentRegistry.get_nv_codec_component()`` pick an nv-codec-headers
+        release that is ABI-compatible with the running driver (e.g. falling
+        back from 13.x to 12.2 on drivers too old for the NVENC 13.0 API).
+        """
+        self.platform_info.nvenc_api_version = None
+        self.platform_info.nvenc_reason = ""
+
+        try:
+            import ctypes
+
+            lib: ctypes.CDLL
+            if self.platform_info.is_windows:
+                lib = ctypes.WinDLL("nvEncodeAPI64.dll")
+            else:
+                lib = ctypes.CDLL("libnvidia-encode.so.1")
+
+            get_max_version = lib.NvEncodeAPIGetMaxSupportedVersion
+            version = ctypes.c_uint32(0)
+            status = get_max_version(ctypes.byref(version))
+            if status != 0:
+                self.platform_info.nvenc_reason = (
+                    f"NvEncodeAPIGetMaxSupportedVersion returned NVENCSTATUS {status}"
+                )
+                return
+
+            major = version.value >> 4
+            minor = version.value & 0xF
+            self.platform_info.nvenc_api_version = f"{major}.{minor}"
+            self.platform_info.nvenc_reason = (
+                f"Driver reports max supported NVENC API version {major}.{minor}"
+            )
+        except OSError:
+            self.platform_info.nvenc_reason = (
+                "NVENC driver library not found (no NVIDIA driver installed)"
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            self.platform_info.nvenc_reason = f"NVENC version probe failed: {exc}"
 
     def _detect_libvmaf_cuda_support(self) -> None:
         """Detect whether libvmaf can be built with CUDA in this backend."""
