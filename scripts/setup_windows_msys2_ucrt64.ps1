@@ -99,8 +99,24 @@ if (-not (Test-Path $bashExe)) {
     throw "MSYS2 is not installed at $Msys2Root. Install MSYS2 first: https://www.msys2.org/"
 }
 
-Write-Step "Validating active MSYS2 toolchain"
-Invoke-MsysBash "which gcc; gcc -dumpmachine; which python; python -V"
+Write-Step "Checking current MSYS2 toolchain state (informational only)"
+# A fresh MSYS2 installation does not have gcc yet. Keep this diagnostic
+# non-fatal; the package installation below installs the required toolchain.
+$previousMsystem = $env:MSYSTEM
+$previousChere = $env:CHERE_INVOKING
+$env:MSYSTEM = "UCRT64"
+$env:CHERE_INVOKING = "1"
+& $bashExe -lc "source /etc/profile >/dev/null 2>&1; which gcc 2>&1; gcc -dumpmachine 2>&1; which python 2>&1; python -V 2>&1" | Write-Host
+if ($null -eq $previousMsystem) {
+    Remove-Item Env:MSYSTEM -ErrorAction SilentlyContinue
+} else {
+    $env:MSYSTEM = $previousMsystem
+}
+if ($null -eq $previousChere) {
+    Remove-Item Env:CHERE_INVOKING -ErrorAction SilentlyContinue
+} else {
+    $env:CHERE_INVOKING = $previousChere
+}
 
 if (-not $SkipPackageInstall) {
     Write-Step "Updating MSYS2 system and installing required UCRT64 packages"
@@ -166,6 +182,10 @@ if (-not $SkipPackageInstall) {
     Write-Step "Verifying required build tools"
     $requiredTools = @("gcc", "cmake", "ninja", "meson", "nasm", "python", "pkg-config")
     $missing = @()
+    $previousMsystem = $env:MSYSTEM
+    $previousChere = $env:CHERE_INVOKING
+    $env:MSYSTEM = "UCRT64"
+    $env:CHERE_INVOKING = "1"
     foreach ($tool in $requiredTools) {
         $result = & $bashExe -lc "source /etc/profile >/dev/null 2>&1; which $tool >/dev/null 2>&1 && echo ok || echo missing" 2>&1
         if ($result -match "missing") {
@@ -175,6 +195,16 @@ if (-not $SkipPackageInstall) {
             $ver = & $bashExe -lc "source /etc/profile >/dev/null 2>&1; $tool --version 2>&1 | head -1" 2>&1
             Write-Host "  OK: $tool  ($($ver -replace '\r?\n.*',''))" -ForegroundColor Green
         }
+    }
+    if ($null -eq $previousMsystem) {
+        Remove-Item Env:MSYSTEM -ErrorAction SilentlyContinue
+    } else {
+        $env:MSYSTEM = $previousMsystem
+    }
+    if ($null -eq $previousChere) {
+        Remove-Item Env:CHERE_INVOKING -ErrorAction SilentlyContinue
+    } else {
+        $env:CHERE_INVOKING = $previousChere
     }
     if ($missing.Count -gt 0) {
         throw "Required tools not found after package install: $($missing -join ', '). Run 'pacman -Syu' in MSYS2 UCRT64 and re-run this script."
