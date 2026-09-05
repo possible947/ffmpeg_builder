@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-09-05 — Windows MSYS2 UCRT64: nv-codec NVENC build fix + setup script fix
+
+При сборке FFmpeg 8.1 на чистом Windows 11 + MSYS2 UCRT64 обнаружены и исправлены две проблемы.
+
+- **`nv-codec` (NVENC headers) 13.1.15.0 ломает сборку FFmpeg 8.1.** `components.yaml` был закреплён на `nv-codec-headers` версии `13.1.15.0`, но `libavcodec/nvenc.c`/`nvenc.h` в FFmpeg 8.1 писаны под фичи NVENC SDK **13.0** (`nvenc.h:104`, `NVENCAPI_CHECK_VERSION(13, 0)`). В SDK 13.1 структуру `NV_ENC_CLOCK_TIMESTAMP_SET` изменили — битовое поле `countingType` разбили на `countingTypeLSB`/`countingTypeMSB`, из-за чего `nvenc_fill_time_code()` не компилировался (`has no member named 'countingType'`). Причина — версия компонента в реестре была продвинута вперёд без проверки совместимости с уже закреплённой версией FFmpeg 8.1. Исправлено закреплением `nv-codec` на `13.0.19.0` (sha256 проверен, архив уже лежит в `third_party/sources` под Git LFS, сеть не требуется) — последний релиз с ожидаемой FFmpeg 8.1 раскладкой структуры. Проверено: полная сборка на Windows MSYS2 UCRT64 прошла успешно, `workspace/release/ffmpeg.exe` собран с `--enable-cuvid --enable-nvdec --enable-nvenc --enable-ffnvcodec` и рабочими `h264_nvenc`/`hevc_nvenc`/`av1_nvenc`/`*_cuvid`.
+- **`scripts/setup_windows_msys2_ucrt64.ps1` падал на чистой установке MSYS2 до установки пакетов.** Предварительная проверка `which gcc; ...` вызывалась до `pacman -S` и была фатальной (`Invoke-MsysBash` бросает исключение на любой ненулевой код возврата), поэтому на чистой MSYS2 (без `mingw-w64-ucrt-x86_64-toolchain`) скрипт падал с "gcc not found", ни разу не дойдя до установки пакетов. Отдельно — пост-инсталляционная проверка инструментов вызывала `bash.exe` напрямую без `$env:MSYSTEM = "UCRT64"`/`$env:CHERE_INVOKING = "1"`, поэтому `/etc/profile` не добавлял `/ucrt64/bin` в `PATH`, и `which <tool>` показывал "missing" даже сразу после успешной установки пакетов. Исправлено: предварительная проверка стала информационной (не бросает исключение), а `MSYSTEM`/`CHERE_INVOKING` теперь выставляются (и восстанавливаются) вокруг обоих вызовов bash. Проверено: скрипт теперь доходит до `pacman -Syu`/`pacman -S`, а пост-инсталляционная проверка корректно находит `gcc`/`cmake`/`ninja`/`meson`/`nasm`/`pkg-config`/`python`.
+
+Полный текст — в `docs/CHANGELOG.md` (авторитетный источник по истории фиксов).
+
+---
+
 ## 2026-08-31 — Production-readiness review, step 5: L10 (CI)
 
 В рамках ревью для production-использования закрыт пункт L10 — отсутствие CI, из-за которого версии black/mypy дрейфовали между машинами и бейзлайн тихо менялся. Коммит после каждого шага.

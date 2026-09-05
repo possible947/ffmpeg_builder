@@ -91,7 +91,7 @@ Compared with current repository pins, newer tags exist for key hwaccel componen
 - `Vulkan-Headers`: current `1.4.341.0` → newer observed `1.4.357.0`
 - `OpenCL-Headers`: current `2025.07.22` → newer observed `2026.05.29`
 - `OpenCL-ICD-Loader`: current `2025.07.22` → newer observed `2026.05.29`
-- `nv-codec-headers`: current `13.0.19.0` → newer observed `13.1.15.0`
+- `nv-codec-headers`: current `13.0.19.0` → newer observed `13.1.15.0` — **caution:** `13.1.15.0` restructures `NV_ENC_CLOCK_TIMESTAMP_SET` (splits `countingType` into `countingTypeLSB`/`countingTypeMSB`) and breaks compilation against FFmpeg 8.1's `nvenc.c`, which still targets NVENC SDK 13.0 feature checks (`nvenc.h:104`). Verify FFmpeg 9.0's `nvenc.h` has updated its `NVENCAPI_CHECK_VERSION` gates to 13.1 before bumping this pin (see `docs/CHANGELOG.md`, 2026-09-05 entry).
 
 `libplacebo` (`7.360.1`) and `oneVPL` (`2.17.0`) are already aligned with latest observed releases.
 
