@@ -777,8 +777,12 @@
   custom_build_fn: build_libplacebo
   ffmpeg_configure_flag: --enable-libplacebo
 - name: nv-codec
-  sha256: 52532ceade3d5c1af62624986f13cf01b63c910576b08c0c278756c5e4b41ad0
-  version: 13.1.15.0
+  # Pinned to 13.0.19.0 (not the newer 13.1.x) because FFmpeg 8.1's nvenc.c/nvenc.h
+  # were written against NVENC SDK 13.0 feature checks (nvenc.h:104). SDK 13.1
+  # changed NV_ENC_CLOCK_TIMESTAMP_SET (split countingType into
+  # countingTypeLSB/countingTypeMSB), which breaks the build.
+  sha256: 13da39edb3a40ed9713ae390ca89faa2f1202c9dda869ef306a8d4383e242bee
+  version: 13.0.19.0
   url: https://github.com/FFmpeg/nv-codec-headers/releases/download/n{version}/nv-codec-headers-{version}.tar.gz
   category: hw_accel
   build_system: make_only
