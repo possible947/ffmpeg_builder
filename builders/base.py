@@ -57,3 +57,28 @@ def install_headers_only(
     context: ComponentBuildContext, component: "Component", source_dir: Path
 ) -> None:
     context.builder._install_headers_only(component, source_dir)
+
+
+def dispatch_component_build(
+    context: ComponentBuildContext, component: "Component", source_dir: Path
+) -> None:
+    """Dispatch a component through custom or standard build entry points."""
+    if component.custom_build_fn:
+        from ..component_builders import get_custom_builder
+
+        build_fn = get_custom_builder(component.custom_build_fn)
+        if build_fn is not None:
+            build_fn(context.builder, component, source_dir)
+            return
+
+    runners = {
+        "autotools": build_autotools,
+        "cmake": build_cmake,
+        "meson": build_meson,
+        "make_only": build_make_only,
+        "cargo": build_cargo,
+    }
+    runner = runners.get(component.build_system.value)
+    if runner is None:
+        raise ValueError(f"Unknown build system: {component.build_system}")
+    runner(context, component, source_dir)

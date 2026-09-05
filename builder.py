@@ -15,16 +15,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Type
 
 from .build_steps import run_install, run_make, run_step
 from .build_types import BuildError, SkipComponent
-from .builders.base import (
-    ComponentBuildContext,
-    build_autotools,
-    build_cargo,
-    build_cmake,
-    build_make_only,
-    build_meson,
-    install_headers_only,
-)
-from .component_builders import get_custom_builder
+from .builders.base import ComponentBuildContext, dispatch_component_build, install_headers_only
 from .components import BuildSystem, Component, ComponentRegistry
 from .config import BuildConfig
 from .downloader import AsyncDownloadManager, Downloader
@@ -901,25 +892,10 @@ class FFmpegBuilder:
             detail=self._configure_detail(component),
         )
 
-        if component.custom_build_fn:
-            build_fn = get_custom_builder(component.custom_build_fn)
-            if build_fn:
-                build_fn(self, component, source_dir)
-                self._execute_post_install(component, source_dir)
-                return
-
-        if component.build_system == BuildSystem.AUTOTOOLS:
-            build_autotools(build_context, component, source_dir)
-        elif component.build_system == BuildSystem.CMAKE:
-            build_cmake(build_context, component, source_dir)
-        elif component.build_system == BuildSystem.MESON:
-            build_meson(build_context, component, source_dir)
-        elif component.build_system == BuildSystem.MAKE_ONLY:
-            build_make_only(build_context, component, source_dir)
-        elif component.build_system == BuildSystem.CARGO:
-            build_cargo(build_context, component, source_dir)
-        else:
-            raise BuildError(component.name, f"Unknown build system: {component.build_system}")
+        try:
+            dispatch_component_build(build_context, component, source_dir)
+        except ValueError as exc:
+            raise BuildError(component.name, str(exc)) from exc
 
         self._execute_post_install(component, source_dir)
 

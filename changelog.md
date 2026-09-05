@@ -8,6 +8,7 @@
 - **Phase 2 concrete platform implementations** — added `MacOSPlatform`, `LinuxGcc13Platform`, `LinuxGcc15Platform`, and `WindowsUcrt64Platform`, plus a resolver that picks the correct strategy for the detected OS/toolchain.
 - **Phase 3 declarative source patch engine** — added the `patches/` package with version- and component-aware `SourcePatch` definitions, fail-fast assertion helpers, and concrete C23, C++ header, Darwin, and FFmpeg 9 patch implementations.
 - **Phase 4 domain-specific builders** — added the `builders/` package, `ComponentBuildContext`, standard build-system entry points, and codec, crypto, graphics, network, tool, and FFmpeg builder modules.
+- **Phase 5 orchestration boundary** — centralized custom and standard build selection in `builders.base.dispatch_component_build()` while preserving the existing `FFmpegBuilder` API and lifecycle behavior.
 
 ### Changed
 

@@ -300,13 +300,13 @@ Windows/UCRT64 policy in current implementation:
 1. Check if already completed (version match) → skip
 2. Download and extract source
 3. If HEADERS_ONLY → install headers, return
-4. If `custom_build_fn` → resolve through `component_builders.get_custom_builder()` and call it, return
+4. If `custom_build_fn` → resolve through `builders.base.dispatch_component_build()` and call it, return
 5. Dispatch by build_system:
-   - AUTOTOOLS → _build_autotools()
-   - CMAKE     → _build_cmake()
-   - MESON     → _build_meson()
-   - MAKE_ONLY → _build_make_only()
-   - CARGO     → _build_cargo()
+  - AUTOTOOLS → `builders.base.build_autotools()`
+  - CMAKE     → `builders.base.build_cmake()`
+  - MESON     → `builders.base.build_meson()`
+  - MAKE_ONLY → `builders.base.build_make_only()`
+  - CARGO     → `builders.base.build_cargo()`
 ```
 
 **Custom build functions** are exposed through domain modules under `builders/` and dispatched through an explicit registry. Their compatibility signature remains `(builder, component, source_dir)`, while `builders/base.py` provides `ComponentBuildContext` and standard build-system entry points:
