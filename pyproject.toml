@@ -52,7 +52,17 @@ Documentation = "https://github.com/ffmpeg-builder/ffmpeg-builder#readme"
 Repository = "https://github.com/ffmpeg-builder/ffmpeg-builder"
 
 [tool.setuptools]
-packages = ["ffmpeg_builder", "ffmpeg_builder.ui"]
+packages = [
+    "ffmpeg_builder",
+    "ffmpeg_builder.ui",
+    "ffmpeg_builder.builders",
+    "ffmpeg_builder.builders.codecs",
+    "ffmpeg_builder.builders.crypto",
+    "ffmpeg_builder.builders.graphics",
+    "ffmpeg_builder.builders.network",
+    "ffmpeg_builder.builders.tools",
+    "ffmpeg_builder.builders.ffmpeg",
+]
 py-modules = ["app", "build_steps", "build_types", "builder", "component_builders", "components", "config", "downloader", "executor", "platform_detect", "release_bundle", "state", "system_report"]
 
 [tool.setuptools.package-dir]

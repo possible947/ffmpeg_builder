@@ -15,6 +15,15 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Type
 
 from .build_steps import run_install, run_make, run_step
 from .build_types import BuildError, SkipComponent
+from .builders.base import (
+    ComponentBuildContext,
+    build_autotools,
+    build_cargo,
+    build_cmake,
+    build_make_only,
+    build_meson,
+    install_headers_only,
+)
 from .component_builders import get_custom_builder
 from .components import BuildSystem, Component, ComponentRegistry
 from .config import BuildConfig
@@ -872,6 +881,7 @@ class FFmpegBuilder:
         source_dir = self.packages / component.get_target_dir()
 
         self._apply_component_patches(component, source_dir)
+        build_context = ComponentBuildContext.from_builder(self)
 
         if component.build_system == BuildSystem.HEADERS_ONLY:
             self.state_manager.mark_component_status(
@@ -880,7 +890,7 @@ class FFmpegBuilder:
                 component.version,
                 detail="install headers",
             )
-            self._install_headers_only(component, source_dir)
+            install_headers_only(build_context, component, source_dir)
             self._execute_post_install(component, source_dir)
             return
 
@@ -899,15 +909,15 @@ class FFmpegBuilder:
                 return
 
         if component.build_system == BuildSystem.AUTOTOOLS:
-            self._build_autotools(component, source_dir)
+            build_autotools(build_context, component, source_dir)
         elif component.build_system == BuildSystem.CMAKE:
-            self._build_cmake(component, source_dir)
+            build_cmake(build_context, component, source_dir)
         elif component.build_system == BuildSystem.MESON:
-            self._build_meson(component, source_dir)
+            build_meson(build_context, component, source_dir)
         elif component.build_system == BuildSystem.MAKE_ONLY:
-            self._build_make_only(component, source_dir)
+            build_make_only(build_context, component, source_dir)
         elif component.build_system == BuildSystem.CARGO:
-            self._build_cargo(component, source_dir)
+            build_cargo(build_context, component, source_dir)
         else:
             raise BuildError(component.name, f"Unknown build system: {component.build_system}")
 

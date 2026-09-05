@@ -34,10 +34,43 @@ def test_build_all_removed_dead_code_guard():
 
 
 def test_custom_builder_registry_contains_known_entries():
+    expected = {
+        "build_meson",
+        "build_openssl",
+        "build_x264",
+        "build_x265",
+        "build_libvpx",
+        "build_zimg",
+        "build_libvorbis",
+        "build_libjxl",
+        "build_libvmaf",
+        "build_srt",
+        "build_libzmq",
+        "build_glslang",
+        "build_libplacebo",
+        "build_ninja",
+        "build_ffmpeg",
+    }
+    from ffmpeg_builder.component_builders import CUSTOM_BUILDERS
+
+    assert expected <= CUSTOM_BUILDERS.keys()
+    assert all(callable(CUSTOM_BUILDERS[name]) for name in expected)
     assert get_custom_builder("build_ffmpeg") is not None
     assert get_custom_builder("build_libplacebo") is not None
     assert get_custom_builder("build_meson") is not None
     assert get_custom_builder("missing-builder") is None
+
+
+def test_component_build_context_exposes_builder_dependencies(tmp_path: Path):
+    from ffmpeg_builder.builders.base import ComponentBuildContext
+
+    builder = _make_libplacebo_builder(tmp_path)
+    context = ComponentBuildContext.from_builder(builder)
+
+    assert context.builder is builder
+    assert context.platform_strategy is builder.platform_strategy
+    assert context.executor is builder.executor
+    assert context.state_manager is builder.state_manager
 
 
 def test_release_bundle_wrapper_creates_manifest(tmp_path: Path):

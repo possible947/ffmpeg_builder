@@ -5,6 +5,22 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Dict, Optional
 
+from .builders.codecs.jxl import build_libjxl
+from .builders.codecs.vorbis import build_libvorbis
+from .builders.codecs.vpx import build_libvpx
+from .builders.codecs.x264 import build_x264
+from .builders.codecs.x265 import build_x265
+from .builders.codecs.zimg import build_zimg
+from .builders.crypto.openssl import build_openssl
+from .builders.ffmpeg.ffmpeg import build_ffmpeg
+from .builders.graphics.glslang import build_glslang
+from .builders.graphics.placebo import build_libplacebo
+from .builders.graphics.vmaf import build_libvmaf
+from .builders.network.srt import build_srt
+from .builders.network.zmq import build_libzmq
+from .builders.tools.meson import build_meson
+from .builders.tools.ninja import build_ninja
+
 if TYPE_CHECKING:
     from .builder import FFmpegBuilder
     from .components import Component
@@ -19,41 +35,19 @@ def get_custom_builder(name: str) -> Optional[CustomBuilder]:
 
 
 CUSTOM_BUILDERS: Dict[str, CustomBuilder] = {
-    "build_meson": lambda builder, component, source_dir: builder.build_meson(
-        component, source_dir
-    ),
-    "build_openssl": lambda builder, component, source_dir: builder.build_openssl(
-        component, source_dir
-    ),
-    "build_x264": lambda builder, component, source_dir: builder.build_x264(component, source_dir),
-    "build_x265": lambda builder, component, source_dir: builder.build_x265(component, source_dir),
-    "build_libvpx": lambda builder, component, source_dir: builder.build_libvpx(
-        component, source_dir
-    ),
-    "build_zimg": lambda builder, component, source_dir: builder.build_zimg(component, source_dir),
-    "build_libvorbis": lambda builder, component, source_dir: builder.build_libvorbis(
-        component, source_dir
-    ),
-    "build_libjxl": lambda builder, component, source_dir: builder.build_libjxl(
-        component, source_dir
-    ),
-    "build_libvmaf": lambda builder, component, source_dir: builder.build_libvmaf(
-        component, source_dir
-    ),
-    "build_srt": lambda builder, component, source_dir: builder.build_srt(component, source_dir),
-    "build_libzmq": lambda builder, component, source_dir: builder.build_libzmq(
-        component, source_dir
-    ),
-    "build_glslang": lambda builder, component, source_dir: builder.build_glslang(
-        component, source_dir
-    ),
-    "build_libplacebo": lambda builder, component, source_dir: builder.build_libplacebo(
-        component, source_dir
-    ),
-    "build_ninja": lambda builder, component, source_dir: builder.build_ninja(
-        component, source_dir
-    ),
-    "build_ffmpeg": lambda builder, component, source_dir: builder.build_ffmpeg(
-        component, source_dir
-    ),
+    "build_meson": build_meson,
+    "build_openssl": build_openssl,
+    "build_x264": build_x264,
+    "build_x265": build_x265,
+    "build_libvpx": build_libvpx,
+    "build_zimg": build_zimg,
+    "build_libvorbis": build_libvorbis,
+    "build_libjxl": build_libjxl,
+    "build_libvmaf": build_libvmaf,
+    "build_srt": build_srt,
+    "build_libzmq": build_libzmq,
+    "build_glslang": build_glslang,
+    "build_libplacebo": build_libplacebo,
+    "build_ninja": build_ninja,
+    "build_ffmpeg": build_ffmpeg,
 }

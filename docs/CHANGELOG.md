@@ -9,6 +9,7 @@ All notable changes to the FFmpeg Builder project.
 - **Phase 1 platform strategy abstraction** — introduced the `platforms/` package with `BasePlatformStrategy` and `PlatformContext`, establishing the foundational abstraction layer for platform- and toolchain-specific behavior.
 - **Phase 2 concrete platform implementations** — added `MacOSPlatform`, `LinuxGcc13Platform`, `LinuxGcc15Platform`, and `WindowsUcrt64Platform`, plus a `PlatformStrategyResolver` that selects the correct implementation for the current OS/toolchain.
 - **Phase 3 declarative source patch engine** — added the `patches/` package with component-aware `SourcePatch` definitions, fail-fast assertion helpers, and concrete C23, C++ header, Darwin, and FFmpeg 9 patch implementations.
+- **Phase 4 domain-specific builders** — added the `builders/` package, `ComponentBuildContext`, standard build-system entry points, and domain modules for codecs, crypto, graphics, networking, tools, and FFmpeg.
 
 ### Changed
 
@@ -16,6 +17,7 @@ All notable changes to the FFmpeg Builder project.
 - **Builder integration** — `FFmpegBuilder` now resolves a platform strategy from `PlatformContext` and uses it for workspace path normalization and environment preparation.
 - **Phase 2 stabilization** — hardened the resolver for minimal mock platform-info objects, normalized Linux/MSYS2 path detection to canonical POSIX strings for detector diagnostics, and made the macOS release-bundle symlink fallback safe on Windows where symlink privileges are unavailable.
 - **Patch lifecycle integration** — `FFmpegBuilder` applies registered source patches immediately after extraction and before configure/build steps, so upstream anchor changes fail with a component-specific `BuildError`.
+- **Builder dispatch integration** — custom component functions and standard build-system lifecycle calls now resolve through the modular `builders/` boundary while preserving the existing `FFmpegBuilder` callable API.
 
 ### Verified
 

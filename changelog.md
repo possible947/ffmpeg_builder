@@ -7,6 +7,7 @@
 - **Phase 1 platform strategy abstraction** — introduced the `platforms/` package with `BasePlatformStrategy` and `PlatformContext`, establishing the foundation for platform/toolchain-specific build behavior.
 - **Phase 2 concrete platform implementations** — added `MacOSPlatform`, `LinuxGcc13Platform`, `LinuxGcc15Platform`, and `WindowsUcrt64Platform`, plus a resolver that picks the correct strategy for the detected OS/toolchain.
 - **Phase 3 declarative source patch engine** — added the `patches/` package with version- and component-aware `SourcePatch` definitions, fail-fast assertion helpers, and concrete C23, C++ header, Darwin, and FFmpeg 9 patch implementations.
+- **Phase 4 domain-specific builders** — added the `builders/` package, `ComponentBuildContext`, standard build-system entry points, and codec, crypto, graphics, network, tool, and FFmpeg builder modules.
 
 ### Changed
 
@@ -14,6 +15,7 @@
 - **Builder integration** — `FFmpegBuilder` now resolves a platform strategy from `PlatformContext` and uses it for path normalization and environment setup.
 - **Phase 2 stabilization** — tightened the strategy resolver for minimal mock platform objects, normalized Linux/MSYS2 path detection to POSIX-style values for detector diagnostics, and added the Windows-safe fallback for macOS release-bundle symlink alias handling.
 - **Patch lifecycle integration** — `FFmpegBuilder` now applies registered source patches immediately after extraction and before configure/build steps, preserving clear failures when an upstream patch anchor changes.
+- **Builder dispatch integration** — custom component functions and standard build-system lifecycle calls now resolve through the modular `builders/` boundary while preserving the existing `FFmpegBuilder` callable API.
 
 ### Verified
 
