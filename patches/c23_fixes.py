@@ -4,11 +4,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from build_types import BuildError
-from patches.base import SourcePatch, assert_patch_absent, assert_patch_present
+from ffmpeg_builder.build_types import BuildError
+from ffmpeg_builder.patches.base import (
+    PatchStrategy,
+    PatchTarget,
+    SourcePatch,
+    assert_patch_absent,
+    assert_patch_present,
+)
 
 
-def _patch_xvidcore_encoder_h(path: Path, component: object, strategy: object) -> None:
+def _patch_xvidcore_encoder_h(path: Path, component: PatchTarget, strategy: PatchStrategy) -> None:
     if component.name != "xvidcore":
         return
     content = path.read_text(encoding="utf-8")
@@ -27,11 +33,15 @@ def _patch_xvidcore_encoder_h(path: Path, component: object, strategy: object) -
             f"Source patch did not take effect in {path}: unguarded '{legacy}' still present "
             "(C23 bool typedef gate). The xvidcore version may have changed.",
         )
-    assert_patch_present(component.name, path, "#if !defined(__STDC_VERSION__) || __STDC_VERSION__ < 202311L", "C23 bool typedef gate")
-    assert_patch_absent(component.name, path, "typedef int bool;\n#endif", "C23 bool typedef gate")
+    assert_patch_present(
+        component.name,
+        path,
+        "#if !defined(__STDC_VERSION__) || __STDC_VERSION__ < 202311L",
+        "C23 bool typedef gate",
+    )
 
 
-def _patch_openssl_configdata(path: Path, component: object, strategy: object) -> None:
+def _patch_openssl_configdata(path: Path, component: PatchTarget, strategy: PatchStrategy) -> None:
     content = path.read_text(encoding="utf-8")
     if "-std=c11" in content:
         updated = content.replace("-std=c11", "-std=gnu11")

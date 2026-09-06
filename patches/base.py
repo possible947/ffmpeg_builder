@@ -4,9 +4,23 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Protocol
 
-from build_types import BuildError
+from ffmpeg_builder.build_types import BuildError
+
+
+class PatchTarget(Protocol):
+    """Minimal surface a component must expose for source patching."""
+
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def version(self) -> str: ...
+
+
+# A platform strategy is opaque to patches; they only need attribute access.
+PatchStrategy = object
 
 
 @dataclass(frozen=True)
@@ -16,8 +30,8 @@ class SourcePatch:
     name: str
     component_name: str
     target_rel_path: str
-    apply_fn: Callable[[Path, object, object], None]
-    condition: Optional[Callable[[object, object], bool]] = None
+    apply_fn: Callable[[Path, PatchTarget, PatchStrategy], None]
+    condition: Optional[Callable[[PatchTarget, PatchStrategy], bool]] = None
 
 
 def assert_patch_present(component_name: str, path: Path, marker: str, context_desc: str) -> None:

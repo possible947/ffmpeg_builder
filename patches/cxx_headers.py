@@ -4,10 +4,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from patches.base import SourcePatch, assert_patch_present
+from ffmpeg_builder.patches.base import (
+    PatchStrategy,
+    PatchTarget,
+    SourcePatch,
+    assert_patch_present,
+)
 
 
-def _patch_x265_json11(path: Path, component: object, strategy: object) -> None:
+def _patch_x265_json11(path: Path, component: PatchTarget, strategy: PatchStrategy) -> None:
     content = path.read_text(encoding="utf-8")
     if "#include <cstdint>" not in content:
         lines = content.split("\n")

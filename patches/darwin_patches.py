@@ -5,11 +5,17 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from build_types import BuildError
-from patches.base import SourcePatch, assert_patch_absent, assert_patch_present
+from ffmpeg_builder.build_types import BuildError
+from ffmpeg_builder.patches.base import (
+    PatchStrategy,
+    PatchTarget,
+    SourcePatch,
+    assert_patch_absent,
+    assert_patch_present,
+)
 
 
-def _patch_libjxl_deps(path: Path, component: object, strategy: object) -> None:
+def _patch_libjxl_deps(path: Path, component: PatchTarget, strategy: PatchStrategy) -> None:
     if shutil.which("realpath") is not None:
         return
     content = path.read_text(encoding="utf-8")
@@ -34,7 +40,7 @@ def _patch_libjxl_deps(path: Path, component: object, strategy: object) -> None:
     assert_patch_present(component.name, path, "command -v realpath", "libjxl realpath guard")
 
 
-def _patch_libvorbis_configure(path: Path, component: object, strategy: object) -> None:
+def _patch_libvorbis_configure(path: Path, component: PatchTarget, strategy: PatchStrategy) -> None:
     content = path.read_text(encoding="utf-8")
     marker = "-force_cpusubtype_ALL"
     if marker in content:

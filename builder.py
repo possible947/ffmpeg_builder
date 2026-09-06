@@ -307,27 +307,6 @@ class FFmpegBuilder:
                 f"({context}). The component version may have changed.",
             )
 
-    def _patch_ffmpeg_9_vulkan_renderer(self, component: Component, source_dir: Path) -> None:
-        """Add the Vulkan context API include required by FFmpeg 9 ffplay."""
-        if component.version != "9.0":
-            return
-
-        renderer = source_dir / "fftools" / "ffplay_renderer.c"
-        include = '#include "libavutil/hwcontext_vulkan.h"'
-        anchor = '#include "libavutil/internal.h"'
-        content = renderer.read_text(encoding="utf-8")
-        if include not in content and anchor in content:
-            renderer.write_text(
-                content.replace(anchor, f"{anchor}\n{include}", 1), encoding="utf-8"
-            )
-
-        self._assert_patch_present(
-            component,
-            renderer,
-            include,
-            "FFmpeg 9 ffplay Vulkan context declarations",
-        )
-
     def _normalize_windows_path_for_flags(self, path: str) -> str:
         """Normalize Windows path for shell-expanded build flags.
 
@@ -1141,31 +1120,9 @@ class FFmpegBuilder:
         if component.workdir:
             build_dir = source_dir / component.workdir
 
-        if component.name == "xvidcore" and self._is_windows_ucrt64_backend():
-            # xvidcore 1.3.7 defines `bool` via typedef in encoder.h.
-            # GCC 16 defaults to C23 where `bool` is a keyword, so this
-            # typedef is rejected. Gate the typedef out for C23+.
-            encoder_h = source_dir / "src" / "encoder.h"
-            if encoder_h.exists():
-                content = encoder_h.read_text()
-                legacy = "typedef int bool;"
-                patched = (
-                    "#if !defined(__STDC_VERSION__) || __STDC_VERSION__ < 202311L\n"
-                    "typedef int bool;\n"
-                    "#endif"
-                )
-                if legacy in content and patched not in content:
-                    encoder_h.write_text(content.replace(legacy, patched, 1))
-                # An unguarded `typedef int bool;` breaks GCC 16 (C23)
-                # builds, so fail loudly if the patch did not take effect.
-                final = encoder_h.read_text()
-                if legacy in final and patched not in final:
-                    raise BuildError(
-                        component.name,
-                        f"Source patch did not take effect in {encoder_h}: unguarded "
-                        f"'{legacy}' still present (C23 bool typedef gate). "
-                        f"The xvidcore version may have changed.",
-                    )
+        # The C23 bool typedef gate for xvidcore is applied by the patch
+        # registry (patches/c23_fixes.py) after extraction.
+        env = self.get_build_env(component)
 
         configure_args = [
             arg.replace("{workspace}", self._ws_str()).replace("{num_jobs}", str(self.num_jobs))
@@ -1182,8 +1139,6 @@ class FFmpegBuilder:
                     )
                     for arg in override.configure_args_override
                 ]
-
-        env = self.get_build_env(component)
 
         self._run_step(
             component,
@@ -1523,7 +1478,9 @@ class FFmpegBuilder:
 
         # OpenSSL Configure forces -std=c11 on x86_64, which breaks GCC 16's
         # handling of inline assembly in crypto/bn/asm/x86_64-gcc.c. Replace it
-        # with -std=gnu11 in the generated config and regenerate the Makefile.
+        # with -std=gnu11 in the generated configdata.pm and regenerate the
+        # Makefile. (configdata.pm only exists post-Configure, so this stays
+        # here rather than in the pre-configure patch registry.)
         configdata = source_dir / "configdata.pm"
         if configdata.exists():
             content = configdata.read_text()
@@ -1633,30 +1590,8 @@ class FFmpegBuilder:
         if self.platform == "darwin" and self.platform_detector.platform_info.is_arm64:
             env["CXXFLAGS"] = f"-DHAVE_NEON=1 {env.get('CXXFLAGS', '')}"
 
-        # Patch json11.cpp to include <cstdint>. Newer libstdc++ (GCC 15/16)
-        # no longer transitively pulls <cstdint> via <limits>, so uint8_t
-        # becomes undeclared and the dynamicHDR10 helper fails to compile.
-        # Mirrors the original bash script's sed patch.
-        json11_cpp = source_dir / "source" / "dynamicHDR10" / "json11" / "json11.cpp"
-        if json11_cpp.exists():
-            content = json11_cpp.read_text()
-            if "#include <cstdint>" not in content:
-                lines = content.split("\n")
-                insert_idx = None
-                for i, line in enumerate(lines):
-                    if line.strip() == "#include <limits>":
-                        insert_idx = i + 1
-                        break
-                if insert_idx is not None:
-                    lines.insert(insert_idx, "#include <cstdint>")
-                    json11_cpp.write_text("\n".join(lines))
-            # uint8_t is undeclared without <cstdint> on GCC 15/16, so fail
-            # loudly if the include could not be added (e.g. the anchor
-            # `#include <limits>` moved in a newer x265).
-            self._assert_patch_present(
-                component, json11_cpp, "#include <cstdint>", "json11.cpp cstdint include"
-            )
-
+        # The json11.cpp <cstdint> include for GCC 15/16 libstdc++ is applied
+        # by the patch registry (patches/cxx_headers.py) after extraction.
         build_linux = source_dir / "build" / "linux"
         if not build_linux.exists():
             raise BuildError(component.name, "Build directory not found")
@@ -1999,18 +1934,8 @@ class FFmpegBuilder:
         """
         env = self.get_build_env(component)
 
-        configure_ac = source_dir / "configure.ac"
-        if configure_ac.exists():
-            content = configure_ac.read_text()
-            content = content.replace("-force_cpusubtype_ALL", "")
-            configure_ac.write_text(content)
-            self._assert_patch_absent(
-                component,
-                configure_ac,
-                "-force_cpusubtype_ALL",
-                "libvorbis configure.ac cpusubtype",
-            )
-
+        # The -force_cpusubtype_ALL cleanup is applied by the patch registry
+        # (patches/darwin_patches.py) after extraction.
         self._run_step(
             component,
             ComponentStatus.CONFIGURING,
@@ -2069,34 +1994,8 @@ class FFmpegBuilder:
         """
         env = self.get_build_env(component)
 
-        # On some macOS setups `realpath` is missing, while libjxl's deps.sh
-        # assumes it exists. Patch the script to a portable path resolution.
-        deps_script = source_dir / "deps.sh"
-        if self.platform == "darwin" and deps_script.exists() and shutil.which("realpath") is None:
-            content = deps_script.read_text()
-            original = 'SELF=$(realpath "$0")'
-            guard = "command -v realpath"
-            if original in content and guard not in content:
-                portable = (
-                    "if command -v realpath >/dev/null 2>&1; then\n"
-                    '  SELF=$(realpath "$0")\n'
-                    "else\n"
-                    '  SELF=$(cd -- "$(dirname -- "$0")" && pwd -P)/$(basename -- "$0")\n'
-                    "fi"
-                )
-                deps_script.write_text(content.replace(original, portable, 1))
-            # Without realpath on this system, an unguarded
-            # `SELF=$(realpath "$0")` makes deps.sh fail, so verify the guard
-            # is in place (the anchor may have moved in a newer libjxl).
-            final = deps_script.read_text()
-            if original in final and guard not in final:
-                raise BuildError(
-                    component.name,
-                    f"Source patch did not take effect in {deps_script}: unguarded "
-                    f"'{original}' still present (realpath missing on this system). "
-                    f"The libjxl version may have changed.",
-                )
-
+        # The deps.sh realpath guard (macOS without coreutils) is applied by
+        # the patch registry (patches/darwin_patches.py) after extraction.
         self._run_step(
             component,
             ComponentStatus.CONFIGURING,
@@ -2767,7 +2666,6 @@ class FFmpegBuilder:
             component: Component to build.
             source_dir: Source directory.
         """
-        self._patch_ffmpeg_9_vulkan_renderer(component, source_dir)
         env = self.get_build_env(component)
 
         built_components = [

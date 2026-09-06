@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from ..builder import FFmpegBuilder
@@ -19,7 +19,7 @@ class ComponentBuildContext:
     """Dependencies exposed to modular component builders."""
 
     builder: "FFmpegBuilder"
-    platform_strategy: "BasePlatformStrategy"
+    platform_strategy: Optional["BasePlatformStrategy"]
     executor: "CommandExecutor"
     state_manager: "StateManager"
 
@@ -33,7 +33,9 @@ class ComponentBuildContext:
         )
 
 
-def build_autotools(context: ComponentBuildContext, component: "Component", source_dir: Path) -> None:
+def build_autotools(
+    context: ComponentBuildContext, component: "Component", source_dir: Path
+) -> None:
     context.builder._build_autotools(component, source_dir)
 
 
@@ -45,7 +47,9 @@ def build_meson(context: ComponentBuildContext, component: "Component", source_d
     context.builder._build_meson(component, source_dir)
 
 
-def build_make_only(context: ComponentBuildContext, component: "Component", source_dir: Path) -> None:
+def build_make_only(
+    context: ComponentBuildContext, component: "Component", source_dir: Path
+) -> None:
     context.builder._build_make_only(component, source_dir)
 
 

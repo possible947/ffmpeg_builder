@@ -24,6 +24,21 @@
 - `pytest tests/test_platform_strategy.py -q` passes with the focused Phase 1/2 regression suite.
 - `pytest tests/test_patches.py tests/test_builder_split.py -q` passes with 23 tests.
 
+## 2026-09-06 — Исправления по итогам ревью фаз 1–5
+
+Ревью после слияния пяти фаз выявило дефекты; все ворота качества теперь зелёные.
+
+- **Патч xvidcore ломал сборку сам** — [patches/c23_fixes.py](patches/c23_fixes.py) проверял отсутствие подстроки `typedef int bool;\n#endif`, но это ровно хвост вставляемого фрагмента, поэтому любая сборка xvidcore падала с `BuildError`. Лишняя проверка убрана; корректный `assert_patch_present` оставлен.
+- **Пакет не импортировался вне корня репозитория** — `patches/` использовали импорты верхнего уровня (`from build_types import …`), поэтому `import ffmpeg_builder.builder` из другой директории падал с `ModuleNotFoundError: patches`. Все импорты переведены на абсолютную форму `ffmpeg_builder.*`.
+- **В wheel/sdist не попадали новые пакеты** — в [pyproject.toml](pyproject.toml) добавлены `ffmpeg_builder.patches` и `ffmpeg_builder.platforms`.
+- **Дублирование патчей** — шесть legacy-блоков инлайн-патчинга в [builder.py](builder.py) дублировали реестр. Пять пред-конфигурационных дублей удалены; патч OpenSSL `configdata.pm` оставлен инлайн, т.к. файл появляется только после `./Configure` (реестр до него не достаёт).
+- **Мёртвый код** — убраны недостижимый цикл в [platforms/resolver.py](platforms/resolver.py), дублированный `_to_msys_path` в [platforms/windows_ucrt64.py](platforms/windows_ucrt64.py) и неиспользуемый импорт в [builders/codecs/x264.py](builders/codecs/x264.py).
+- **Слепая зона mypy** — [scripts/check_mypy_baseline.py](scripts/check_mypy_baseline.py) сканировал только корневые модули и `ui/`; добавлены `platforms/`, `patches/`, `builders/`. Расширенный скан выявил реальные ошибки, которые исправлены: `.as_posix()` на `str` и `Path(None)` для Vulkan SDK в [platforms/linux_gcc13.py](platforms/linux_gcc13.py) и [platforms/darwin.py](platforms/darwin.py), рассинхрон `Optional` у `ComponentBuildContext.platform_strategy`. Добавлен протокол `PatchTarget` для типизации патчей и аннотации 15 заглушек сборщиков.
+- **Нарушения black** — 9 файлов из фаз 1–5 не проходили `black --check`; отформатированы.
+- **Дублирующийся раздел `## [Unreleased]`** — переименован в `## [2.0b0-dev] — pre-stable fixes`.
+
+Проверено: `pytest tests/` (175 passed, 2 skipped, 1 failed — единственный сбой, `test_release_bundle_macos_rewrites_install_names_and_rpaths`, это ранее существовавшая Windows-специфичная проблема путей в macOS-ветке кода, воспроизводится и на коммите до рефакторинга; CI на Ubuntu не затронут); `black --check .` — OK (70 файлов); `python scripts/check_mypy_baseline.py` — OK с расширенной областью. Полный текст — в `docs/CHANGELOG.md`.
+
 ## 2026-09-05 — Windows: автоматический выбор версии nv-codec-headers по драйверу NVENC
 
 Добавлена поддержка автоматического подбора версии `nv-codec-headers` под фактически установленный драйвер NVIDIA, поскольку закреплённая `13.0.19.0` несовместима с окружениями, где драйвер поддерживает только NVENC API до 12.2.

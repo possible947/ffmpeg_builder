@@ -26,6 +26,26 @@ All notable changes to the FFmpeg Builder project.
 - `pytest tests/test_platform_strategy.py -q` passes with the focused Phase 1/2 regression checks.
 - `pytest tests/test_patches.py tests/test_builder_split.py -q` passes with 23 tests.
 
+### Fixed — Phase 1–5 remediation (2026-09-06)
+
+Post-merge review of the five phase commits surfaced defects that are corrected here; all quality gates now pass.
+
+- **xvidcore C23 patch self-failed the build** — [patches/c23_fixes.py](patches/c23_fixes.py) ran `assert_patch_absent(path, "typedef int bool;\n#endif")` after applying its guard, but that exact substring is the tail of the inserted replacement, so every real xvidcore build raised `BuildError`. Removed the self-matching assertion; the correct `assert_patch_present` guard remains. Verified by direct registry application and idempotency tests.
+- **Installed-package import breakage** — `patches/` modules imported via top-level `from build_types import …` / `from patches.base import …`, which only resolve when the repo root is on `sys.path`; `import ffmpeg_builder.builder` from any other working directory failed with `ModuleNotFoundError: No module named 'patches'`. Converted all `patches/` imports to absolute `ffmpeg_builder.*` form (matching the `platforms/` convention).
+- **Wheel/sdist omitted new packages** — [pyproject.toml](pyproject.toml) `packages` listed `ffmpeg_builder.builders.*` but not `ffmpeg_builder.patches` or `ffmpeg_builder.platforms`; added both so non-editable installs are complete.
+- **Patch duplication left behind** — the six legacy inline patch blocks (xvidcore bool gate, x265 `<cstdint>`, libvorbis `-force_cpusubtype_ALL`, libjxl `realpath` guard, FFmpeg 9 Vulkan include) were still applied in [builder.py](builder.py) alongside the registry. Removed the five pre-configure duplicates; the OpenSSL `configdata.pm` `-std=c11 → -std=gnu11` rewrite stays inline because `configdata.pm` only exists after `./Configure` runs, so the pre-configure registry cannot reach it (documented in place).
+- **Dead/confused code in new modules** — removed the unreachable fallback loop in [platforms/resolver.py](platforms/resolver.py) (which iterated four strategies but only branched on one), the verbatim-duplicated `_to_msys_path` in [platforms/windows_ucrt64.py](platforms/windows_ucrt64.py), and an unused import in [builders/codecs/x264.py](builders/codecs/x264.py).
+- **mypy gate blind spot** — [scripts/check_mypy_baseline.py](scripts/check_mypy_baseline.py) scanned only top-level modules plus `ui/`, so the three new packages escaped the frozen baseline. Extended `source_files()` to include `platforms/`, `patches/`, and `builders/`. The widened scan exposed genuine latent bugs now fixed: `normalize_path` calling `.as_posix()` on a `str` and `Path(context.platform_info.vulkan_sdk_path)` receiving `None` in both [platforms/linux_gcc13.py](platforms/linux_gcc13.py) and [platforms/darwin.py](platforms/darwin.py), plus an `Optional` mismatch on `ComponentBuildContext.platform_strategy`. Added a `PatchTarget` protocol to type the patch `apply_fn`/`condition` signatures and annotated the 15 builder stub functions.
+- **Black violations** — the five phase commits shipped 9 files that failed `black --check`; reformatted so the pinned-format gate passes.
+- **Duplicate `## [Unreleased]` section** — retitled the older pre-stable block to `## [2.0b0-dev] — pre-stable fixes`, leaving a single `Unreleased` section.
+
+### Verified — remediation (2026-09-06)
+
+- `pytest tests/` passes: 175 passed, 2 skipped, 1 failed. The single failure is `tests/test_builder_split.py::test_release_bundle_macos_rewrites_install_names_and_rpaths`, a pre-existing Windows-only path-separator mismatch in a macOS-only code path that fails identically at the pre-refactor commit (095b51a); CI (Ubuntu) is unaffected.
+- `black --check .` passes (70 files).
+- `python scripts/check_mypy_baseline.py` passes with the widened package scope (0 errors).
+- Concrete patch tests now exercise `xvidcore`, `x265`, and FFmpeg 9 patch behavior through the registry.
+
 ## [2.0b0] - 2026-08-31
 
 ### Added
@@ -40,7 +60,7 @@ All notable changes to the FFmpeg Builder project.
 
 - Linux and Windows MSYS2 UCRT64 FFmpeg 9 validation are pending before the stable 2.0 release.
 
-## [Unreleased]
+## [2.0b0-dev] — pre-stable fixes
 
 ### Fixed
 

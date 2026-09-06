@@ -35,9 +35,6 @@ class PlatformStrategyResolver:
                 return LinuxGcc15Platform()
             return LinuxGcc13Platform()
 
-        for strategy in (LinuxGcc15Platform, LinuxGcc13Platform, WindowsUcrt64Platform, MacOSPlatform):
-            if strategy is LinuxGcc15Platform and gcc_major_version is not None and gcc_major_version >= 15:
-                return LinuxGcc15Platform()
         return None
 
 

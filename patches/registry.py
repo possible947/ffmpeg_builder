@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List, Optional
 
-from .base import SourcePatch
+from .base import PatchStrategy, PatchTarget, SourcePatch
 from .c23_fixes import OPENSSL_C11_PATCH, XVIDCORE_BOOL_PATCH
 from .cxx_headers import X265_JSON11_PATCH
 from .darwin_patches import LIBJXL_REALPATH_PATCH, LIBVORBIS_CPUSUBTYPE_PATCH
@@ -30,7 +30,9 @@ class PatchRegistry:
     def register(self, patch: SourcePatch) -> None:
         self._patches.append(patch)
 
-    def apply_patches(self, component: object, source_dir: Path, strategy: Optional[object]) -> None:
+    def apply_patches(
+        self, component: PatchTarget, source_dir: Path, strategy: Optional[PatchStrategy]
+    ) -> None:
         """Apply every patch whose component and condition match this build."""
         for patch in self._patches:
             if patch.component_name != getattr(component, "name", None):

@@ -62,6 +62,8 @@ packages = [
     "ffmpeg_builder.builders.network",
     "ffmpeg_builder.builders.tools",
     "ffmpeg_builder.builders.ffmpeg",
+    "ffmpeg_builder.patches",
+    "ffmpeg_builder.platforms",
 ]
 py-modules = ["app", "build_steps", "build_types", "builder", "component_builders", "components", "config", "downloader", "executor", "platform_detect", "release_bundle", "state", "system_report"]
 

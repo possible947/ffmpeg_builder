@@ -617,21 +617,23 @@ class TestSourcePatchAssertions:
             builder._assert_patch_present(_make_patch_component(), f, "#include <cstdint>", "ctx")
 
     def test_patch_ffmpeg_9_vulkan_renderer_adds_context_include(self, tmp_path):
-        builder = _make_libplacebo_builder(tmp_path)
+        from ffmpeg_builder.patches.registry import get_patch_registry
+
         component = _make_patch_component("ffmpeg")
         component.version = "9.0"
         renderer = tmp_path / "fftools" / "ffplay_renderer.c"
         renderer.parent.mkdir()
         renderer.write_text('#include "libavutil/internal.h"\n', encoding="utf-8")
 
-        builder._patch_ffmpeg_9_vulkan_renderer(component, tmp_path)
+        get_patch_registry().apply_patches(component, tmp_path, None)
 
         assert renderer.read_text(encoding="utf-8") == (
             '#include "libavutil/internal.h"\n' '#include "libavutil/hwcontext_vulkan.h"\n'
         )
 
     def test_patch_ffmpeg_9_vulkan_renderer_fails_when_anchor_is_missing(self, tmp_path):
-        builder = _make_libplacebo_builder(tmp_path)
+        from ffmpeg_builder.patches.registry import get_patch_registry
+
         component = _make_patch_component("ffmpeg")
         component.version = "9.0"
         renderer = tmp_path / "fftools" / "ffplay_renderer.c"
@@ -639,13 +641,14 @@ class TestSourcePatchAssertions:
         renderer.write_text('#include "libavutil/mem.h"\n', encoding="utf-8")
 
         with pytest.raises(BuildError, match="version may have changed"):
-            builder._patch_ffmpeg_9_vulkan_renderer(component, tmp_path)
+            get_patch_registry().apply_patches(component, tmp_path, None)
 
     def test_build_x265_fails_when_json11_anchor_missing(self, tmp_path):
         # json11.cpp without the `#include <limits>` anchor and without
-        # cstdint: the patch cannot apply, so the build must fail fast with
+        # cstdint: the patch cannot apply, so the registry must fail fast with
         # a clear message instead of an obscure uint8_t compile error.
-        builder = _make_libplacebo_builder(tmp_path)
+        from ffmpeg_builder.patches.registry import get_patch_registry
+
         component = _make_patch_component("x265")
         json11_dir = tmp_path / "source" / "dynamicHDR10" / "json11"
         json11_dir.mkdir(parents=True)
@@ -653,19 +656,17 @@ class TestSourcePatchAssertions:
             "#include <string>\nnamespace json { struct object {}; }\n", encoding="utf-8"
         )
         with pytest.raises(BuildError, match="version may have changed"):
-            builder.build_x265(component, tmp_path)
+            get_patch_registry().apply_patches(component, tmp_path, None)
 
     def test_build_x265_inserts_cstdint_when_anchor_present(self, tmp_path):
-        builder = _make_libplacebo_builder(tmp_path)
+        from ffmpeg_builder.patches.registry import get_patch_registry
+
         component = _make_patch_component("x265")
         json11_dir = tmp_path / "source" / "dynamicHDR10" / "json11"
         json11_dir.mkdir(parents=True)
         json11_file = json11_dir / "json11.cpp"
         json11_file.write_text("#include <limits>\nint x;\n", encoding="utf-8")
-        # No build/linux dir: the method proceeds past the json11 patch and
-        # fails on the missing build dir, proving the patch assertion passed.
-        with pytest.raises(BuildError, match="Build directory not found"):
-            builder.build_x265(component, tmp_path)
+        get_patch_registry().apply_patches(component, tmp_path, None)
         patched = json11_file.read_text(encoding="utf-8")
         assert "#include <cstdint>" in patched
         assert patched.index("#include <limits>") < patched.index("#include <cstdint>")

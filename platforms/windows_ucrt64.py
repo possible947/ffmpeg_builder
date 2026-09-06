@@ -16,7 +16,7 @@ class WindowsUcrt64Platform(BasePlatformStrategy):
 
     def setup_environment(self, context: PlatformContext) -> Dict[str, str]:
         workspace = self.normalize_path(context.workspace, context)
-        ws_msys = self._to_msys_path(workspace)
+        ws_msys = workspace
         pkg_config_paths = [
             f"{ws_msys}/lib/pkgconfig",
             f"{ws_msys}/lib64/pkgconfig",
@@ -68,18 +68,22 @@ class WindowsUcrt64Platform(BasePlatformStrategy):
     def get_pkg_config_path(self, context: PlatformContext, for_posix_shell: bool = False) -> str:
         workspace = self.normalize_path(context.workspace, context)
         if for_posix_shell:
-            return ":".join([
+            return ":".join(
+                [
+                    f"{workspace}/lib/pkgconfig",
+                    f"{workspace}/lib64/pkgconfig",
+                    "/usr/local/lib/pkgconfig",
+                    "/usr/lib/pkgconfig",
+                ]
+            )
+        return ";".join(
+            [
                 f"{workspace}/lib/pkgconfig",
                 f"{workspace}/lib64/pkgconfig",
-                "/usr/local/lib/pkgconfig",
-                "/usr/lib/pkgconfig",
-            ])
-        return ";".join([
-            f"{workspace}/lib/pkgconfig",
-            f"{workspace}/lib64/pkgconfig",
-            "C:/msys64/ucrt64/lib/pkgconfig",
-            "C:/msys64/ucrt64/share/pkgconfig",
-        ])
+                "C:/msys64/ucrt64/lib/pkgconfig",
+                "C:/msys64/ucrt64/share/pkgconfig",
+            ]
+        )
 
     def get_cflags(self, context: PlatformContext) -> str:
         flags = f"-I{self.normalize_path(context.workspace, context)}/include -Wno-int-conversion"
@@ -123,12 +127,3 @@ class WindowsUcrt64Platform(BasePlatformStrategy):
             root / "ucrt64" / "lib",
             root / "ucrt64" / "lib64",
         ]
-
-    def _to_msys_path(self, path: str) -> str:
-        normalized = path.replace("\\", "/")
-        match = re.match(r"^([A-Za-z]):/(.*)$", normalized)
-        if match:
-            drive = match.group(1).lower()
-            rest = match.group(2)
-            return f"/{drive}/{rest}"
-        return normalized

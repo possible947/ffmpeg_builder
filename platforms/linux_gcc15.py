@@ -13,7 +13,10 @@ class LinuxGcc15Platform(LinuxGcc13Platform):
 
     def setup_environment(self, context: PlatformContext) -> Dict[str, str]:
         env = super().setup_environment(context)
-        if context.platform_info.gcc_major_version is not None and context.platform_info.gcc_major_version >= 15:
+        if (
+            context.platform_info.gcc_major_version is not None
+            and context.platform_info.gcc_major_version >= 15
+        ):
             env["CFLAGS"] = env.get("CFLAGS", "")
             env["CXXFLAGS"] = env.get("CXXFLAGS", "")
             if "-std=" not in env["CFLAGS"]:
@@ -24,14 +27,20 @@ class LinuxGcc15Platform(LinuxGcc13Platform):
 
     def get_cflags(self, context: PlatformContext) -> str:
         flags = super().get_cflags(context)
-        if context.platform_info.gcc_major_version is not None and context.platform_info.gcc_major_version >= 15:
+        if (
+            context.platform_info.gcc_major_version is not None
+            and context.platform_info.gcc_major_version >= 15
+        ):
             if "-std=" not in flags:
                 flags += " -std=gnu17"
         return flags.strip()
 
     def get_cxxflags(self, context: PlatformContext) -> str:
         flags = super().get_cxxflags(context)
-        if context.platform_info.gcc_major_version is not None and context.platform_info.gcc_major_version >= 15:
+        if (
+            context.platform_info.gcc_major_version is not None
+            and context.platform_info.gcc_major_version >= 15
+        ):
             if "-std=" not in flags:
                 flags += " -std=gnu++17"
         return flags.strip()

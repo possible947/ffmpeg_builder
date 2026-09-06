@@ -284,6 +284,8 @@ Windows/UCRT64 policy in current implementation:
 - `build_steps.py` — shared `_run_step` / `_run_make` / `_run_install` execution helpers
 - `component_builders.py` — explicit custom-build dispatch registry keyed by `custom_build_fn`
 - `builders/` — domain-specific custom-builder entry points and `ComponentBuildContext`
+- `platforms/` — `BasePlatformStrategy` / `PlatformContext` and per-OS/toolchain strategy implementations selected by `PlatformStrategyResolver`
+- `patches/` — declarative `SourcePatch` registry (applied post-extraction, pre-configure) with fail-fast assertions
 - `release_bundle.py` — release directory creation and runtime dependency collection
 
 **Environment setup** (`_setup_environment()`):
@@ -299,15 +301,21 @@ Windows/UCRT64 policy in current implementation:
 ```
 1. Check if already completed (version match) → skip
 2. Download and extract source
-3. If HEADERS_ONLY → install headers, return
-4. If `custom_build_fn` → resolve through `builders.base.dispatch_component_build()` and call it, return
-5. Dispatch by build_system:
+3. Apply matching source patches from the `patches/` registry
+   (fail-fast BuildError if a patch anchor no longer matches)
+4. If HEADERS_ONLY → install headers, return
+5. If `custom_build_fn` → resolve through `builders.base.dispatch_component_build()` and call it, return
+6. Dispatch by build_system:
   - AUTOTOOLS → `builders.base.build_autotools()`
   - CMAKE     → `builders.base.build_cmake()`
   - MESON     → `builders.base.build_meson()`
   - MAKE_ONLY → `builders.base.build_make_only()`
   - CARGO     → `builders.base.build_cargo()`
 ```
+
+Note: patches whose target file is generated during configure (e.g. OpenSSL's
+`configdata.pm`, created by `./Configure`) cannot run in the pre-configure
+registry step and remain inline in the relevant custom builder.
 
 **Custom build functions** are exposed through domain modules under `builders/` and dispatched through an explicit registry. Their compatibility signature remains `(builder, component, source_dir)`, while `builders/base.py` provides `ComponentBuildContext` and standard build-system entry points:
 
@@ -649,7 +657,7 @@ detected (auto-skips otherwise). Run with `pytest tests/test_platform_detect.py 
 - **macOS CI**: No automated testing on macOS; platform-specific code paths (macports clang, glibtool, VideoToolbox) require manual verification.
 - **Component versions**: Versions are defined in `components.yaml` (externalized from Python). A future improvement could fetch latest versions from an API or config file.
 - **No dependency graph**: Components are built in a fixed order defined in `components.yaml`. There is no automatic topological sort based on `depends_on`.
-- **Large builder surface still in one module** — `builder.py` remains the main integration point and still contains many component-specific build methods. Shared plumbing has already been split to `build_steps.py`, `component_builders.py`, and `release_bundle.py`, but further decomposition should continue in small, behavior-preserving steps.
+- **Large builder surface still in one module** — `builder.py` remains the main integration point and still contains many component-specific build methods. Shared plumbing has already been split to `build_steps.py`, `component_builders.py`, and `release_bundle.py`; `platforms/` and `patches/` now carry the strategy and source-patch layers, and `builders/` provides the dispatch boundary. Further decomposition should continue in small, behavior-preserving steps.
 - **Intel QSV / NVIDIA CUDA-NVENC detection unverified on real hardware** — The 2026-08-20 hwaccel detection hardening pass (VAAPI/AMF/Vulkan/OpenCL, see CHANGELOG) was validated on an AMD-only/ROCm machine. `_check_qsv()` and `_detect_cuda()`/`nv-codec` gating still have the pre-existing gaps described in `docs/CHANGELOG.md` → "Planned — Intel/NVIDIA hwaccel detection hardening" (no `qsv_reason` diagnostics, no nvcc/gcc toolchain compile-sanity probe reused for base CUDA readiness) and are pending validation on a machine with an Intel Arc A750 + NVIDIA TITAN V.
 
 ## Code Review & Refactoring Status (2026-08)

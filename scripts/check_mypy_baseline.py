@@ -28,12 +28,17 @@ ERROR_RE = re.compile(r"^(?P<file>.+?):\d+(?::\d+)?:\s*error:\s*(?P<msg>.*)$")
 
 
 def source_files() -> list[Path]:
-    """Project source: every top-level module plus the ui package.
+    """Project source: every top-level module plus the first-party packages.
 
     Never pass '.' — that would crawl workspace/ (extracted third-party
     sources) on a machine that has run a build.
     """
-    return sorted(PROJECT_ROOT.glob("*.py")) + [PROJECT_ROOT / "ui"]
+    return sorted(PROJECT_ROOT.glob("*.py")) + [
+        PROJECT_ROOT / "ui",
+        PROJECT_ROOT / "platforms",
+        PROJECT_ROOT / "patches",
+        PROJECT_ROOT / "builders",
+    ]
 
 
 def run_mypy() -> tuple[list[str], int]:

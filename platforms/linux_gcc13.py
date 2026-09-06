@@ -53,8 +53,9 @@ class LinuxGcc13Platform(BasePlatformStrategy):
             "LIBS": extralibs,
         }
 
-        if getattr(context.platform_info, "vulkan_sdk_available", False):
-            sdk_root = Path(context.platform_info.vulkan_sdk_path)
+        vulkan_sdk_path = getattr(context.platform_info, "vulkan_sdk_path", None)
+        if getattr(context.platform_info, "vulkan_sdk_available", False) and vulkan_sdk_path:
+            sdk_root = Path(vulkan_sdk_path)
             sdk_lib = sdk_root / "lib"
             sdk_include = sdk_root / "include"
             env["VULKAN_SDK"] = str(sdk_root)
@@ -67,21 +68,33 @@ class LinuxGcc13Platform(BasePlatformStrategy):
         return env
 
     def normalize_path(self, path: str | Path, context: PlatformContext) -> str:
-        return str(Path(path)).as_posix()
+        return Path(path).as_posix()
 
     def get_pkg_config_path(self, context: PlatformContext, for_posix_shell: bool = False) -> str:
         workspace = self.normalize_path(context.workspace, context)
         paths = [
             f"{workspace}/lib/pkgconfig",
             f"{workspace}/lib64/pkgconfig",
-            f"{workspace}/lib/{self._multiarch_dir(context)}/pkgconfig" if self._multiarch_dir(context) else "",
+            (
+                f"{workspace}/lib/{self._multiarch_dir(context)}/pkgconfig"
+                if self._multiarch_dir(context)
+                else ""
+            ),
             "/usr/local/lib/pkgconfig",
             "/usr/local/share/pkgconfig",
             "/usr/lib/pkgconfig",
             "/usr/share/pkgconfig",
             "/usr/lib64/pkgconfig",
-            "/usr/local/lib/{}/pkgconfig".format(self._multiarch_dir(context)) if self._multiarch_dir(context) else "",
-            "/usr/lib/{}/pkgconfig".format(self._multiarch_dir(context)) if self._multiarch_dir(context) else "",
+            (
+                "/usr/local/lib/{}/pkgconfig".format(self._multiarch_dir(context))
+                if self._multiarch_dir(context)
+                else ""
+            ),
+            (
+                "/usr/lib/{}/pkgconfig".format(self._multiarch_dir(context))
+                if self._multiarch_dir(context)
+                else ""
+            ),
         ]
         return ":".join(part for part in paths if part)
 

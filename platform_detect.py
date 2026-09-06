@@ -1210,7 +1210,9 @@ class PlatformDetector:
                 self.platform_info.opencl_dev_reason = "OpenCL.framework found"
                 return True
 
-        existing_headers = [self._normalize_path(path) for path in opencl_header_paths if path.exists()]
+        existing_headers = [
+            self._normalize_path(path) for path in opencl_header_paths if path.exists()
+        ]
         self.platform_info.opencl_detected_header_paths = existing_headers
         has_headers_any = bool(existing_headers)
         if has_headers_any and not self.platform_info.opencl_dev_available:
@@ -1245,7 +1247,9 @@ class PlatformDetector:
                 ]
             )
 
-        existing_loaders = [self._normalize_path(path) for path in icd_loader_paths if path.exists()]
+        existing_loaders = [
+            self._normalize_path(path) for path in icd_loader_paths if path.exists()
+        ]
         self.platform_info.opencl_detected_loader_paths = existing_loaders
         has_loader_any = bool(existing_loaders)
         if not has_loader_any:
