@@ -5,6 +5,7 @@
 ### Added
 
 - **Этап 1: Перенос стандартных раннеров систем сборки в `builders/base.py`** — реализации функций `build_autotools`, `build_cmake`, `build_meson`, `build_make_only`, `build_cargo`, `get_rustc_version`, `install_headers_only` и `_rmtree` перенесены из [builder.py](builder.py) в [builders/base.py](builders/base.py). В классе `FFmpegBuilder` оставлены методы-делегаты для сохранения 100% обратной совместимости.
+- **Этап 2: Перенос 15 кастомных сборщиков компонентов в доменные модули `builders/`** — вся императивная логика сборки компонентов (`x264`, `x265`, `libvpx`, `zimg`, `libvorbis`, `libjxl`, `openssl`, `glslang`, `libplacebo`, `libvmaf`, `srt`, `libzmq`, `ninja`, `meson`, `ffmpeg`) вынесена из [builder.py](builder.py) в соответствующие подпакеты `builders/` (`codecs`, `crypto`, `graphics`, `network`, `tools`, `ffmpeg`). В `FFmpegBuilder` сохранены вызовы-делегаты.
 
 ### Changed
 - **Phase 2 concrete platform implementations** — added `MacOSPlatform`, `LinuxGcc13Platform`, `LinuxGcc15Platform`, and `WindowsUcrt64Platform`, plus a resolver that picks the correct strategy for the detected OS/toolchain.
