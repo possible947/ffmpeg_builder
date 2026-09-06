@@ -73,6 +73,28 @@ def test_component_build_context_exposes_builder_dependencies(tmp_path: Path):
     assert context.state_manager is builder.state_manager
 
 
+def test_standard_runners_module_exports():
+    from ffmpeg_builder.builders.base import (
+        CARGO_C_VERSION,
+        build_autotools,
+        build_cargo,
+        build_cmake,
+        build_make_only,
+        build_meson,
+        get_rustc_version,
+        install_headers_only,
+    )
+
+    assert callable(build_autotools)
+    assert callable(build_cmake)
+    assert callable(build_meson)
+    assert callable(build_make_only)
+    assert callable(build_cargo)
+    assert callable(get_rustc_version)
+    assert callable(install_headers_only)
+    assert isinstance(CARGO_C_VERSION, str)
+
+
 def test_release_bundle_wrapper_creates_manifest(tmp_path: Path):
     class _Result:
         def __init__(self, stdout: str = "", stderr: str = "", success: bool = True):

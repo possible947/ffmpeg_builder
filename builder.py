@@ -15,7 +15,18 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Type
 
 from .build_steps import run_install, run_make, run_step
 from .build_types import BuildError, SkipComponent
-from .builders.base import ComponentBuildContext, dispatch_component_build, install_headers_only
+from .builders.base import (
+    CARGO_C_VERSION,
+    ComponentBuildContext,
+    build_autotools,
+    build_cargo,
+    build_cmake,
+    build_make_only,
+    build_meson,
+    dispatch_component_build,
+    get_rustc_version,
+    install_headers_only,
+)
 from .components import BuildSystem, Component, ComponentRegistry
 from .config import BuildConfig
 from .downloader import AsyncDownloadManager, Downloader
@@ -30,10 +41,6 @@ from .state import ComponentStatus, StateManager
 # The package is the repository root (flat layout); relative
 # source-archive paths are anchored to it so they do not depend on the CWD.
 PROJECT_ROOT = Path(__file__).resolve().parent
-
-# Pinned so builds are reproducible; bump deliberately when a new cargo-c
-# release is validated.
-CARGO_C_VERSION = "0.10.25"
 
 
 def _rmtree(path: Path) -> None:
@@ -1110,342 +1117,32 @@ class FFmpegBuilder:
         return archive_path
 
     def _build_autotools(self, component: Component, source_dir: Path) -> None:
-        """Build component with autotools.
-
-        Args:
-            component: Component to build.
-            source_dir: Source directory.
-        """
-        build_dir = source_dir
-        if component.workdir:
-            build_dir = source_dir / component.workdir
-
-        # The C23 bool typedef gate for xvidcore is applied by the patch
-        # registry (patches/c23_fixes.py) after extraction.
-        env = self.get_build_env(component)
-
-        configure_args = [
-            arg.replace("{workspace}", self._ws_str()).replace("{num_jobs}", str(self.num_jobs))
-            for arg in component.configure_args
-        ]
-
-        # Apply platform-specific configure_args_override if present.
-        if self.platform in component.platform_overrides:
-            override = component.platform_overrides[self.platform]
-            if override.configure_args_override is not None:
-                configure_args = [
-                    arg.replace("{workspace}", self._ws_str()).replace(
-                        "{num_jobs}", str(self.num_jobs)
-                    )
-                    for arg in override.configure_args_override
-                ]
-
-        self._run_step(
-            component,
-            ComponentStatus.CONFIGURING,
-            f"./configure",
-            "Configure failed",
-            ["./configure"] + configure_args,
-            "configure",
-            build_dir,
-            env,
-        )
-
-        self._run_make(
-            component,
-            ComponentStatus.BUILDING,
-            f"make -j{self.num_jobs}",
-            "Build failed",
-            build_dir,
-            self.num_jobs,
-            env,
-        )
-
-        self._run_install(
-            component,
-            ComponentStatus.INSTALLING,
-            "make install",
-            "Install failed",
-            build_dir,
-            env,
-        )
+        """Build component with autotools."""
+        build_autotools(ComponentBuildContext.from_builder(self), component, source_dir)
 
     def _build_cmake(self, component: Component, source_dir: Path) -> None:
-        """Build component with CMake.
-
-        Args:
-            component: Component to build.
-            source_dir: Source directory.
-        """
-        build_dir = source_dir
-        if component.workdir:
-            build_dir = source_dir / component.workdir
-            build_dir.mkdir(parents=True, exist_ok=True)
-
-        cmake_args = [
-            arg.replace("{workspace}", self._ws_str()) for arg in component.configure_args
-        ]
-
-        # Honour config.openmp: replace WITH_OPENMP:bool=off → on when
-        # OpenMP is enabled (e.g. soxr exposes this CMake option).
-        if self.config.openmp:
-            cmake_args = [
-                arg.replace("-DWITH_OPENMP:bool=off", "-DWITH_OPENMP:bool=on") for arg in cmake_args
-            ]
-
-        env = self.get_build_env(component)
-
-        if self._is_windows_ucrt64_backend():
-            # CMake calls pkg-config.EXE directly; needs Windows-style paths.
-            ws = self._ws_str()
-            env["PKG_CONFIG_PATH"] = f"{ws}/lib/pkgconfig;{ws}/lib64/pkgconfig"
-
-        cmake_cmd = ["cmake", "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"] + cmake_args + [str(source_dir)]
-        self._run_step(
-            component,
-            ComponentStatus.CONFIGURING,
-            "cmake <source>",
-            "CMake configure failed",
-            cmake_cmd,
-            "configure",
-            build_dir,
-            env,
-        )
-
-        self._run_step(
-            component,
-            ComponentStatus.BUILDING,
-            "cmake --build",
-            "Build failed",
-            ["cmake", "--build", ".", "--parallel", str(self.num_jobs)],
-            "build",
-            build_dir,
-            env,
-        )
-
-        self._run_step(
-            component,
-            ComponentStatus.INSTALLING,
-            "cmake --install",
-            "Install failed",
-            ["cmake", "--install", "."],
-            "install",
-            build_dir,
-            env,
-        )
+        """Build component with CMake."""
+        build_cmake(ComponentBuildContext.from_builder(self), component, source_dir)
 
     def _build_meson(self, component: Component, source_dir: Path) -> None:
-        """Build component with Meson.
-
-        Args:
-            component: Component to build.
-            source_dir: Source directory.
-        """
-        build_dir = source_dir / "build"
-        if build_dir.exists():
-            _rmtree(build_dir)
-        build_dir.mkdir(parents=True, exist_ok=True)
-
-        meson_args = [
-            arg.replace("{workspace}", self._ws_str()) for arg in component.configure_args
-        ]
-
-        env = self.get_build_env(component)
-
-        if self._is_windows_ucrt64_backend():
-            # Meson calls pkg-config.EXE directly (not through bash), so it
-            # needs Windows-style paths (E:/...) with ';' as separator.
-            ws = self._ws_str()
-            env["PKG_CONFIG_PATH"] = f"{ws}/lib/pkgconfig;{ws}/lib64/pkgconfig"
-
-        self._run_step(
-            component,
-            ComponentStatus.CONFIGURING,
-            "meson setup build",
-            "Meson configure failed",
-            ["meson", "setup", "build"] + meson_args,
-            "configure",
-            source_dir,
-            env,
-        )
-
-        self._run_step(
-            component,
-            ComponentStatus.BUILDING,
-            "ninja -C build",
-            "Build failed",
-            ["ninja", "-C", "build"],
-            "build",
-            source_dir,
-            env,
-        )
-
-        self._run_step(
-            component,
-            ComponentStatus.INSTALLING,
-            "ninja install",
-            "Install failed",
-            ["ninja", "-C", "build", "install"],
-            "install",
-            source_dir,
-            env,
-        )
+        """Build component with Meson."""
+        build_meson(ComponentBuildContext.from_builder(self), component, source_dir)
 
     def _build_make_only(self, component: Component, source_dir: Path) -> None:
-        """Build component with make only.
-
-        Args:
-            component: Component to build.
-            source_dir: Source directory.
-        """
-        build_dir = source_dir
-        if component.workdir:
-            build_dir = source_dir / component.workdir
-
-        env = self.get_build_env(component)
-
-        build_args = [arg.replace("{workspace}", self._ws_str()) for arg in component.build_args]
-
-        self._run_step(
-            component,
-            ComponentStatus.BUILDING,
-            f"make -j{self.num_jobs} {' '.join(build_args)}",
-            "Build failed",
-            ["make", f"-j{self.num_jobs}"] + build_args,
-            "build",
-            build_dir,
-            env,
-        )
-
-        install_args = [
-            arg.replace("{workspace}", self._ws_str()) for arg in component.install_args
-        ]
-
-        self._run_step(
-            component,
-            ComponentStatus.INSTALLING,
-            f"make install {' '.join(install_args)}",
-            "Install failed",
-            ["make", "install"] + install_args,
-            "install",
-            build_dir,
-            env,
-        )
+        """Build component with make only."""
+        build_make_only(ComponentBuildContext.from_builder(self), component, source_dir)
 
     def _get_rustc_version(self) -> Optional[Tuple[int, int, int]]:
-        """Get installed rustc version.
-
-        Returns:
-            Tuple of (major, minor, patch) or None if not available.
-        """
-        env = self.get_build_env()
-        result = self.executor.execute(["rustc", "--version"], env=env)
-        if not result.success:
-            return None
-        match = re.search(r"rustc\s+(\d+)\.(\d+)\.(\d+)", result.stdout)
-        if not match:
-            return None
-        return (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+        """Get installed rustc version."""
+        return get_rustc_version(ComponentBuildContext.from_builder(self))
 
     def _build_cargo(self, component: Component, source_dir: Path) -> None:
-        """Build component with Cargo.
-
-        Args:
-            component: Component to build.
-            source_dir: Source directory.
-        """
-        env = self.get_build_env(component)
-        env["RUSTFLAGS"] = "-C target-cpu=native"
-
-        rustc_version = self._get_rustc_version()
-        if rustc_version is None:
-            raise SkipComponent(
-                component.name, "rustc is not available or version cannot be determined"
-            )
-
-        if rustc_version < (1, 95, 0):
-            raise SkipComponent(
-                component.name,
-                f"rustc {'.'.join(map(str, rustc_version))} is too old. "
-                f"cargo-c requires rustc 1.95 or newer",
-            )
-
-        cargo_c_path = shutil.which("cargo-c", path=env.get("PATH"))
-        if cargo_c_path is None:
-            self._run_step(
-                component,
-                ComponentStatus.BUILDING,
-                f"cargo install cargo-c --version {CARGO_C_VERSION}",
-                "Failed to install cargo-c",
-                ["cargo", "install", "cargo-c", "--version", CARGO_C_VERSION],
-                "install-cargo-c",
-                source_dir,
-                env,
-            )
-
-        self._run_step(
-            component,
-            ComponentStatus.INSTALLING,
-            "cargo cinstall",
-            "Cargo build failed",
-            [
-                "cargo",
-                "cinstall",
-                f"--prefix={self._ws_str()}",
-                "--libdir=lib",
-                "--library-type=staticlib",
-                "--crt-static",
-                "--release",
-            ],
-            "build",
-            source_dir,
-            env,
-        )
+        """Build component with Cargo."""
+        build_cargo(ComponentBuildContext.from_builder(self), component, source_dir)
 
     def _install_headers_only(self, component: Component, source_dir: Path) -> None:
-        """Install headers only.
-
-        Args:
-            component: Component to install.
-            source_dir: Source directory.
-        """
-        if component.name == "VapourSynth":
-            dest = self.workspace / "include" / "vapoursynth"
-            dest.mkdir(parents=True, exist_ok=True)
-            src = source_dir / "include"
-            if src.exists():
-                for item in src.iterdir():
-                    dest_item = dest / item.name
-                    if item.is_file():
-                        shutil.copy2(item, dest_item)
-                    elif item.is_dir():
-                        shutil.copytree(item, dest_item, dirs_exist_ok=True)
-
-        elif component.name == "fast-float":
-            # fast_float is a header-only library used by libplacebo.
-            # Install include/fast_float/ to workspace/include/fast_float/ so
-            # build_libplacebo() can populate the libplacebo submodule dir.
-            dest = self.workspace / "include" / "fast_float"
-            dest.mkdir(parents=True, exist_ok=True)
-            src = source_dir / "include" / "fast_float"
-            if src.exists():
-                for item in src.iterdir():
-                    dest_item = dest / item.name
-                    shutil.copy2(item, dest_item)
-
-        elif component.name == "amf":
-            dest = self.workspace / "include" / "AMF"
-            if dest.exists():
-                _rmtree(dest)
-            dest.mkdir(parents=True)
-            src = source_dir / "amf" / "public" / "include"
-            if src.exists():
-                for item in src.iterdir():
-                    dest_item = dest / item.name
-                    if item.is_file():
-                        shutil.copy2(item, dest_item)
-                    elif item.is_dir():
-                        shutil.copytree(item, dest_item, dirs_exist_ok=True)
+        """Install headers only."""
+        install_headers_only(ComponentBuildContext.from_builder(self), component, source_dir)
 
     def build_openssl(self, component: Component, source_dir: Path) -> None:
         """Build OpenSSL.

@@ -4,7 +4,9 @@
 
 ### Added
 
-- **Phase 1 platform strategy abstraction** — introduced the `platforms/` package with `BasePlatformStrategy` and `PlatformContext`, establishing the foundation for platform/toolchain-specific build behavior.
+- **Этап 1: Перенос стандартных раннеров систем сборки в `builders/base.py`** — реализации функций `build_autotools`, `build_cmake`, `build_meson`, `build_make_only`, `build_cargo`, `get_rustc_version`, `install_headers_only` и `_rmtree` перенесены из [builder.py](builder.py) в [builders/base.py](builders/base.py). В классе `FFmpegBuilder` оставлены методы-делегаты для сохранения 100% обратной совместимости.
+
+### Changed
 - **Phase 2 concrete platform implementations** — added `MacOSPlatform`, `LinuxGcc13Platform`, `LinuxGcc15Platform`, and `WindowsUcrt64Platform`, plus a resolver that picks the correct strategy for the detected OS/toolchain.
 - **Phase 3 declarative source patch engine** — added the `patches/` package with version- and component-aware `SourcePatch` definitions, fail-fast assertion helpers, and concrete C23, C++ header, Darwin, and FFmpeg 9 patch implementations.
 - **Phase 4 domain-specific builders** — added the `builders/` package, `ComponentBuildContext`, standard build-system entry points, and codec, crypto, graphics, network, tool, and FFmpeg builder modules.
