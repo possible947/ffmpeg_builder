@@ -122,16 +122,36 @@ def build_ffmpeg(builder: FFmpegBuilder, component: Component, source_dir: Path)
         # in the MSYS2 UCRT64 toolchain.  Hardware encode/decode APIs
         # (cuvid/nvdec/nvenc) and ffnvcodec headers work fine with GCC.
         if not builder._is_windows_ucrt64_backend():
-            configure_args.append("--enable-cuda-nvcc")
+            platform_info = builder.platform_detector.platform_info
+            # Older CUDA toolkits pin a maximum-supported host-compiler
+            # version (e.g. CUDA 12.2 only supports gcc <= 12); on rolling
+            # distros with a newer system gcc, nvcc rejects it outright.
+            # cuda_nvcc_supported/nvcc_ccbin come from PlatformDetector's
+            # nvcc compile sanity-check (see _detect_cuda_nvcc_support),
+            # which also auto-detects a compatible conda/mamba gcc to pass
+            # via -ccbin when the system default is too new.
+            cuda_nvcc_supported = getattr(platform_info, "cuda_nvcc_supported", True)
+            cuda_nvcc_reason = getattr(platform_info, "cuda_nvcc_reason", "")
+            nvcc_ccbin = getattr(platform_info, "nvcc_ccbin", None)
+            if cuda_nvcc_supported:
+                configure_args.append("--enable-cuda-nvcc")
+                cuda_cc = os.environ.get("CUDA_COMPUTE_CAPABILITY")
+                if not cuda_cc:
+                    cuda_cc = platform_info.cuda_compute_capability
+                if not cuda_cc:
+                    cuda_cc = "52"
+                nvccflags = f"-gencode arch=compute_{cuda_cc},code=sm_{cuda_cc} -O2"
+                if nvcc_ccbin:
+                    nvccflags = f"-ccbin={nvcc_ccbin} {nvccflags}"
+                    if builder.on_log is not None:
+                        builder.on_log(f"CUDA nvcc host compiler override: -ccbin={nvcc_ccbin}")
+                configure_args.append(f"--nvccflags={nvccflags}")
+            elif builder.on_log is not None:
+                builder.on_log(
+                    f"--enable-cuda-nvcc disabled ({cuda_nvcc_reason}); "
+                    "falling back to --enable-cuda-llvm only"
+                )
             configure_args.append("--enable-cuda-llvm")
-            cuda_cc = os.environ.get("CUDA_COMPUTE_CAPABILITY")
-            if not cuda_cc:
-                cuda_cc = builder.platform_detector.platform_info.cuda_compute_capability
-            if not cuda_cc:
-                cuda_cc = "52"
-            configure_args.append(
-                f"--nvccflags=-gencode arch=compute_{cuda_cc},code=sm_{cuda_cc} -O2"
-            )
         configure_args.append("--enable-cuvid")
         configure_args.append("--enable-nvdec")
         configure_args.append("--enable-nvenc")

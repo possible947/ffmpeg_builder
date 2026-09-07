@@ -519,7 +519,7 @@ class TestNvCodecVersionSelection:
 
     def test_no_detection_keeps_declared_default(self):
         component = self.registry.get_nv_codec_component(None)
-        assert component.version == "13.0.19.0"
+        assert component.version == "13.0.19.1"
 
     def test_driver_supporting_only_12_2_falls_back(self):
         component = self.registry.get_nv_codec_component(self._platform_info("12.2"))
@@ -530,10 +530,10 @@ class TestNvCodecVersionSelection:
 
     def test_driver_supporting_13_x_uses_latest(self):
         component = self.registry.get_nv_codec_component(self._platform_info("13.0"))
-        assert component.version == "13.0.19.0"
+        assert component.version == "13.0.19.1"
 
         component = self.registry.get_nv_codec_component(self._platform_info("13.5"))
-        assert component.version == "13.0.19.0"
+        assert component.version == "13.0.19.1"
 
     def test_driver_older_than_all_declared_versions_uses_oldest(self):
         component = self.registry.get_nv_codec_component(self._platform_info("11.1"))
@@ -541,7 +541,7 @@ class TestNvCodecVersionSelection:
 
     def test_malformed_detected_version_keeps_declared_default(self):
         component = self.registry.get_nv_codec_component(self._platform_info("not-a-version"))
-        assert component.version == "13.0.19.0"
+        assert component.version == "13.0.19.1"
 
     def test_get_buildable_uses_detected_nvenc_version(self, mock_tools, mock_platform_info):
         mock_platform_info.nvenc_api_version = "12.2"

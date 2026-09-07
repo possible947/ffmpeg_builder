@@ -78,6 +78,10 @@ class PlatformInfo:
     cuda_compute_capability: Optional[str] = None
     nvenc_api_version: Optional[str] = None
     nvenc_reason: str = ""
+    cuda_nvcc_supported: bool = False
+    cuda_nvcc_reason: str = ""
+    nvcc_ccbin: Optional[str] = None
+    nvcc_ccbin_reason: str = ""
     libvmaf_cuda_supported: bool = False
     libvmaf_cuda_reason: str = ""
     vaapi_available: bool = False
@@ -135,6 +139,10 @@ class PlatformInfo:
             "cuda_compute_capability": self.cuda_compute_capability,
             "nvenc_api_version": self.nvenc_api_version,
             "nvenc_reason": self.nvenc_reason,
+            "cuda_nvcc_supported": self.cuda_nvcc_supported,
+            "cuda_nvcc_reason": self.cuda_nvcc_reason,
+            "nvcc_ccbin": self.nvcc_ccbin,
+            "nvcc_ccbin_reason": self.nvcc_ccbin_reason,
             "libvmaf_cuda_supported": self.libvmaf_cuda_supported,
             "libvmaf_cuda_reason": self.libvmaf_cuda_reason,
             "vaapi_available": self.vaapi_available,
@@ -670,6 +678,7 @@ class PlatformDetector:
             self.platform_info.cuda_available = True
             self.platform_info.cuda_path = nvcc_path
             self._detect_cuda_compute_capability()
+            self._detect_cuda_nvcc_support(nvcc_path)
             return
 
         # Try common Linux CUDA installation paths
@@ -694,6 +703,7 @@ class PlatformDetector:
                 self.platform_info.cuda_available = True
                 self.platform_info.cuda_path = str(nvcc)
                 self._detect_cuda_compute_capability()
+                self._detect_cuda_nvcc_support(str(nvcc))
                 return
 
     def _detect_cuda_compute_capability(self) -> None:
@@ -787,22 +797,112 @@ class PlatformDetector:
             )
             return
 
-        nvcc_path = self.platform_info.cuda_path or shutil.which("nvcc")
-        if not nvcc_path:
-            self.platform_info.libvmaf_cuda_reason = "nvcc is not available in PATH"
-            return
-
-        if not self._probe_nvcc_compile(nvcc_path):
+        if not self.platform_info.cuda_nvcc_supported:
             self.platform_info.libvmaf_cuda_reason = (
-                "nvcc compile sanity-check failed (host compiler/toolchain mismatch)"
+                f"nvcc is not usable to build CUDA sources: {self.platform_info.cuda_nvcc_reason}"
             )
             return
 
         self.platform_info.libvmaf_cuda_supported = True
         self.platform_info.libvmaf_cuda_reason = "Supported"
 
-    def _probe_nvcc_compile(self, nvcc_path: str) -> bool:
-        """Check whether nvcc can compile a minimal CUDA source file."""
+    def _detect_cuda_nvcc_support(self, nvcc_path: str) -> None:
+        """Detect whether nvcc can build CUDA sources on this host.
+
+        CUDA toolkits pin a maximum-supported host-compiler major version
+        (e.g. CUDA 12.2 supports gcc up to 12), which rolling-release
+        distros like Fedora routinely exceed. This probes the system
+        default compiler first, then falls back to an explicit
+        ``CUDA_NVCC_CCBIN`` override, then to any nvcc-compatible gcc found
+        in a conda/mamba/micromamba environment (e.g. ``conda-forge``'s
+        ``gcc_linux-64=12``/``gxx_linux-64=12`` packages), storing the
+        winning ``-ccbin`` path in ``nvcc_ccbin`` for callers to forward to
+        nvcc invocations.
+        """
+        self.platform_info.nvcc_ccbin = None
+        self.platform_info.nvcc_ccbin_reason = ""
+        self.platform_info.cuda_nvcc_supported = False
+        self.platform_info.cuda_nvcc_reason = ""
+
+        override = os.environ.get("CUDA_NVCC_CCBIN")
+        if override:
+            if self._probe_nvcc_compile(nvcc_path, ccbin=override):
+                self.platform_info.nvcc_ccbin = override
+                self.platform_info.nvcc_ccbin_reason = (
+                    "Overridden via CUDA_NVCC_CCBIN environment variable"
+                )
+                self.platform_info.cuda_nvcc_supported = True
+                self.platform_info.cuda_nvcc_reason = self.platform_info.nvcc_ccbin_reason
+            else:
+                self.platform_info.cuda_nvcc_reason = (
+                    f"CUDA_NVCC_CCBIN='{override}' failed the nvcc compile sanity-check"
+                )
+            return
+
+        if self._probe_nvcc_compile(nvcc_path):
+            self.platform_info.cuda_nvcc_supported = True
+            self.platform_info.cuda_nvcc_reason = "System default host compiler is nvcc-compatible"
+            return
+
+        for candidate in self._iter_conda_gcc_candidates():
+            if self._probe_nvcc_compile(nvcc_path, ccbin=candidate):
+                self.platform_info.nvcc_ccbin = candidate
+                self.platform_info.cuda_nvcc_supported = True
+                self.platform_info.cuda_nvcc_reason = (
+                    f"Auto-detected nvcc-compatible host compiler: {candidate}"
+                )
+                self.platform_info.nvcc_ccbin_reason = self.platform_info.cuda_nvcc_reason
+                return
+
+        self.platform_info.cuda_nvcc_reason = (
+            "nvcc rejected the system host compiler (likely too new for this CUDA "
+            "toolkit) and no compatible compiler was found via CUDA_NVCC_CCBIN or a "
+            "conda/mamba/micromamba gcc environment"
+        )
+
+    def _iter_conda_gcc_candidates(self) -> List[str]:
+        """List candidate gcc/g++ binaries from conda/mamba/micromamba envs.
+
+        Looks under common install roots (micromamba, miniforge, miniconda,
+        mambaforge, system-wide /opt/conda) for ``conda-forge``-style
+        ``gcc_linux-64``/``gxx_linux-64`` compiler packages, e.g. the
+        ``x86_64-conda-linux-gnu-gcc`` binary installed by
+        ``micromamba create -n cuda-gcc12 -c conda-forge gcc_linux-64=12
+        gxx_linux-64=12``. Order is not version-aware; each candidate is
+        probed by the caller and the first that satisfies nvcc wins.
+        """
+        roots = [
+            Path.home() / ".local" / "share" / "mamba" / "envs",
+            Path.home() / "micromamba" / "envs",
+            Path.home() / "miniforge3" / "envs",
+            Path.home() / "miniconda3" / "envs",
+            Path.home() / "mambaforge" / "envs",
+            Path("/opt/conda/envs"),
+        ]
+        patterns = ("*-gcc-12", "*-gcc", "gcc-12", "gcc")
+        candidates: List[str] = []
+        for root in roots:
+            if not root.is_dir():
+                continue
+            for env_dir in sorted(root.iterdir()):
+                bin_dir = env_dir / "bin"
+                if not bin_dir.is_dir():
+                    continue
+                for pattern in patterns:
+                    for match in sorted(bin_dir.glob(pattern)):
+                        if match.is_file() and os.access(match, os.X_OK):
+                            candidates.append(str(match))
+        # Preserve discovery order while removing duplicates (e.g. a plain
+        # "gcc" symlink pointing at the same binary as the versioned name).
+        return list(dict.fromkeys(candidates))
+
+    def _probe_nvcc_compile(self, nvcc_path: str, ccbin: Optional[str] = None) -> bool:
+        """Check whether nvcc can compile a minimal CUDA source file.
+
+        Args:
+            nvcc_path: Path to the nvcc executable.
+            ccbin: Optional host compiler path to pass via ``-ccbin``.
+        """
         try:
             with tempfile.TemporaryDirectory(prefix="nvcc-probe-") as temp_dir:
                 temp_path = Path(temp_dir)
@@ -813,8 +913,13 @@ class PlatformDetector:
                     encoding="utf-8",
                 )
 
+                cmd = [nvcc_path]
+                if ccbin:
+                    cmd.append(f"-ccbin={ccbin}")
+                cmd += ["-c", str(source_file), "-o", str(output_file)]
+
                 result = subprocess.run(
-                    [nvcc_path, "-c", str(source_file), "-o", str(output_file)],
+                    cmd,
                     capture_output=True,
                     timeout=20,
                 )

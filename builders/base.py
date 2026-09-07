@@ -142,6 +142,26 @@ def build_cmake(context: ComponentBuildContext, component: "Component", source_d
         arg.replace("{workspace}", context.builder._ws_str()) for arg in component.configure_args
     ]
 
+    if component.name == "opencl-icd-loader":
+        # OpenCL-ICD-Loader's CMakeLists.txt adds its test/ subdirectory
+        # whenever built as the top-level project (CMAKE_PROJECT_NAME ==
+        # PROJECT_NAME, always true for our standalone build) regardless of
+        # its own OPENCL_ICD_LOADER_BUILD_TESTING option, because that
+        # option is OR'd with the top-level-project check; the include(CTest)
+        # call it makes defaults BUILD_TESTING to ON, so the guard's AND
+        # BUILD_TESTING clause doesn't help either. That test/layer/
+        # PrintLayer target's generated code (icd_print_layer_generated.c)
+        # references *_wrap symbols for OpenGL/EGL interop entry points that
+        # only exist when GL/EGL headers are present, which this offline,
+        # headless build environment doesn't provide, so it fails to
+        # compile with "unknown type name"/"undeclared" errors. We only
+        # need the OpenCL library itself, not its test suite, so disable
+        # CTest's BUILD_TESTING outright to skip that subdirectory.
+        # Scoped to LinuxGcc15Platform: that's the toolchain where this has
+        # been observed.
+        if type(context.platform_strategy).__name__ == "LinuxGcc15Platform":
+            cmake_args = [*cmake_args, "-DBUILD_TESTING=OFF"]
+
     # Honour config.openmp: replace WITH_OPENMP:bool=off → on when
     # OpenMP is enabled (e.g. soxr exposes this CMake option).
     if context.builder.config.openmp:
@@ -150,6 +170,32 @@ def build_cmake(context: ComponentBuildContext, component: "Component", source_d
         ]
 
     env = context.builder.get_build_env(component)
+
+    if (
+        component.name == "opencl-icd-loader"
+        and type(context.platform_strategy).__name__ == "LinuxGcc15Platform"
+    ):
+        # The project's global CFLAGS include "-I<cuda>/include" so
+        # CUDA-aware components (nvenc, libvmaf's CUDA path, ...) can find
+        # cuda_runtime.h. The CUDA SDK also ships its own bundled, older
+        # CL/cl.h under that same include dir. Because CMake's imported
+        # OpenCLHeaders target adds our freshly-built opencl-headers as an
+        # -isystem path (deduplicated against the plain -I<workspace>/include
+        # our global CFLAGS also add), that -isystem entry loses its
+        # earlier position and ends up searched after all plain -I dirs,
+        # so the stale CUDA-bundled cl.h/cl_version.h (CL_TARGET_OPENCL_
+        # VERSION default 300, missing newer 3.1 macros) shadows our
+        # opencl-headers 3.1 install, breaking compiles that expect the
+        # newer OpenCL-Headers/OpenCL-ICD-Loader API surface ("unknown type
+        # name" for GL/EGL interop typedefs). This component doesn't use
+        # CUDA at all, so simply drop the CUDA include path for its build.
+        cuda_path = context.builder.platform_detector.platform_info.cuda_path
+        if cuda_path:
+            cuda_home = Path(cuda_path).parent.parent
+            cuda_include_flag = f"-I{cuda_home}/include"
+            for key in ("CFLAGS", "CXXFLAGS"):
+                if key in env:
+                    env[key] = context.builder._remove_compiler_flag(env[key], cuda_include_flag)
 
     if context.builder._is_windows_ucrt64_backend():
         # CMake calls pkg-config.EXE directly; needs Windows-style paths.
@@ -313,6 +359,19 @@ def build_cargo(context: ComponentBuildContext, component: "Component", source_d
     """Build component with Cargo."""
     env = context.builder.get_build_env(component)
     env["RUSTFLAGS"] = "-C target-cpu=native"
+
+    # cc-rs (used to compile the C dependencies of cargo-c and of crates
+    # such as libssh2-sys/curl-sys) inherits our project CFLAGS, which
+    # default to strict "-std=c11". On glibc, strict ISO mode leaves
+    # __USE_MISC unset, so BSD type aliases like u_int/u_char used by
+    # vendored C sources (e.g. libssh2's chacha/poly1305 code) are
+    # undeclared, breaking the build. GCC's own gnu11 mode restores the
+    # glibc default-source behavior without relaxing anything else.
+    # Scoped to LinuxGcc15Platform: that's the toolchain class where this
+    # has been observed.
+    if type(context.platform_strategy).__name__ == "LinuxGcc15Platform":
+        if "CFLAGS" in env:
+            env["CFLAGS"] = env["CFLAGS"].replace("-std=c11", "-std=gnu11")
 
     rustc_version = get_rustc_version(context)
     if rustc_version is None:

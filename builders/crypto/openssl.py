@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ...build_types import BuildError
+from ...perl_shims import apply_perl_shims_to_env
 from ...state import ComponentStatus
 
 if TYPE_CHECKING:
@@ -16,6 +17,15 @@ if TYPE_CHECKING:
 def build_openssl(builder: FFmpegBuilder, component: Component, source_dir: Path) -> None:
     """Build OpenSSL."""
     env = builder.get_build_env(component)
+
+    # Fedora 41+ unbundles historically-core Perl modules (FindBin,
+    # IPC::Cmd, Time::Piece) into separate packages that are absent from a
+    # minimal install; OpenSSL's Configure/Makefile.in machinery requires
+    # all three. Scoped to LinuxGcc15Platform: that strategy already
+    # signals "modern rolling-release Linux toolchain", the same
+    # environment class where this gap has been observed.
+    if type(builder.platform_strategy).__name__ == "LinuxGcc15Platform":
+        apply_perl_shims_to_env(builder.workspace, env, on_log=builder.on_log)
 
     result, log_file = builder.executor.execute_with_log(
         [

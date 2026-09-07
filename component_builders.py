@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Dict, Optional
 
 from .builders.codecs.jxl import build_libjxl
+from .builders.codecs.tiff import build_libtiff
 from .builders.codecs.vorbis import build_libvorbis
 from .builders.codecs.vpx import build_libvpx
 from .builders.codecs.x264 import build_x264
@@ -43,6 +44,7 @@ CUSTOM_BUILDERS: Dict[str, CustomBuilder] = {
     "build_zimg": build_zimg,
     "build_libvorbis": build_libvorbis,
     "build_libjxl": build_libjxl,
+    "build_libtiff": build_libtiff,
     "build_libvmaf": build_libvmaf,
     "build_srt": build_srt,
     "build_libzmq": build_libzmq,

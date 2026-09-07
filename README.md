@@ -43,6 +43,33 @@ Version `2.0b0` is the FFmpeg 9 integration beta. The macOS FFmpeg 9.0 build usi
 | cargo / rustc | rav1e (Rust AV1 encoder) |
 | curl / git | Source downloads |
 
+### CUDA toolkit / GCC compatibility (nvcc host-compiler version)
+
+Every CUDA toolkit release only supports host compilers up to a specific GCC
+major version (e.g. **CUDA 12.2 supports GCC ≤ 12**). Rolling-release distros
+(Fedora, Arch, ...) routinely ship a much newer default GCC and often no
+longer carry the older `gccNN` package needed to match an installed CUDA SDK
+(for example, Fedora 44 ships GCC 16 and has no `gcc12` package). Without a
+compatible host compiler, `nvcc` rejects every CUDA compile before any
+project code is involved, breaking CUDA/NVENC/NVDEC and the `libvmaf` CUDA
+path.
+
+**Solution**: the builder auto-detects a compatible host compiler in three
+steps (real `nvcc` compile probes, not version-string comparisons): the
+system default compiler, then the `CUDA_NVCC_CCBIN` environment variable, then
+any `conda-forge` `gcc_linux-64`/`gxx_linux-64` toolchain found in a
+conda/mamba/micromamba environment. If your distro no longer packages the GCC
+version your CUDA SDK needs, create one with micromamba/conda and it will be
+picked up automatically — no manual configuration required:
+
+```bash
+micromamba create -n cuda-gcc12 -c conda-forge gcc_linux-64=12 gxx_linux-64=12
+```
+
+Alternatively, set `CUDA_NVCC_CCBIN=/path/to/gccNN` to force a specific
+compiler. See `docs/DeveloperReadme.md` → "Fedora 44+ / modern GCC (≥15) +
+CUDA 12.2 — nvcc host-compiler compatibility" for full detection details.
+
 ### Python Dependencies
 
 ```
@@ -423,6 +450,7 @@ Windows phase-3 policy:
 - CUDA toolkit must be installed (not just the driver)
 - On WSL2, OpenCL is not available through the paravirtualized driver
 - When CUDA is detected, the builder adds: `--enable-cuda-nvcc`, `--enable-cuvid`, `--enable-nvdec`, `--enable-nvenc`, `--enable-cuda-llvm`, `--enable-ffnvcodec`
+- Host-compiler compatibility (GCC vs the CUDA toolkit's max supported GCC version, e.g. CUDA 12.2 → GCC ≤ 12) is auto-detected via a real `nvcc` compile probe, with fallback to `CUDA_NVCC_CCBIN` or an auto-detected conda/mamba/micromamba `gcc_linux-64` environment — see "CUDA toolkit / GCC compatibility" above and `--nvccflags='-ccbin=...'` in the resulting configure line
 - `enable_libvmaf_cuda: true` enables libvmaf CUDA path only when backend is `linux-native` or `linux-wsl2` and an NVCC compile sanity-check passes
 - On `windows-msys2-ucrt64`, libvmaf CUDA path remains disabled by policy/toolchain limits; CPU `libvmaf` still works
 - For `libvmaf` CUDA builds with `openmp: true`, the builder forwards OpenMP to NVCC host compilation via `NVCC_PREPEND_FLAGS=-Xcompiler=-fopenmp` and removes raw `-fopenmp` from inherited compile/link flags to avoid `nvcc fatal: Unknown option '-fopenmp'`
@@ -580,6 +608,30 @@ SVT-AV1 4.0.1 includes `<sched.h>`/`<pthread.h>` from a project header (`Source/
 ### FFmpeg configure fails with "libplacebo >= 5.229.0 not found using pkg-config"
 
 If `libplacebo` was already built, FFmpeg can still fail this check when `libplacebo.pc` contains absolute static archive paths or stale dependency ordering from a previous run. The builder now auto-normalizes `libplacebo.pc` before FFmpeg configure (including resume runs), rewrites absolute archives to `-l...` flags, and enforces SPIRV static dependency order.
+
+### `nvcc` rejects the host compiler (Fedora 44+ / GCC ≥ 15 + CUDA 12.2)
+
+CUDA toolkits pin a maximum supported host-compiler major version (CUDA 12.2 → GCC ≤ 12); rolling-release distros like Fedora ship a much newer default GCC and often no longer package the older `gccNN` version needed. The builder auto-detects a compatible compiler (system default → `CUDA_NVCC_CCBIN` → conda/mamba/micromamba `gcc_linux-64`/`gxx_linux-64` environment) and forwards it via `-ccbin`; see "CUDA toolkit / GCC compatibility" above for the recommended `micromamba create -n cuda-gcc12 -c conda-forge gcc_linux-64=12 gxx_linux-64=12` setup.
+
+### gettext fails with "expected identifier or '(' before '_Generic'" (GCC ≥ 15)
+
+gettext's bundled gnulib snapshot's ISO-C23 `wmemchr`/`bsearch` compatibility shims collide with glibc ≥ 2.41's own `_Generic`-based redeclarations of the same functions. The builder now applies patches that undefine the colliding macro before gnulib's declaration, across all vendored gnulib copies gettext ships.
+
+### OpenSSL `./Configure` fails with Perl module errors (`FindBin`, `IPC::Cmd`, `Time::Piece`)
+
+A minimal Perl install may be missing these modules that OpenSSL's `Configure` script requires. The builder ships clean-room shim implementations and injects them via `PERL5LIB` automatically on modern GCC toolchains.
+
+### rav1e / libtiff fail with BSD type or POSIX declaration errors (`u_int`, `fseeko`)
+
+The project's default `-std=c11` CFLAGS leave `__USE_MISC` unset under glibc, breaking BSD (`u_int`/`u_char`) and some POSIX (`fseeko`/`ftello`) declarations used by rav1e's `cargo-c` dependencies and libtiff's own tools. The builder rewrites `-std=c11` → `-std=gnu11` for these components automatically on modern GCC toolchains.
+
+### libvmaf CUDA path fails with missing `ffnvcodec` headers or `CudaFunctions has no member`
+
+This project pins `nv-codec-headers` to the oldest release compatible with FFmpeg 8.1's NVENC support, which can be too old for libvmaf's CUDA feature extractors. The builder now builds `nv-codec-headers` ahead of `libvmaf` when needed, defaults to a patch release (`13.0.19.1`) that adds the required CUDA driver symbols without breaking FFmpeg 8.1 NVENC compatibility, falls back to CPU-only `libvmaf` if an incompatible version is ever selected, and symlinks the headers into libvmaf's expected include path for its `.fatbin` build step. See `docs/DeveloperReadme.md` → "libvmaf + nv-codec-headers CUDA compatibility" for details.
+
+### `opencl-icd-loader` build fails to compile
+
+Two independent causes on modern GCC toolchains: its bundled test suite always builds (even when not requested) and fails without GL/EGL headers, and the CUDA SDK's own bundled `CL/cl.h` can shadow this project's freshly built OpenCL headers. Both are fixed automatically (disabling the test target and excluding the CUDA include path from this component's build only).
 
 ### CUDA not detected
 
