@@ -26,6 +26,10 @@ All notable changes to the FFmpeg Builder project.
 - `pytest tests/test_platform_strategy.py -q` passes with the focused Phase 1/2 regression checks.
 - `pytest tests/test_patches.py tests/test_builder_split.py -q` passes with 23 tests.
 
+### Fixed — Intel QSV detection reported unavailable even with a working iHD/VAAPI driver (2026-09-07)
+
+- **`PlatformInfo.qsv_available` was always `False` on Linux, even with VAAPI and an Intel GPU present** — `PlatformDetector.detect_all()` (`platform_detect.py`) called `self.platform_info.qsv_available = self._check_qsv()` *before* `self.platform_info.vaapi_available = self._check_vaapi()`. `_check_qsv()`'s Linux branch requires `platform_info.vaapi_available` to be `True` before it will even probe `vainfo`/PCI IDs for an Intel GPU, but at the point it ran, `vaapi_available` still held the `PlatformInfo` dataclass default of `False`, so the VAAPI gate short-circuited `_check_qsv()` to `False` unconditionally, regardless of actual hardware. Downstream, `ComponentRegistry` (`components.py`) skips building the `onevpl` component whenever `qsv_available` is `False`, so `--enable-libvpl` was never passed to FFmpeg's configure and QSV encoders were silently absent from the resulting binary. Fixed by moving the `vaapi_available` detection call ahead of the CUDA/QSV detection block in `detect_all()`, so `_check_qsv()` observes the real VAAPI result. Verified on Fedora 44 with an Intel Arc A750 (iHD driver, VAAPI detected via `pkg-config libva`): `qsv_available` now correctly reports `True`, `onevpl` builds, and the resulting FFmpeg 8.1 binary's configure line includes `--enable-libvpl` with `h264_qsv`/`hevc_qsv`/`av1_qsv`/`vp9_qsv`/`mjpeg_qsv`/`mpeg2_qsv` registered in `-encoders`/`-decoders` and `qsv` listed in `-hwaccels`. Full suite (178 passed, 1 skipped) and `black --check .` pass.
+
 ### Fixed — Phase 1–5 remediation (2026-09-06)
 
 Post-merge review of the five phase commits surfaced defects that are corrected here; all quality gates now pass.

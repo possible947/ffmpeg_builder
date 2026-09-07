@@ -27,6 +27,14 @@
 - `pytest tests/test_platform_strategy.py -q` passes with the focused Phase 1/2 regression suite.
 - `pytest tests/test_patches.py tests/test_builder_split.py -q` passes with 23 tests.
 
+## 2026-09-07 — Intel QSV: исправлен порядок детектирования VAAPI/QSV
+
+На Fedora Linux 44 с Intel Arc A750 (iHD-драйвер, VAAPI работает) сборка FFmpeg 8.1 не включала поддержку Intel QSV, хотя оборудование и драйверы были в порядке.
+
+- **`PlatformDetector.detect_all()` вычислял `qsv_available` до `vaapi_available`** — `_check_qsv()` на Linux требует `platform_info.vaapi_available == True`, прежде чем проверять `vainfo`/PCI ID на Intel GPU, но на момент вызова `vaapi_available` ещё хранил дефолт датакласса `False`, поэтому `_check_qsv()` всегда возвращал `False` независимо от реального оборудования. `ComponentRegistry` ([components.py](components.py)) пропускает сборку компонента `onevpl`, если `qsv_available` ложно, поэтому `--enable-libvpl` никогда не попадал в конфигурацию FFmpeg, и QSV-кодеки молча отсутствовали в собранном бинарнике. Исправлено переносом вызова `_check_vaapi()` перед блоком детектирования CUDA/QSV в [platform_detect.py](platform_detect.py).
+
+Проверено: на Fedora 44 с Intel Arc A750 `qsv_available` теперь корректно возвращает `True`; `onevpl` собирается; итоговый бинарник FFmpeg 8.1 содержит `--enable-libvpl`, кодеки `h264_qsv`/`hevc_qsv`/`av1_qsv`/`vp9_qsv`/`mjpeg_qsv`/`mpeg2_qsv` в `-encoders`/`-decoders` и `qsv` в списке `-hwaccels`. Полный набор тестов (178 passed, 1 skipped) и `black --check .` — без ошибок. Полный текст — в `docs/CHANGELOG.md`.
+
 ## 2026-09-06 — Исправления по итогам ревью фаз 1–5
 
 Ревью после слияния пяти фаз выявило дефекты; все ворота качества теперь зелёные.

@@ -584,6 +584,12 @@ class PlatformDetector:
         if self.platform_info.is_macos:
             self.platform_info.macports_clang = self._find_macports_clang()
 
+        # VAAPI must be detected before QSV: _check_qsv() reads
+        # platform_info.vaapi_available on Linux and would otherwise always
+        # see the dataclass default (False), making QSV appear unavailable
+        # even when VAAPI and an Intel GPU are present.
+        self.platform_info.vaapi_available = self._check_vaapi()
+
         # Detect CUDA on Linux/Windows
         if self.platform_info.is_linux or self.platform_info.is_windows:
             self._detect_cuda()
@@ -605,7 +611,6 @@ class PlatformDetector:
                 self.platform_info.opencl_effective_reason = (
                     self.platform_info.opencl_runtime_reason or "OpenCL runtime not found"
                 )
-        self.platform_info.vaapi_available = self._check_vaapi()
 
     def _detect_sdk_paths(self) -> None:
         """Detect common SDK root locations for diagnostics."""
