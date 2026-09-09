@@ -95,3 +95,33 @@ def test_config_screen_updates_ffmpeg_version(monkeypatch):
     result = screen.show(config)
 
     assert result.ffmpeg_version == "9.0"
+
+
+def test_config_screen_hides_blocked_ffmpeg_versions(monkeypatch):
+    console = Console(file=io.StringIO())
+    screen = ConfigScreen(console)
+    config = BuildConfig()
+
+    captured = {}
+
+    def fake_confirm_ask(prompt, **kwargs):
+        return False
+
+    def fake_prompt_ask(prompt, **kwargs):
+        text = str(prompt)
+        if "FFmpeg version" in text:
+            captured["choices"] = kwargs.get("choices")
+            return "9.0"
+        if "parallel jobs" in text:
+            return "auto"
+        if "download workers" in text:
+            return "2"
+        return ""
+
+    monkeypatch.setattr(screens.Confirm, "ask", staticmethod(fake_confirm_ask))
+    monkeypatch.setattr(screens.Prompt, "ask", staticmethod(fake_prompt_ask))
+
+    result = screen.show(config, available_ffmpeg_versions=["9.0"])
+
+    assert captured["choices"] == ["9.0"]
+    assert result.ffmpeg_version == "9.0"

@@ -24,6 +24,16 @@ Version `2.0b0` is the FFmpeg 9 integration beta. The macOS FFmpeg 9.0 build usi
 
 ## Requirements
 
+### FFmpeg version policy
+
+- FFmpeg **8.1** is available only on supported compiler/toolchain combinations.
+- Global hard limits for 8.1: **GCC <= 13** and **Clang <= 25**.
+- On **Linux GCC15+** platforms, only **FFmpeg 9.0** is available.
+- On **macOS**, FFmpeg 8.1 is allowed only when `macos.clang=macports-clang-17` and `clang-mp-17` is available.
+- Non-system compiler fallback is reserved for CUDA host-compiler compatibility (`nvcc -ccbin` path).
+
+When 8.1 is blocked by policy, the start screen shows the reason and the recommended action (switch to FFmpeg 9.0 or install/configure the required compiler).
+
 ### System
 
 - **Python** >= 3.12 (required for secure `tar` extraction, PEP 706; runs on Python 3.12–3.14)
@@ -101,7 +111,7 @@ Or use the environment check script:
 
 ## Windows 11 + MSYS2 UCRT64
 
-Full FFmpeg 8.1 builds are supported on Windows 11 via the MSYS2 UCRT64 toolchain (GCC 16).
+Windows 11 + MSYS2 UCRT64 uses GCC 16 by default, so the current policy typically routes builds to FFmpeg 9.0.
 All codec libraries are compiled as static archives and linked into `ffmpeg.exe`.
 
 From Windows PowerShell (repository root):

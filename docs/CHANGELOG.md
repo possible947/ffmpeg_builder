@@ -11,6 +11,7 @@ All notable changes to the FFmpeg Builder project.
 - **Phase 3 declarative source patch engine** — added the `patches/` package with component-aware `SourcePatch` definitions, fail-fast assertion helpers, and concrete C23, C++ header, Darwin, and FFmpeg 9 patch implementations.
 - **Phase 4 domain-specific builders** — added the `builders/` package, `ComponentBuildContext`, standard build-system entry points, and domain modules for codecs, crypto, graphics, networking, tools, and FFmpeg.
 - **Phase 5 orchestration boundary** — centralized custom and standard build selection in `builders.base.dispatch_component_build()` while preserving the existing `FFmpegBuilder` API and lifecycle behavior.
+- **FFmpeg version policy gate** — added centralized runtime policy evaluation that hides unavailable versions in UI config, blocks build/resume for disallowed selections, and shows remediation guidance on the system summary screen.
 
 ### Changed
 
@@ -19,6 +20,7 @@ All notable changes to the FFmpeg Builder project.
 - **Phase 2 stabilization** — hardened the resolver for minimal mock platform-info objects, normalized Linux/MSYS2 path detection to canonical POSIX strings for detector diagnostics, and made the macOS release-bundle symlink fallback safe on Windows where symlink privileges are unavailable.
 - **Patch lifecycle integration** — `FFmpegBuilder` applies registered source patches immediately after extraction and before configure/build steps, so upstream anchor changes fail with a component-specific `BuildError`.
 - **Builder dispatch integration** — custom component functions and standard build-system lifecycle calls now resolve through the modular `builders/` boundary while preserving the existing `FFmpegBuilder` callable API.
+- **Policy baseline update** — FFmpeg 8.1 is now blocked on unsupported toolchains (GCC>13, Clang>25), Linux GCC15+ routes to FFmpeg 9.0 only, and the old Linux GCC15 FFmpeg-8.1 compatibility patch set is no longer applied.
 
 ### Verified
 
