@@ -6,6 +6,16 @@ from pathlib import Path
 from typing import List, Optional
 
 from .base import PatchStrategy, PatchTarget, SourcePatch
+from .c23_fixes import (
+    GETTEXT_RUNTIME_WCHAR_PATCH,
+    GETTEXT_RUNTIME_INTL_WCHAR_PATCH,
+    GETTEXT_RUNTIME_INTL_SEARCH_PATCH,
+    GETTEXT_LIBASPRINTF_WCHAR_PATCH,
+    GETTEXT_TOOLS_WCHAR_PATCH,
+    GETTEXT_LIBGETTEXTPO_WCHAR_PATCH,
+    GETTEXT_LIBGREP_WCHAR_PATCH,
+    LIBTEXTSTYLE_WCHAR_PATCH,
+)
 from .cxx_headers import X265_JSON11_PATCH
 from .darwin_patches import LIBJXL_REALPATH_PATCH, LIBVORBIS_CPUSUBTYPE_PATCH
 from .ffmpeg_patches import FFMPEG_9_VULKAN_PATCH
@@ -17,6 +27,14 @@ class PatchRegistry:
     def __init__(self) -> None:
         self._patches: List[SourcePatch] = []
         for patch in (
+            GETTEXT_RUNTIME_WCHAR_PATCH,
+            GETTEXT_RUNTIME_INTL_WCHAR_PATCH,
+            GETTEXT_RUNTIME_INTL_SEARCH_PATCH,
+            GETTEXT_LIBASPRINTF_WCHAR_PATCH,
+            GETTEXT_TOOLS_WCHAR_PATCH,
+            GETTEXT_LIBGETTEXTPO_WCHAR_PATCH,
+            GETTEXT_LIBGREP_WCHAR_PATCH,
+            LIBTEXTSTYLE_WCHAR_PATCH,
             X265_JSON11_PATCH,
             LIBJXL_REALPATH_PATCH,
             LIBVORBIS_CPUSUBTYPE_PATCH,

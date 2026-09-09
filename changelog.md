@@ -21,11 +21,16 @@
 - **Patch lifecycle integration** — `FFmpegBuilder` now applies registered source patches immediately after extraction and before configure/build steps, preserving clear failures when an upstream patch anchor changes.
 - **Builder dispatch integration** — custom component functions and standard build-system lifecycle calls now resolve through the modular `builders/` boundary while preserving the existing `FFmpegBuilder` callable API.
 
+### Fixed
+
+- **gettext 0.26: glibc 2.41+ `_Generic` macro collision.** On Fedora 44 with GCC 16 and glibc 2.41+, gettext 0.26's gnulib embedded headers declare function signatures (e.g., `wmemchr`, `btowc`, `bsearch`) after glibc has already defined macro wrappers with the same names using `_Generic`. When the preprocessor tries to expand these macros during gnulib's function declarations, it creates invalid C code (e.g., `_GL_EXTERN_C wchar_t *__glibc_const_generic(...) (...)`). **Solution:** eight new `SourcePatch` entries in [patches/c23_fixes.py](patches/c23_fixes.py) undef the conflicting `wmemchr`, `btowc`, `bsearch`, and related macros immediately after `#include_next` directives in all seven gnulib copies embedded in gettext (runtime, intl, libasprintf, tools, libgettextpo, libgrep, libtextstyle). The patches are applied post-extraction and pre-configure so the header templates remain pristine. Verified: gettext 0.26 builds successfully on Fedora 44 with GCC 16.2.1.
+
 ### Verified
 
 - `pytest tests/test_platform_detect.py tests/test_builder_split.py -q` passes with the target detector and release-bundle regression suite.
 - `pytest tests/test_platform_strategy.py -q` passes with the focused Phase 1/2 regression suite.
 - `pytest tests/test_patches.py tests/test_builder_split.py -q` passes with 23 tests.
+- `pytest tests/ -q` passes with 186 tests after adding gettext C23 patches.
 
 ## 2026-09-07 — Intel QSV: исправлен порядок детектирования VAAPI/QSV
 
