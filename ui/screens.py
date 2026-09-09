@@ -89,6 +89,7 @@ class SystemReportScreen(UIScreen):
             config: Build configuration.
             state: Previous build state.
             buildable_count: Number of buildable components.
+            ffmpeg_policy: FFmpeg policy decision for the current configuration.
 
         Returns:
             User action: "build", "resume", "config", "cleanup", "info", or "exit".
@@ -402,6 +403,7 @@ class ConfigScreen(UIScreen):
 
         Args:
             config: Current configuration.
+            available_ffmpeg_versions: Optional policy-filtered FFmpeg versions.
 
         Returns:
             Updated configuration.
@@ -410,7 +412,13 @@ class ConfigScreen(UIScreen):
         self.console.print("[bold blue]Edit Build Configuration[/bold blue]")
         self.console.print()
 
-        version_choices = available_ffmpeg_versions or list(SUPPORTED_FFMPEG_VERSIONS)
+        version_choices = (
+            list(SUPPORTED_FFMPEG_VERSIONS)
+            if available_ffmpeg_versions is None
+            else available_ffmpeg_versions
+        )
+        if not version_choices:
+            raise ValueError("No FFmpeg versions available for the current policy.")
         version_default = (
             config.ffmpeg_version
             if config.ffmpeg_version in version_choices

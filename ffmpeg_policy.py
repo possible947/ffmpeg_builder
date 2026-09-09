@@ -44,7 +44,7 @@ def _macports_clang_17_available(config: BuildConfig) -> bool:
     configured = getattr(config.macos, "clang", "")
     if configured not in ("macports-clang-17", "clang-mp-17"):
         return False
-    return bool(shutil.which("clang-mp-17") or shutil.which("macports-clang-17"))
+    return bool(shutil.which("clang-mp-17"))
 
 
 def evaluate_ffmpeg_policy(

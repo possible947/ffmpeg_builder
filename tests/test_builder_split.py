@@ -10,6 +10,7 @@ from ffmpeg_builder.builder import BuildError, CARGO_C_VERSION, FFmpegBuilder
 from ffmpeg_builder.components import BuildSystem, Component, ComponentCategory
 from ffmpeg_builder.config import BuildConfig
 from ffmpeg_builder.component_builders import get_custom_builder
+from ffmpeg_builder.platforms.linux_gcc15 import LinuxGcc15Platform
 from ffmpeg_builder.release_bundle import make_release_bundle
 from ffmpeg_builder.state import ComponentStatus, StateManager
 
@@ -457,6 +458,118 @@ def test_build_cargo_installs_pinned_cargo_c(tmp_path: Path, monkeypatch: pytest
 
     assert commands[0] == ["cargo", "install", "cargo-c", "--version", CARGO_C_VERSION]
     assert commands[1][:2] == ["cargo", "cinstall"]
+
+
+def test_build_cargo_rewrites_strict_c11_for_linux_gcc15(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    builder = _make_builder_with_archives(tmp_path, str(tmp_path / "archives"))
+    builder.platform_strategy = LinuxGcc15Platform()
+    builder.env["CFLAGS"] = "-O2 -std=c11"
+    component = _make_libplacebo_component()
+
+    monkeypatch.setattr(FFmpegBuilder, "_get_rustc_version", lambda self: (1, 95, 0))
+    monkeypatch.setattr(shutil, "which", lambda name, path=None: "/usr/bin/cargo-c")
+
+    captured_envs = []
+
+    class _Result:
+        success = True
+
+    def _execute_with_log(command, component_name, step, cwd, env, timeout=None, stdin=None):
+        captured_envs.append(env.copy())
+        return _Result(), tmp_path / f"{component_name}_{step}.log"
+
+    builder.executor.execute_with_log = _execute_with_log
+
+    builder._build_cargo(component, tmp_path / "src")
+
+    assert captured_envs
+    assert captured_envs[0]["CFLAGS"] == "-O2 -std=gnu11"
+
+
+def test_build_libtiff_appends_gnu11_for_linux_gcc15(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from ffmpeg_builder.builders.codecs.tiff import build_libtiff
+
+    builder = _make_builder_with_archives(tmp_path, str(tmp_path / "archives"))
+    builder.platform_strategy = LinuxGcc15Platform()
+    builder.env["CFLAGS"] = "-O2 -std=c11"
+    component = Component(
+        name="tiff",
+        version="4.7.1",
+        url="https://example.invalid/libtiff.tar.gz",
+        category=ComponentCategory.IMAGE_CODEC,
+        build_system=BuildSystem.AUTOTOOLS,
+        configure_args=["--prefix={workspace}"],
+    )
+
+    captured = {}
+
+    def _run_step(
+        self, component, status, detail, error_msg, command, step, cwd, env, timeout=None
+    ):
+        captured["CFLAGS"] = env["CFLAGS"]
+        return None
+
+    monkeypatch.setattr(FFmpegBuilder, "_run_step", _run_step)
+    monkeypatch.setattr(FFmpegBuilder, "_run_make", lambda *args, **kwargs: None)
+    monkeypatch.setattr(FFmpegBuilder, "_run_install", lambda *args, **kwargs: None)
+
+    build_libtiff(builder, component, tmp_path / "src")
+
+    assert captured["CFLAGS"] == "-O2 -std=c11 -std=gnu11"
+
+
+def test_build_openssl_restores_linux_gcc15_shims_and_gnu11(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from ffmpeg_builder.builders.crypto import openssl as openssl_module
+
+    builder = _make_builder_with_archives(tmp_path, str(tmp_path / "archives"))
+    builder.platform_strategy = LinuxGcc15Platform()
+    component = Component(
+        name="openssl",
+        version="3.5.2",
+        url="https://example.invalid/openssl.tar.gz",
+        category=ComponentCategory.CRYPTO,
+        build_system=BuildSystem.CUSTOM,
+    )
+    source_dir = tmp_path / "openssl-src"
+    source_dir.mkdir()
+    configdata = source_dir / "configdata.pm"
+    configdata.write_text("compilerflags => '-std=c11 -O2'\n", encoding="utf-8")
+
+    shim_calls = []
+    perl_regen = []
+
+    def fake_apply_perl_shims(workspace, env, on_log=None):
+        shim_calls.append((workspace, env.copy(), on_log))
+        env["PERL5LIB"] = str(workspace / "perl_shims")
+
+    class _Result:
+        success = True
+
+    def _execute_with_log(command, component_name, step, cwd, env, timeout=None, stdin=None):
+        return _Result(), tmp_path / f"{component_name}_{step}.log"
+
+    def _execute(command, cwd=None, env=None):
+        perl_regen.append((list(command), cwd, env.copy() if env else None))
+        return _Result()
+
+    monkeypatch.setattr(openssl_module, "apply_perl_shims_to_env", fake_apply_perl_shims)
+    builder.executor.execute_with_log = _execute_with_log
+    builder.executor.execute = _execute
+    monkeypatch.setattr(FFmpegBuilder, "_run_make", lambda *args, **kwargs: None)
+    monkeypatch.setattr(FFmpegBuilder, "_run_step", lambda *args, **kwargs: None)
+
+    builder.build_openssl(component, source_dir)
+
+    assert shim_calls
+    assert "-std=gnu11" in configdata.read_text(encoding="utf-8")
+    assert "-std=c11" not in configdata.read_text(encoding="utf-8")
+    assert perl_regen[0][0] == ["perl", str(configdata)]
 
 
 def test_build_ffmpeg_links_libjxl_threads_with_darwin_cxx_runtime(

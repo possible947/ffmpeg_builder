@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ...build_types import BuildError
+from ...perl_shims import apply_perl_shims_to_env
 from ...state import ComponentStatus
 
 if TYPE_CHECKING:
@@ -16,6 +17,8 @@ if TYPE_CHECKING:
 def build_openssl(builder: FFmpegBuilder, component: Component, source_dir: Path) -> None:
     """Build OpenSSL."""
     env = builder.get_build_env(component)
+    if type(builder.platform_strategy).__name__ == "LinuxGcc15Platform":
+        apply_perl_shims_to_env(builder.workspace, env, on_log=builder.on_log)
 
     result, log_file = builder.executor.execute_with_log(
         [
@@ -36,6 +39,22 @@ def build_openssl(builder: FFmpegBuilder, component: Component, source_dir: Path
 
     if not result.success:
         raise BuildError(component.name, "Configure failed", log_file)
+
+    configdata = source_dir / "configdata.pm"
+    if configdata.exists():
+        content = configdata.read_text()
+        content = content.replace("-std=c11", "-std=gnu11")
+        configdata.write_text(content)
+        builder._assert_patch_absent(
+            component, configdata, "-std=c11", "configdata.pm -std=c11 -> -std=gnu11"
+        )
+        result2 = builder.executor.execute(
+            ["perl", str(configdata)],
+            cwd=source_dir,
+            env=env,
+        )
+        if not result2.success:
+            raise BuildError(component.name, "configdata.pm regeneration failed")
 
     builder._run_make(
         component,

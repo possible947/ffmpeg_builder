@@ -15,6 +15,8 @@ if TYPE_CHECKING:
 def build_libtiff(builder: FFmpegBuilder, component: Component, source_dir: Path) -> None:
     """Build libtiff via autotools."""
     env = builder.get_build_env(component)
+    if type(builder.platform_strategy).__name__ == "LinuxGcc15Platform":
+        env["CFLAGS"] = env.get("CFLAGS", "") + " -std=gnu11"
 
     configure_args = [
         arg.replace("{workspace}", builder._ws_str()) for arg in component.configure_args

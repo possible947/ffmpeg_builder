@@ -125,3 +125,17 @@ def test_config_screen_hides_blocked_ffmpeg_versions(monkeypatch):
 
     assert captured["choices"] == ["9.0"]
     assert result.ffmpeg_version == "9.0"
+
+
+def test_config_screen_rejects_empty_policy_version_list(monkeypatch):
+    console = Console(file=io.StringIO())
+    screen = ConfigScreen(console)
+
+    _patch_prompts(monkeypatch, iter(["auto"]), iter(["2"]))
+
+    try:
+        screen.show(BuildConfig(), available_ffmpeg_versions=[])
+    except ValueError as exc:
+        assert str(exc) == "No FFmpeg versions available for the current policy."
+    else:
+        raise AssertionError("Expected ValueError for empty FFmpeg version list")

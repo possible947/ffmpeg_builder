@@ -49,7 +49,11 @@ def test_macos_allows_ffmpeg81_only_with_macports17(monkeypatch):
     cfg = BuildConfig(ffmpeg_version="8.1")
     cfg.macos.clang = "macports-clang-17"
     info = PlatformInfo(is_macos=True, platform="darwin")
-    monkeypatch.setattr("shutil.which", lambda name: "/opt/local/bin/clang-mp-17")
+
+    def fake_which(name):
+        return "/opt/local/bin/clang-mp-17" if name == "clang-mp-17" else None
+
+    monkeypatch.setattr("shutil.which", fake_which)
 
     policy = evaluate_ffmpeg_policy(cfg, info, _tools(clang_version="26.0.0"))
 
