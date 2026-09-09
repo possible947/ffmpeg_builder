@@ -15,71 +15,136 @@ from ffmpeg_builder.patches.base import (
 def _fix_wchar_generic_collision(
     target: Path, component: PatchTarget, strategy: PatchStrategy
 ) -> None:
-    """Undef wmemchr and btowc macros before gnulib function declarations."""
+    """Undef wmemchr and btowc macros after glibc includes in wchar.h template.
+
+    Patches the .in.h template file to add undefs after #@INCLUDE_NEXT@ directives.
+    These undefs will appear in the generated .h file after make processes the template.
+    """
     text = target.read_text(encoding="utf-8")
-    lines = text.split("\n")
 
-    insert_idx = None
-    for i, line in enumerate(lines):
-        if i > 30 and ("#endif" in line or "#else" in line) and "ifndef" not in line:
-            insert_idx = i + 1
-            break
+    # In .in.h templates, the include directive uses placeholders like #@INCLUDE_NEXT@
+    # We need to insert undefs after the conditional block that includes system wchar.h
+    # Pattern: #if @HAVE_WCHAR_H@ / # @INCLUDE_NEXT@ @NEXT_WCHAR_H@ / #endif
 
-    if insert_idx is None:
-        insert_idx = len(lines) // 3
+    marker = "#if @HAVE_WCHAR_H@\n# @INCLUDE_NEXT@ @NEXT_WCHAR_H@\n#endif"
+    if marker in text:
+        undef_block = (
+            marker
+            + "\n"
+            + "\n"
+            + "/* Undef glibc 2.41+ macros that use _Generic and conflict with gnulib\n"
+            + "   function signatures when compiling with C23 defaults. */\n"
+            + "#undef wmemchr\n"
+            + "#undef btowc\n"
+            + "#undef mbrtowc\n"
+            + "#undef wcrtomb\n"
+        )
+        text = text.replace(marker + "\n", undef_block + "\n")
+        target.write_text(text, encoding="utf-8")
+        assert_patch_present(
+            component.name, target, "#undef wmemchr", "wmemchr macro undef after wchar.h include"
+        )
+        return
 
-    undef_lines = [
-        "",
-        "/* Undef glibc 2.41+ macros that use _Generic and conflict with gnulib",
-        "   function signatures when compiling with C23 defaults. */",
-        "#undef wmemchr",
-        "#undef btowc",
-        "#undef mbrtowc",
-        "#undef wcrtomb",
-        "",
-    ]
-
-    for line in reversed(undef_lines):
-        lines.insert(insert_idx, line)
-
-    text = "\n".join(lines)
-    target.write_text(text, encoding="utf-8")
-    assert_patch_present(
-        component.name, target, "#undef wmemchr", "wmemchr macro undef in wchar template"
-    )
+    # Fallback: for already-generated headers, look for #include_next <wchar.h>
+    marker = "#include_next <wchar.h>"
+    if marker in text:
+        undef_block = (
+            marker
+            + "\n"
+            + "\n"
+            + "/* Undef glibc 2.41+ macros that use _Generic and conflict with gnulib\n"
+            + "   function signatures when compiling with C23 defaults. */\n"
+            + "#undef wmemchr\n"
+            + "#undef btowc\n"
+            + "#undef mbrtowc\n"
+            + "#undef wcrtomb\n"
+        )
+        text = text.replace(marker + "\n", undef_block + "\n")
+        target.write_text(text, encoding="utf-8")
+        assert_patch_present(
+            component.name, target, "#undef wmemchr", "wmemchr macro undef after wchar.h include"
+        )
 
 
 def _fix_search_generic_collision(
     target: Path, component: PatchTarget, strategy: PatchStrategy
 ) -> None:
-    """Undef bsearch macros before gnulib function declarations."""
+    """Undef bsearch macros after glibc includes in search.h template.
+
+    Patches the .in.h template file to add undefs after #@INCLUDE_NEXT@ directives.
+    """
     text = target.read_text(encoding="utf-8")
-    lines = text.split("\n")
 
-    insert_idx = None
-    for i, line in enumerate(lines):
-        if i > 30 and ("#endif" in line or "#else" in line) and "ifndef" not in line:
-            insert_idx = i + 1
-            break
+    # In .in.h templates, look for the conditional include block
+    marker = "#if @HAVE_SEARCH_H@\n# @INCLUDE_NEXT@ @NEXT_SEARCH_H@\n#endif"
+    if marker in text:
+        undef_block = (
+            marker
+            + "\n"
+            + "\n"
+            + "/* Undef glibc 2.41+ macros that use _Generic and conflict with gnulib\n"
+            + "   function signatures when compiling with C23 defaults. */\n"
+            + "#undef bsearch\n"
+        )
+        text = text.replace(marker + "\n", undef_block + "\n")
+        target.write_text(text, encoding="utf-8")
+        assert_patch_present(
+            component.name, target, "#undef bsearch", "bsearch macro undef after search.h include"
+        )
+        return
 
-    if insert_idx is None:
-        insert_idx = len(lines) // 3
+    # Fallback: for already-generated headers
+    marker = "#include_next <search.h>"
+    if marker in text:
+        undef_block = (
+            marker
+            + "\n"
+            + "\n"
+            + "/* Undef glibc 2.41+ macros that use _Generic and conflict with gnulib\n"
+            + "   function signatures when compiling with C23 defaults. */\n"
+            + "#undef bsearch\n"
+        )
+        text = text.replace(marker + "\n", undef_block + "\n")
+        target.write_text(text, encoding="utf-8")
+        assert_patch_present(
+            component.name, target, "#undef bsearch", "bsearch macro undef after search.h include"
+        )
 
-    undef_lines = [
-        "",
-        "/* Undef glibc 2.41+ macros that use _Generic and conflict with gnulib",
-        "   function signatures when compiling with C23 defaults. */",
-        "#undef bsearch",
-        "",
-    ]
 
-    for line in reversed(undef_lines):
-        lines.insert(insert_idx, line)
+def _fix_stdlib_generic_collision(
+    target: Path, component: PatchTarget, strategy: PatchStrategy
+) -> None:
+    """Undef bsearch macros after glibc includes in stdlib.h template.
 
-    text = "\n".join(lines)
+    stdlib.h has TWO #@INCLUDE_NEXT@ blocks so we need to patch both.
+    """
+    text = target.read_text(encoding="utf-8")
+
+    # The key is to replace the include_next lines with the line + undefs
+    marker = "#@INCLUDE_NEXT@ @NEXT_STDLIB_H@"
+
+    if marker not in text:
+        # Try fallback for generated files
+        marker = "#include_next <stdlib.h>"
+
+    if marker not in text:
+        return
+
+    # Insert undefs after marker (works for both occurrences)
+    undef_block = (
+        "\n"
+        + "/* Undef glibc 2.41+ macros that use _Generic and conflict with gnulib\n"
+        + "   function signatures when compiling with C23 defaults. */\n"
+        + "#undef bsearch\n"
+    )
+
+    # Replace ALL occurrences of "marker\n" with "marker\n undef_block"
+    text = text.replace(marker + "\n", marker + undef_block)
+
     target.write_text(text, encoding="utf-8")
     assert_patch_present(
-        component.name, target, "#undef bsearch", "bsearch macro undef in search template"
+        component.name, target, "#undef bsearch", "bsearch macro undef after stdlib.h includes"
     )
 
 
@@ -149,5 +214,61 @@ LIBTEXTSTYLE_WCHAR_PATCH = SourcePatch(
     component_name="gettext",
     target_rel_path="libtextstyle/lib/wchar.in.h",
     apply_fn=_fix_wchar_generic_collision,
+    condition=_condition_gcc15_plus,
+)
+
+GETTEXT_RUNTIME_STDLIB_PATCH = SourcePatch(
+    name="gettext_runtime_stdlib_generic",
+    component_name="gettext",
+    target_rel_path="gettext-runtime/gnulib-lib/stdlib.in.h",
+    apply_fn=_fix_stdlib_generic_collision,
+    condition=_condition_gcc15_plus,
+)
+
+GETTEXT_RUNTIME_INTL_STDLIB_PATCH = SourcePatch(
+    name="gettext_runtime_intl_stdlib_generic",
+    component_name="gettext",
+    target_rel_path="gettext-runtime/intl/gnulib-lib/stdlib.in.h",
+    apply_fn=_fix_stdlib_generic_collision,
+    condition=_condition_gcc15_plus,
+)
+
+GETTEXT_RUNTIME_LIBASPRINTF_STDLIB_PATCH = SourcePatch(
+    name="gettext_runtime_libasprintf_stdlib_generic",
+    component_name="gettext",
+    target_rel_path="gettext-runtime/libasprintf/gnulib-lib/stdlib.in.h",
+    apply_fn=_fix_stdlib_generic_collision,
+    condition=_condition_gcc15_plus,
+)
+
+GETTEXT_TOOLS_STDLIB_PATCH = SourcePatch(
+    name="gettext_tools_stdlib_generic",
+    component_name="gettext",
+    target_rel_path="gettext-tools/gnulib-lib/stdlib.in.h",
+    apply_fn=_fix_stdlib_generic_collision,
+    condition=_condition_gcc15_plus,
+)
+
+GETTEXT_LIBGETTEXTPO_STDLIB_PATCH = SourcePatch(
+    name="gettext_libgettextpo_stdlib_generic",
+    component_name="gettext",
+    target_rel_path="gettext-tools/libgettextpo/stdlib.in.h",
+    apply_fn=_fix_stdlib_generic_collision,
+    condition=_condition_gcc15_plus,
+)
+
+GETTEXT_LIBGREP_STDLIB_PATCH = SourcePatch(
+    name="gettext_libgrep_stdlib_generic",
+    component_name="gettext",
+    target_rel_path="gettext-tools/libgrep/gnulib-lib/stdlib.in.h",
+    apply_fn=_fix_stdlib_generic_collision,
+    condition=_condition_gcc15_plus,
+)
+
+LIBTEXTSTYLE_STDLIB_PATCH = SourcePatch(
+    name="libtextstyle_stdlib_generic",
+    component_name="gettext",
+    target_rel_path="libtextstyle/lib/stdlib.in.h",
+    apply_fn=_fix_stdlib_generic_collision,
     condition=_condition_gcc15_plus,
 )
