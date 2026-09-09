@@ -13,18 +13,7 @@ if TYPE_CHECKING:
 
 
 def build_libtiff(builder: FFmpegBuilder, component: Component, source_dir: Path) -> None:
-    """Build libtiff via autotools.
-
-    libtiff's tools (tiffset.c, tiff2pdf.c, ...) call fseeko/ftello through
-    macros in tiffiop.h. Those are POSIX extensions gated behind
-    __USE_XOPEN2K/__USE_MISC in glibc's stdio.h; with the project's default
-    strict "-std=c11" CFLAGS, glibc leaves them undeclared, breaking the
-    build with -Wimplicit-function-declaration errors. Appending
-    "-std=gnu11" after "-std=c11" restores glibc's default-source feature
-    macros (GCC honors the last -std= flag) without relaxing anything else.
-    Scoped to LinuxGcc15Platform: that's the toolchain class where this has
-    been observed.
-    """
+    """Build libtiff via autotools."""
     env = builder.get_build_env(component)
     if type(builder.platform_strategy).__name__ == "LinuxGcc15Platform":
         env["CFLAGS"] = env.get("CFLAGS", "") + " -std=gnu11"

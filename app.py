@@ -12,6 +12,7 @@ from .build_types import BuildError, SkipComponent
 from .builder import FFmpegBuilder
 from .components import Component, ComponentRegistry
 from .config import BuildConfig, ConfigManager
+from .ffmpeg_policy import FfmpegPolicy, evaluate_ffmpeg_policy
 from .platform_detect import PlatformDetector
 from .state import ComponentStatus, StateManager
 from .system_report import SystemReportGenerator
@@ -60,6 +61,18 @@ class FFmpegBuilderApp:
         self.help_screen = HelpScreen(self.console)
         self.error_handler = ErrorHandler(self.console)
 
+    def _build_policy(self, config: BuildConfig) -> FfmpegPolicy:
+        return evaluate_ffmpeg_policy(config, self.platform_info, self.tools)
+
+    def _refresh_system_report(self, config: BuildConfig) -> None:
+        report_gen = SystemReportGenerator(
+            self.system_info,
+            self.platform_info,
+            self.tools,
+            config=config,
+        )
+        self.system_report = report_gen.generate()
+
     def run(self) -> int:
         """Run the application.
 
@@ -69,6 +82,8 @@ class FFmpegBuilderApp:
         try:
             while True:
                 config = self.config_manager.get()
+                policy = self._build_policy(config)
+                self._refresh_system_report(config)
                 state = self.state_manager.load()
                 components = self._get_buildable_components(config)
 
@@ -77,18 +92,29 @@ class FFmpegBuilderApp:
                     config,
                     state,
                     len(components),
+                    policy,
                 )
 
                 if action == "build":
+                    if not policy.selected_version_allowed:
+                        self.console.print(
+                            f"[red]Build blocked by FFmpeg policy:[/red] {policy.blocked_reason}"
+                        )
+                        continue
                     self._run_build(config, resume=False)
                 elif action == "resume":
                     if state:
+                        if not policy.selected_version_allowed:
+                            self.console.print(
+                                f"[red]Resume blocked by FFmpeg policy:[/red] {policy.blocked_reason}"
+                            )
+                            continue
                         self._run_build(config, resume=True)
                     else:
                         self.console.print("[red]No previous build to resume.[/red]")
                         continue
                 elif action == "config":
-                    config = self.config_screen.show(config)
+                    config = self.config_screen.show(config, policy.available_versions)
                     self.config_manager.save(config)
                 elif action == "cleanup":
                     self._cleanup()

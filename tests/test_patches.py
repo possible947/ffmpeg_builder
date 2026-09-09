@@ -53,22 +53,6 @@ def _comp(name: str, version: str = "1.0"):
     return type("C", (), {"name": name, "version": version})()
 
 
-def test_xvidcore_bool_patch_applies_and_is_idempotent(tmp_path: Path):
-    (tmp_path / "src").mkdir()
-    enc = tmp_path / "src" / "encoder.h"
-    enc.write_text("typedef int bool;\nint x;\n", encoding="utf-8")
-
-    registry = get_patch_registry()
-    registry.apply_patches(_comp("xvidcore"), tmp_path, None)
-    text = enc.read_text(encoding="utf-8")
-    assert "__STDC_VERSION__ < 202311L" in text
-    assert text.count("typedef int bool;") == 1
-
-    # Second run must not fail or duplicate the guard.
-    registry.apply_patches(_comp("xvidcore"), tmp_path, None)
-    assert enc.read_text(encoding="utf-8").count("typedef int bool;") == 1
-
-
 def test_x265_json11_patch_inserts_cstdint_after_limits(tmp_path: Path):
     target = tmp_path / "source" / "dynamicHDR10" / "json11"
     target.mkdir(parents=True)

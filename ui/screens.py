@@ -10,6 +10,7 @@ from rich.table import Table
 
 from ..components import Component
 from ..config import BuildConfig, SUPPORTED_FFMPEG_VERSIONS
+from ..ffmpeg_policy import FfmpegPolicy
 from ..state import BuildState, ComponentStatus
 from ..system_report import SystemReport
 
@@ -79,6 +80,7 @@ class SystemReportScreen(UIScreen):
         config: BuildConfig,
         state: Optional[BuildState] = None,
         buildable_count: Optional[int] = None,
+        ffmpeg_policy: Optional[FfmpegPolicy] = None,
     ) -> str:
         """Show system report screen.
 
@@ -87,6 +89,7 @@ class SystemReportScreen(UIScreen):
             config: Build configuration.
             state: Previous build state.
             buildable_count: Number of buildable components.
+            ffmpeg_policy: FFmpeg policy decision for the current configuration.
 
         Returns:
             User action: "build", "resume", "config", "cleanup", "info", or "exit".
@@ -200,6 +203,15 @@ class SystemReportScreen(UIScreen):
         config_table.add_column("Property", style="cyan")
         config_table.add_column("Value")
         config_table.add_row("FFmpeg Version", config.ffmpeg_version)
+        if ffmpeg_policy is not None:
+            policy_summary = (
+                "allowed"
+                if ffmpeg_policy.selected_version_allowed
+                else f"blocked: {ffmpeg_policy.blocked_reason}"
+            )
+            config_table.add_row("FFmpeg Policy", policy_summary)
+            if ffmpeg_policy.notes:
+                config_table.add_row("Policy Notes", " ".join(ffmpeg_policy.notes))
         config_table.add_row("GPL Enabled", "Yes" if config.gpl_enabled else "No")
         config_table.add_row("Make Release", "Yes" if config.make_release else "No")
         config_table.add_row("Native Build", "Yes" if config.native_build else "No")
@@ -384,11 +396,14 @@ class InfoScreen(UIScreen):
 class ConfigScreen(UIScreen):
     """Configuration edit screen."""
 
-    def show(self, config: BuildConfig) -> BuildConfig:
+    def show(
+        self, config: BuildConfig, available_ffmpeg_versions: Optional[List[str]] = None
+    ) -> BuildConfig:
         """Show configuration edit screen.
 
         Args:
             config: Current configuration.
+            available_ffmpeg_versions: Optional policy-filtered FFmpeg versions.
 
         Returns:
             Updated configuration.
@@ -397,10 +412,22 @@ class ConfigScreen(UIScreen):
         self.console.print("[bold blue]Edit Build Configuration[/bold blue]")
         self.console.print()
 
+        version_choices = (
+            list(SUPPORTED_FFMPEG_VERSIONS)
+            if available_ffmpeg_versions is None
+            else available_ffmpeg_versions
+        )
+        if not version_choices:
+            raise ValueError("No FFmpeg versions available for the current policy.")
+        version_default = (
+            config.ffmpeg_version
+            if config.ffmpeg_version in version_choices
+            else version_choices[0]
+        )
         config.ffmpeg_version = Prompt.ask(
             "FFmpeg version",
-            choices=list(SUPPORTED_FFMPEG_VERSIONS),
-            default=config.ffmpeg_version,
+            choices=version_choices,
+            default=version_default,
         )
         config.gpl_enabled = Confirm.ask(
             "Enable GPL and non-free codecs?", default=config.gpl_enabled

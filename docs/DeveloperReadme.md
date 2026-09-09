@@ -124,6 +124,14 @@ completed profile and validation results under `Unreleased` in `docs/CHANGELOG.m
 Run tests through the project virtual environment and commit each discrete version
 profile step atomically after its focused validation.
 
+Version availability is policy-gated at runtime by detected toolchain:
+
+- FFmpeg 8.1 is blocked when system GCC > 13 or system Clang > 25.
+- Linux GCC15+ policy allows only FFmpeg 9.0.
+- macOS allows FFmpeg 8.1 only with configured and available `macports-clang-17`.
+- CUDA keeps its own host-compiler compatibility path via `nvcc -ccbin` and does not
+  re-enable blocked FFmpeg 8.1 builds.
+
 Existing configurations without an `ffmpeg_version` field retain the `8.1` default.
 Set `ffmpeg_version: "9.0"` explicitly to select the FFmpeg 9.0 source profile.
 

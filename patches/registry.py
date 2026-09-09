@@ -6,12 +6,6 @@ from pathlib import Path
 from typing import List, Optional
 
 from .base import PatchStrategy, PatchTarget, SourcePatch
-from .c23_fixes import (
-    GETTEXT_GNULIB_STDLIB_H_PATCHES,
-    GETTEXT_GNULIB_WCHAR_H_PATCHES,
-    OPENSSL_C11_PATCH,
-    XVIDCORE_BOOL_PATCH,
-)
 from .cxx_headers import X265_JSON11_PATCH
 from .darwin_patches import LIBJXL_REALPATH_PATCH, LIBVORBIS_CPUSUBTYPE_PATCH
 from .ffmpeg_patches import FFMPEG_9_VULKAN_PATCH
@@ -23,14 +17,10 @@ class PatchRegistry:
     def __init__(self) -> None:
         self._patches: List[SourcePatch] = []
         for patch in (
-            XVIDCORE_BOOL_PATCH,
-            OPENSSL_C11_PATCH,
             X265_JSON11_PATCH,
             LIBJXL_REALPATH_PATCH,
             LIBVORBIS_CPUSUBTYPE_PATCH,
             FFMPEG_9_VULKAN_PATCH,
-            *GETTEXT_GNULIB_WCHAR_H_PATCHES,
-            *GETTEXT_GNULIB_STDLIB_H_PATCHES,
         ):
             self.register(patch)
 
