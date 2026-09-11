@@ -729,9 +729,18 @@
     '12.2.72.0':
       sha256: c295a2ba8a06434d4bdc5c2208f8a825285210d71d91d572329b2c51fd0d4d03
 - name: libvmaf
-  sha256: a28f93f3b4fa65601be324587072e32a6a704a304ba7b1aec9b70b3f709bc1dc
-  version: 3.2.0
-  url: https://github.com/Netflix/vmaf/archive/refs/tags/v{version}.tar.gz
+  sha256: 52a3e53bc5acf6c90a74cba4a6ede40264b46653e1c6cb060361e9600a050dee
+  version: 3.2.0-8fc71e30
+  # Vendored from a post-v3.2.0 commit (8fc71e30), not an official release:
+  # v3.2.0 (and 3.0.0, previously also vendored here) lack a fix for an
+  # uncontrolled-memory-growth bug in libvmaf's thread pool
+  # (libvmaf/src/thread_pool.c: vmaf_thread_pool_enqueue() had no queue-depth
+  # cap, so decoded frames queue up unboundedly faster than feature-extractor
+  # worker threads can drain them). Upstream fix: "libvmaf/thread_pool: fix
+  # thread pool queue depth to restore backpressure" (Netflix/vmaf@8fc71e30).
+  # No tagged release contains it yet, so the archive is built directly from
+  # that commit via `git archive` rather than downloaded from a release tag.
+  url: https://github.com/Netflix/vmaf/archive/8fc71e3006f0b21e8e31d6e5d1b904332149ad9e.tar.gz
   category: other_lib
   build_system: custom
   requires_tools:
