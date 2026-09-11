@@ -690,6 +690,44 @@
   category: other_lib
   build_system: headers_only
   ffmpeg_configure_flag: --enable-vapoursynth
+- name: nv-codec
+  # Pinned to 13.0.19.1 (not the newer 13.1.x) because FFmpeg 8.1's nvenc.c/nvenc.h
+  # were written against NVENC SDK 13.0 feature checks (nvenc.h:104). SDK 13.1
+  # changed NV_ENC_CLOCK_TIMESTAMP_SET (split countingType into
+  # countingTypeLSB/countingTypeMSB), which breaks the build. 13.0.19.1 is a
+  # same-SDK patch release (nvEncodeAPI.h is byte-for-byte identical to
+  # 13.0.19.0) that additionally backports the CUDA driver API functions
+  # (cuMemHostAlloc, cuMemFreeHost, cuMemFreeAsync, cuCtxGetStreamPriorityRange,
+  # cuStreamCreateWithPriority, cuCtxSynchronize -- commit 876af32) that
+  # libvmaf's CUDA feature extractors require but 13.0.19.0 lacks.
+  #
+  # Declared before libvmaf: libvmaf's meson configure (-Denable_cuda=true)
+  # requires ffnvcodec/dynlink_cuda.h to already be installed in the
+  # workspace, so nv-codec-headers must build first (ComponentRegistry
+  # preserves this declaration order as the build order).
+  #
+  # `versions` also declares 12.2.72.0 as a fallback: `platform_detect.py`
+  # queries the installed NVIDIA driver's max supported NVENC API version at
+  # runtime (`NvEncodeAPIGetMaxSupportedVersion`), and
+  # `ComponentRegistry.get_nv_codec_component()` resolves to whichever
+  # declared release is compatible with that driver, falling back to 12.2.72.0
+  # when the driver does not support the 13.x NVENC API.
+  sha256: eab9d02d461035a4baded23d4f2e2834e5b17934820b79cea45baaf0c85383eb
+  version: 13.0.19.1
+  url: https://github.com/FFmpeg/nv-codec-headers/releases/download/n{version}/nv-codec-headers-{version}.tar.gz
+  category: hw_accel
+  build_system: make_only
+  build_args:
+  - PREFIX={workspace}
+  install_args:
+  - PREFIX={workspace}
+  linux_only: true
+  windows_ucrt64_supported: true
+  versions:
+    '13.0.19.1':
+      sha256: eab9d02d461035a4baded23d4f2e2834e5b17934820b79cea45baaf0c85383eb
+    '12.2.72.0':
+      sha256: c295a2ba8a06434d4bdc5c2208f8a825285210d71d91d572329b2c51fd0d4d03
 - name: libvmaf
   sha256: a28f93f3b4fa65601be324587072e32a6a704a304ba7b1aec9b70b3f709bc1dc
   version: 3.2.0
@@ -777,39 +815,6 @@
   - fast-float
   custom_build_fn: build_libplacebo
   ffmpeg_configure_flag: --enable-libplacebo
-- name: nv-codec
-  # Pinned to 13.0.19.1 (not the newer 13.1.x) because FFmpeg 8.1's nvenc.c/nvenc.h
-  # were written against NVENC SDK 13.0 feature checks (nvenc.h:104). SDK 13.1
-  # changed NV_ENC_CLOCK_TIMESTAMP_SET (split countingType into
-  # countingTypeLSB/countingTypeMSB), which breaks the build. 13.0.19.1 is a
-  # same-SDK patch release (nvEncodeAPI.h is byte-for-byte identical to
-  # 13.0.19.0) that additionally backports the CUDA driver API functions
-  # (cuMemHostAlloc, cuMemFreeHost, cuMemFreeAsync, cuCtxGetStreamPriorityRange,
-  # cuStreamCreateWithPriority, cuCtxSynchronize -- commit 876af32) that
-  # libvmaf's CUDA feature extractors require but 13.0.19.0 lacks.
-  #
-  # `versions` also declares 12.2.72.0 as a fallback: `platform_detect.py`
-  # queries the installed NVIDIA driver's max supported NVENC API version at
-  # runtime (`NvEncodeAPIGetMaxSupportedVersion`), and
-  # `ComponentRegistry.get_nv_codec_component()` resolves to whichever
-  # declared release is compatible with that driver, falling back to 12.2.72.0
-  # when the driver does not support the 13.x NVENC API.
-  sha256: eab9d02d461035a4baded23d4f2e2834e5b17934820b79cea45baaf0c85383eb
-  version: 13.0.19.1
-  url: https://github.com/FFmpeg/nv-codec-headers/releases/download/n{version}/nv-codec-headers-{version}.tar.gz
-  category: hw_accel
-  build_system: make_only
-  build_args:
-  - PREFIX={workspace}
-  install_args:
-  - PREFIX={workspace}
-  linux_only: true
-  windows_ucrt64_supported: true
-  versions:
-    '13.0.19.1':
-      sha256: eab9d02d461035a4baded23d4f2e2834e5b17934820b79cea45baaf0c85383eb
-    '12.2.72.0':
-      sha256: c295a2ba8a06434d4bdc5c2208f8a825285210d71d91d572329b2c51fd0d4d03
 - name: amf
   sha256: 8a70b6dc85261e6e6e57769bd81ac1e09c0a4c96bbd5e358ffbc2dee51e8e50a
   version: 1.5.2

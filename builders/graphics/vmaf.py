@@ -12,6 +12,26 @@ if TYPE_CHECKING:
     from ...components import Component
 
 
+def _link_nv_codec_headers_into_source(builder: FFmpegBuilder, libvmaf_dir: Path) -> None:
+    """Expose ffnvcodec headers where libvmaf's nvcc custom_target expects them.
+
+    libvmaf's src/meson.build compiles device code (.fatbin) via a
+    custom_target whose command is a literal argv list with a hardcoded
+    "-I ../include" (relative to libvmaf/build); it does not inherit CFLAGS,
+    so our workspace's -I<workspace>/include (which satisfies meson's own
+    cc.has_header() probe) never reaches nvcc for that step. Upstream expects
+    a git submodule checkout at libvmaf/include/ffnvcodec; a source tarball
+    build (as used here) has no submodule, so symlink our just-installed
+    headers into that expected location instead.
+    """
+    dest = libvmaf_dir / "include" / "ffnvcodec"
+    src = builder.workspace / "include" / "ffnvcodec"
+    if dest.exists() or dest.is_symlink():
+        return
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.symlink_to(src, target_is_directory=True)
+
+
 def build_libvmaf(builder: FFmpegBuilder, component: Component, source_dir: Path) -> None:
     """Build libvmaf."""
     env = builder.get_build_env(component)
@@ -62,6 +82,8 @@ def build_libvmaf(builder: FFmpegBuilder, component: Component, source_dir: Path
 
         if nvcc_tokens:
             env["NVCC_PREPEND_FLAGS"] = " ".join(nvcc_tokens).strip()
+
+        _link_nv_codec_headers_into_source(builder, libvmaf_dir)
 
     meson_args = [
         "meson",

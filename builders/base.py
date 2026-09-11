@@ -140,6 +140,22 @@ def build_cmake(context: ComponentBuildContext, component: "Component", source_d
         arg.replace("{workspace}", context.builder._ws_str()) for arg in component.configure_args
     ]
 
+    if component.name == "opencl-icd-loader":
+        # OpenCL-ICD-Loader's CMakeLists.txt adds its test/ subdirectory
+        # whenever built as the top-level project (CMAKE_PROJECT_NAME ==
+        # PROJECT_NAME, always true for our standalone build) regardless of
+        # its own OPENCL_ICD_LOADER_BUILD_TESTING option, because that
+        # option is OR'd with the top-level-project check; the include(CTest)
+        # call it makes defaults BUILD_TESTING to ON, so the guard's AND
+        # BUILD_TESTING clause doesn't help either. Its test targets also
+        # require PIC static libraries (they link libOpenCL.a into shared
+        # test modules) which this project's static-only build doesn't
+        # provide, and some need GL/EGL headers not present in a headless
+        # build environment. We only need the OpenCL library itself, not
+        # its test suite, so disable CTest's BUILD_TESTING outright to skip
+        # that subdirectory.
+        cmake_args = [*cmake_args, "-DBUILD_TESTING=OFF"]
+
     # Honour config.openmp: replace WITH_OPENMP:bool=off → on when
     # OpenMP is enabled (e.g. soxr exposes this CMake option).
     if context.builder.config.openmp:
@@ -148,6 +164,27 @@ def build_cmake(context: ComponentBuildContext, component: "Component", source_d
         ]
 
     env = context.builder.get_build_env(component)
+
+    if component.name == "opencl-icd-loader":
+        # The project's global CFLAGS include "-I<cuda>/include" so
+        # CUDA-aware components (nvenc, libvmaf's CUDA path, ...) can find
+        # cuda_runtime.h. The CUDA SDK also ships its own bundled, older
+        # CL/cl.h under that same include dir. Because CMake's imported
+        # OpenCLHeaders target adds our freshly-built opencl-headers as an
+        # -isystem path (deduplicated against the plain -I<workspace>/include
+        # our global CFLAGS also add), that -isystem entry loses its
+        # earlier position and ends up searched after all plain -I dirs,
+        # so the stale CUDA-bundled cl.h/cl_version.h (older
+        # CL_TARGET_OPENCL_VERSION default, missing newer macros) shadows
+        # our opencl-headers install. This component doesn't use CUDA at
+        # all, so simply drop the CUDA include path for its build.
+        cuda_path = context.builder.platform_detector.platform_info.cuda_path
+        if cuda_path:
+            cuda_home = Path(cuda_path).parent.parent
+            cuda_include_flag = f"-I{cuda_home}/include"
+            for key in ("CFLAGS", "CXXFLAGS"):
+                if key in env:
+                    env[key] = context.builder._remove_compiler_flag(env[key], cuda_include_flag)
 
     if context.builder._is_windows_ucrt64_backend():
         # CMake calls pkg-config.EXE directly; needs Windows-style paths.
