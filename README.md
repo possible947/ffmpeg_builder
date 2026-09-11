@@ -1,4 +1,4 @@
-# FFmpeg Builder 2.0 Beta
+# FFmpeg Builder 2.0
 
 Interactive Python-based build system for FFmpeg 8.1 (default) and 9.0 on macOS, Linux, and **Windows 11 + MSYS2 UCRT64**.
 
@@ -6,7 +6,7 @@ FFmpeg Builder replaces the traditional bash `build-ffmpeg` script with a modern
 
 ## Release Status
 
-Version `2.0b0` is the FFmpeg 9 integration beta. The macOS FFmpeg 9.0 build using the default non-GPL configuration completed all 49 selected components: 37 built from source and 12 system-provided, with no failures or skips. The generated `ffmpeg`, `ffprobe`, and `ffplay` binaries report FFmpeg 9.0. Linux and Windows MSYS2 UCRT64 validation remain pending before a stable 2.0 release.
+Version `2.0.0` is a stable release. FFmpeg 9 integration is complete and validated on all three supported platforms: macOS (default non-GPL configuration, all 49 selected components: 37 built from source, 12 system-provided, no failures or skips), Windows 11 + MSYS2 UCRT64, and Linux (Fedora 44, GCC 16.2.1, full HW-acceleration stack including CUDA/Vulkan/OpenCL). The `libvmaf` uncontrolled-memory-growth issue that previously affected GCC 15/16 hosts (see "Verified Environments" / Troubleshooting) has been root-caused and fixed — see `docs/DeveloperReadme.md` for the investigation writeup.
 
 ## Features
 
@@ -638,6 +638,10 @@ The project's default `-std=c11` CFLAGS leave `__USE_MISC` unset under glibc, br
 ### libvmaf CUDA path fails with missing `ffnvcodec` headers or `CudaFunctions has no member`
 
 This project pins `nv-codec-headers` to the oldest release compatible with FFmpeg 8.1's NVENC support, which can be too old for libvmaf's CUDA feature extractors. The builder now builds `nv-codec-headers` ahead of `libvmaf` when needed, defaults to a patch release (`13.0.19.1`) that adds the required CUDA driver symbols without breaking FFmpeg 8.1 NVENC compatibility, falls back to CPU-only `libvmaf` if an incompatible version is ever selected, and symlinks the headers into libvmaf's expected include path for its `.fatbin` build step. See `docs/DeveloperReadme.md` → "libvmaf + nv-codec-headers CUDA compatibility" for details.
+
+### (Resolved) libvmaf uncontrolled memory growth on GCC 15/16
+
+A `libvmaf` binary built with GCC 16 (and, provisionally, GCC 15) previously exhibited uncontrolled memory growth at runtime; GCC 12/13 (Linux) and Clang 17 (macOS) builds of the same `libvmaf` source were unaffected. Root cause: an upstream `libvmaf` bug, not a GCC-16-specific defect — `libvmaf`'s internal thread pool (`libvmaf/src/thread_pool.c`) had no queue-depth cap, so decoded frames could queue up unboundedly faster than feature-extractor worker threads drained them; each queued job pins full decoded picture buffers. This was fixed upstream (Netflix/vmaf commit `8fc71e30`, "fix thread pool queue depth to restore backpressure") after the `v3.2.0` tag, with no tagged release containing it yet. This project now vendors `libvmaf` built directly from that commit (`third_party/sources/vmaf-3.2.0-8fc71e30.tar.gz`, `components.yaml`'s `libvmaf` entry) instead of the `v3.2.0`/`v3.0.0` release tarballs. Verified: real end-to-end VMAF runs (`ffmpeg`/`libvmaf` filter, 4K source, GCC 16) now hold flat, bounded memory (RSS plateaus rather than growing) for the full duration of a run that previously grew ~1.2 GB/s until OOM. See `docs/DeveloperReadme.md` → "Known issue: libvmaf uncontrolled memory growth on GCC 16" for the full investigation and fix writeup.
 
 ### `opencl-icd-loader` build fails to compile
 

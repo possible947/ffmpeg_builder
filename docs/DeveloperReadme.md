@@ -4,7 +4,7 @@ This document describes the internal architecture, module responsibilities, data
 
 ## Release Status
 
-The current package version is `2.0b0` (FFmpeg 9 integration beta). macOS validation completed with FFmpeg 9.0 and the default non-GPL configuration: all 49 selected components completed (37 source components and 12 system components), with no failures or skips. The generated `ffmpeg`, `ffprobe`, and `ffplay` binaries report FFmpeg 9.0. Linux and Windows MSYS2 UCRT64 require separate validation before the stable 2.0 release.
+The current package version is `2.0.0` (stable release). FFmpeg 9 integration is complete and validated on macOS, Linux, and Windows MSYS2 UCRT64. macOS validation completed with FFmpeg 9.0 and the default non-GPL configuration: all 49 selected components completed (37 source components and 12 system components), with no failures or skips. The generated `ffmpeg`, `ffprobe`, and `ffplay` binaries report FFmpeg 9.0. Linux (Fedora 44, GCC 16.2.1) validation additionally root-caused and fixed the `libvmaf` uncontrolled-memory-growth issue — see "Known issue: libvmaf uncontrolled memory growth on GCC 16" below.
 
 ## Architecture Overview
 
@@ -686,9 +686,75 @@ against the actual `vmaf-3.2.0.tar.gz` release tarball. The resulting
 final FFmpeg binary's `-filters` output lists both `libvmaf` and
 `libvmaf_cuda`.
 
+### Known issue: libvmaf uncontrolled memory growth on GCC 16 (RESOLVED, 2026-09-11)
+
+**Status**: resolved. Root-caused and fixed by vendoring an upstream patch.
+
+A `libvmaf` 3.2.0 binary built with **GCC 16** (Fedora 44) showed uncontrolled
+memory growth at runtime. Cross-toolchain comparison at the time:
+
+| Toolchain | Environment | Reproduces? |
+|---|---|---|
+| GCC 16 | Fedora 44 | Yes |
+| GCC 15 (presumed, same modern-toolchain family; not independently confirmed) | — | Presumed yes |
+| GCC 12/13 | Ubuntu 24.04.4 | No |
+| Clang 17 | macOS | No |
+
+The GCC-16-only reproduction initially suggested a toolchain-specific
+codegen defect. Reproducing the leak in a `libvmaf_debug_build`
+(`--buildtype=debug -Doptimization=0`, added to `build_libvmaf()` in
+`builders/graphics/vmaf.py` for this investigation) ruled out an
+optimization artifact: the leak was identical with `-O3` and `-O0`, pointing
+at a genuine logic bug rather than something GCC's optimizer introduced.
+
+**Root cause (found by inspecting the upstream `Netflix/vmaf` git history
+directly)**: `libvmaf`'s internal thread pool
+(`libvmaf/src/thread_pool.c::vmaf_thread_pool_enqueue()`) had **no queue-depth
+cap** in the `v3.2.0` release (and `v3.0.0`, also previously vendored here).
+Each queued job (`libvmaf/src/libvmaf.c::threaded_read_pictures_batch()`)
+pins full decoded `ref`/`dist`/`prev_ref`/`prev_prev_ref` picture buffers via
+`vmaf_picture_ref()` until a worker thread drains it. With no bound on queue
+depth, a producer (frame decode/filter pipeline) that outruns the
+feature-extractor worker threads can queue unboundedly many frames, each
+retaining tens of MB (4K YUV) — this is a genuine, timing-dependent design
+bug, not a GCC-only defect. GCC 16 (vs. GCC 12/13/Clang 17) most likely just
+produces a decode/filter pipeline fast enough relative to feature-extraction
+to expose the unbounded queue growth consistently, while other toolchains'
+relative producer/consumer speeds happened to keep the queue shallow enough
+not to matter in practice.
+
+**Upstream fix**: Netflix/vmaf commit `8fc71e30` ("libvmaf/thread_pool: fix
+thread pool queue depth to restore backpressure", also on branch
+`thread_pool_backpressure` as `cff37b57`) adds a `queue.depth` counter and a
+`not_full` condition variable, blocking `vmaf_thread_pool_enqueue()` once
+`depth >= n_threads`. This commit lands 13 commits after the `v3.2.0` tag;
+no tagged release contains it yet.
+
+**Fix applied in this project**: `components.yaml`'s `libvmaf` entry now
+vendors `libvmaf` built directly from commit `8fc71e30` instead of the
+`v3.2.0`/`v3.0.0` release tarballs — archived as
+`third_party/sources/vmaf-3.2.0-8fc71e30.tar.gz` (`version: 3.2.0-8fc71e30`),
+generated via `git archive --prefix=vmaf-3.2.0-8fc71e30/ 8fc71e30` from a
+clone of the upstream repository, matching the layout the extractor expects
+(single top-level directory, stripped by the default
+`archive_strip_components: 1`). `libvmaf_debug_build` was reverted to
+`false` (normal optimized `--buildtype=release`) once the fix was confirmed
+independent of optimization level.
+
+**Verification**: real end-to-end VMAF computation (`ffmpeg`'s `libvmaf`
+filter, real 4K source pair, GCC 16, both `n_threads=1` and `n_threads=8`)
+now holds flat, bounded RSS (plateaus rather than growing) for the full
+run duration, compared to ~1.2 GB/s unbounded growth with the un-patched
+`v3.2.0` source under identical conditions. A full run now completes and
+reports a VMAF score instead of failing with `Cannot allocate memory`.
+
+No toolchain restriction remains: `libvmaf` is safe to enable
+(`enable_libvmaf: true`) on GCC 15/16 hosts as on GCC 12/13 and Clang.
+
 ## Data Flow
 
 ### Build Process
+
 
 ```
 app.run()

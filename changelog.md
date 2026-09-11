@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## [2.0.0] - 2026-09-11
+
 ### Added
 
 - **Этап 1: Перенос стандартных раннеров систем сборки в `builders/base.py`** — реализации функций `build_autotools`, `build_cmake`, `build_meson`, `build_make_only`, `build_cargo`, `get_rustc_version`, `install_headers_only` и `_rmtree` перенесены из [builder.py](builder.py) в [builders/base.py](builders/base.py). В классе `FFmpegBuilder` оставлены методы-делегаты для сохранения 100% обратной совместимости.
@@ -32,7 +34,17 @@
 - `pytest tests/test_patches.py tests/test_builder_split.py -q` passes with 23 tests.
 - `pytest tests/ -q` passes with 186 tests after adding gettext C23 patches.
 
+### Fixed — неконтролируемый рост памяти в libvmaf на GCC 15/16 (2026-09-11)
+
+- **Восстановлены регрессии в порядке сборки `nv-codec`/`libvmaf` и в фиксе `.fatbin`-путей** — коммит `2420b98` ранее удалил фикс порядка сборки `nv-codec` перед `libvmaf`, симлинк заголовков `ffnvcodec` для CUDA-шага `.fatbin` в `libvmaf`, а также `-DBUILD_TESTING=OFF`/снятие CUDA-include-пути для `opencl-icd-loader` (все были гейтированы на `LinuxGcc15Platform`). Восстановлено: `components.yaml` объявляет `nv-codec` перед `libvmaf`; `builders/graphics/vmaf.py` восстанавливает симлинк `<workspace>/include/ffnvcodec` → `<libvmaf>/include/ffnvcodec` (теперь безусловно, без привязки к имени класса платформы, чтобы регрессия не повторилась); `builders/base.py`'s `build_cmake()` восстанавливает оба фикса для `opencl-icd-loader`.
+- **Настоящая причина утечки памяти**: не специфична для GCC 16. У `libvmaf`'а не было ограничения глубины очереди потокового пула (`libvmaf/src/thread_pool.c::vmaf_thread_pool_enqueue()`) в релизах `v3.2.0`/`v3.0.0`, которые использовал проект — декодированные кадры (каждый удерживает полные 4K-буферы) могли накапливаться в очереди быстрее, чем воркер-потоки успевали их разбирать. Подтверждено на сборке `libvmaf_debug_build` (`-O0`) — утечка идентична, значит дело не в оптимизациях компилятора. Официально исправлено апстримом в коммите Netflix/vmaf `8fc71e30` ("fix thread pool queue depth to restore backpressure"), уже после тега `v3.2.0`, отдельного релиза с фиксом пока нет.
+- **`libvmaf` теперь собирается из патченого коммита** — `components.yaml`'s `libvmaf` указывает на `version: 3.2.0-8fc71e30`, архив `third_party/sources/vmaf-3.2.0-8fc71e30.tar.gz` (собран через `git archive` из клона `Netflix/vmaf` на коммите `8fc71e30`), заменяет ранее использовавшиеся `vmaf-3.0.0.tar.gz`/`vmaf-3.2.0.tar.gz`.
+- **Опция конфигурации `libvmaf_debug_build`** (`config.py`, `builders/graphics/vmaf.py`, `ui/screens.py`) — добавлена в ходе расследования для сборки `libvmaf` с `--buildtype=debug -Doptimization=0`; оставлена как постоянная опция, по умолчанию `false`.
+
+**Проверено**: реальные end-to-end прогоны VMAF (фильтр `libvmaf` в `ffmpeg`, реальная пара 4K-файлов, GCC 16, `n_threads=1` и `n_threads=8`) теперь держат стабильное ограниченное потребление RSS вместо роста ~1.2 ГБ/с до OOM; прогон завершается с готовым VMAF score. Подробности — в `docs/DeveloperReadme.md` → "Known issue: libvmaf uncontrolled memory growth on GCC 16 (RESOLVED)". Ограничение на использование `libvmaf` на GCC 15/16 снято.
+
 ## 2026-09-07 — Intel QSV: исправлен порядок детектирования VAAPI/QSV
+
 
 На Fedora Linux 44 с Intel Arc A750 (iHD-драйвер, VAAPI работает) сборка FFmpeg 8.1 не включала поддержку Intel QSV, хотя оборудование и драйверы были в порядке.
 

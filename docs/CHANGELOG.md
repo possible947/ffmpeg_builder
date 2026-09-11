@@ -4,6 +4,8 @@ All notable changes to the FFmpeg Builder project.
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-09-11
+
 ### Added
 
 - **Phase 1 platform strategy abstraction** — introduced the `platforms/` package with `BasePlatformStrategy` and `PlatformContext`, establishing the foundational abstraction layer for platform- and toolchain-specific behavior.
@@ -28,7 +30,17 @@ All notable changes to the FFmpeg Builder project.
 - `pytest tests/test_platform_strategy.py -q` passes with the focused Phase 1/2 regression checks.
 - `pytest tests/test_patches.py tests/test_builder_split.py -q` passes with 23 tests.
 
+### Fixed — libvmaf uncontrolled memory growth on GCC 15/16 (2026-09-11)
+
+- **`nv-codec`/`libvmaf` build-order and `.fatbin` include-path regressions restored** — a prior cleanup commit (`2420b98`) removed the `nv-codec`-before-`libvmaf` build-order fix, the `ffnvcodec` header symlink `libvmaf`'s CUDA `.fatbin` build step needs, and `opencl-icd-loader`'s `-DBUILD_TESTING=OFF`/CUDA-include-path fixes, all previously gated to `LinuxGcc15Platform`. Restored: `components.yaml` now declares `nv-codec` before `libvmaf` (build order is declaration order); `builders/graphics/vmaf.py` re-adds the `<workspace>/include/ffnvcodec` → `<libvmaf>/include/ffnvcodec` symlink (unconditionally, not gated to a platform-strategy class name, to avoid this regressing again); `builders/base.py`'s `build_cmake()` re-adds `-DBUILD_TESTING=OFF` and CUDA-include stripping for `opencl-icd-loader`.
+- **Root cause of the actual memory-growth bug**: not GCC-16-specific after all. `libvmaf`'s internal thread pool (`libvmaf/src/thread_pool.c::vmaf_thread_pool_enqueue()`) had no queue-depth cap in the `v3.2.0`/`v3.0.0` releases this project vendored, so decoded-frame jobs (each pinning full 4K picture buffers) could queue up unboundedly faster than feature-extractor worker threads drained them. Confirmed reproducible with `libvmaf_debug_build` (`--buildtype=debug -Doptimization=0`), ruling out a compiler-optimization artifact. Fixed upstream in Netflix/vmaf commit `8fc71e30` ("fix thread pool queue depth to restore backpressure"), landed after `v3.2.0`, no tagged release yet.
+- **`libvmaf` now vendored from the patched commit** — `components.yaml`'s `libvmaf` entry points at `version: 3.2.0-8fc71e30`, sourced from `third_party/sources/vmaf-3.2.0-8fc71e30.tar.gz` (built via `git archive` from a clone of `Netflix/vmaf` at commit `8fc71e30`), replacing the previously vendored `vmaf-3.0.0.tar.gz`/`vmaf-3.2.0.tar.gz`.
+- **`libvmaf_debug_build` config option** (`config.py`, `builders/graphics/vmaf.py`, `ui/screens.py`) — added during the investigation to build `libvmaf` with `--buildtype=debug -Doptimization=0` for memory-debugging tools; kept as a permanent option, defaults to `false`.
+
+**Verification**: real end-to-end VMAF runs (`ffmpeg`'s `libvmaf` filter, real 4K source pair, GCC 16, `n_threads=1` and `n_threads=8`) hold flat, bounded RSS instead of growing ~1.2 GB/s until OOM; a full run completes and reports a VMAF score. See `docs/DeveloperReadme.md` → "Known issue: libvmaf uncontrolled memory growth on GCC 16 (RESOLVED)" for the full writeup. `libvmaf` is no longer restricted on GCC 15/16 hosts.
+
 ### Fixed — Intel QSV detection reported unavailable even with a working iHD/VAAPI driver (2026-09-07)
+
 
 - **`PlatformInfo.qsv_available` was always `False` on Linux, even with VAAPI and an Intel GPU present** — `PlatformDetector.detect_all()` (`platform_detect.py`) called `self.platform_info.qsv_available = self._check_qsv()` *before* `self.platform_info.vaapi_available = self._check_vaapi()`. `_check_qsv()`'s Linux branch requires `platform_info.vaapi_available` to be `True` before it will even probe `vainfo`/PCI IDs for an Intel GPU, but at the point it ran, `vaapi_available` still held the `PlatformInfo` dataclass default of `False`, so the VAAPI gate short-circuited `_check_qsv()` to `False` unconditionally, regardless of actual hardware. Downstream, `ComponentRegistry` (`components.py`) skips building the `onevpl` component whenever `qsv_available` is `False`, so `--enable-libvpl` was never passed to FFmpeg's configure and QSV encoders were silently absent from the resulting binary. Fixed by moving the `vaapi_available` detection call ahead of the CUDA/QSV detection block in `detect_all()`, so `_check_qsv()` observes the real VAAPI result. Verified on Fedora 44 with an Intel Arc A750 (iHD driver, VAAPI detected via `pkg-config libva`): `qsv_available` now correctly reports `True`, `onevpl` builds, and the resulting FFmpeg 8.1 binary's configure line includes `--enable-libvpl` with `h264_qsv`/`hevc_qsv`/`av1_qsv`/`vp9_qsv`/`mjpeg_qsv`/`mpeg2_qsv` registered in `-encoders`/`-decoders` and `qsv` listed in `-hwaccels`. Full suite (178 passed, 1 skipped) and `black --check .` pass.
 
