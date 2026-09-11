@@ -85,17 +85,25 @@ def build_libvmaf(builder: FFmpegBuilder, component: Component, source_dir: Path
 
         _link_nv_codec_headers_into_source(builder, libvmaf_dir)
 
+    debug_build = builder.config.libvmaf_debug_build
     meson_args = [
         "meson",
         "setup",
         "build",
         f"--prefix={builder._ws_str()}",
-        "--buildtype=release",
+        "--buildtype=debug" if debug_build else "--buildtype=release",
         "--default-library=static",
         f"--libdir={builder._ws_str()}/lib",
     ]
+    if debug_build:
+        # --buildtype=debug still defaults to -Og; force -O0 explicitly so no
+        # optimization masks or reorders the memory behavior under investigation.
+        meson_args.append("-Doptimization=0")
     if libvmaf_cuda_enabled:
         meson_args.append("-Denable_cuda=true")
+
+    if builder.on_log is not None and debug_build:
+        builder.on_log("libvmaf debug build enabled: -Doptimization=0, no NDEBUG")
 
     builder._run_step(
         component,

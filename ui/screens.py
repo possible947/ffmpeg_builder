@@ -219,6 +219,7 @@ class SystemReportScreen(UIScreen):
         config_table.add_row("Full Static", "Yes" if config.full_static else "No")
         config_table.add_row("libvmaf", "Yes" if config.enable_libvmaf else "No")
         config_table.add_row("libvmaf CUDA", "Yes" if config.enable_libvmaf_cuda else "No")
+        config_table.add_row("libvmaf Debug Build", "Yes" if config.libvmaf_debug_build else "No")
         config_table.add_row("libplacebo", "Yes")
         config_table.add_row(
             "libplacebo Vulkan", "Yes" if config.enable_libplacebo_vulkan else "No"
@@ -447,6 +448,10 @@ class ConfigScreen(UIScreen):
         config.enable_libvmaf_cuda = Confirm.ask(
             "Enable CUDA path for libvmaf when supported?",
             default=config.enable_libvmaf_cuda,
+        )
+        config.libvmaf_debug_build = Confirm.ask(
+            "Build libvmaf without optimizations (meson debug buildtype, for memory debugging)?",
+            default=config.libvmaf_debug_build,
         )
         config.enable_libplacebo_vulkan = Confirm.ask(
             "Enable libplacebo Vulkan GPU processing (requires Vulkan; disabled on full_static Linux)?",
