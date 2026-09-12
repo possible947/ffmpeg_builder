@@ -425,6 +425,19 @@ def install_headers_only(
                 dest_item = dest / item.name
                 shutil.copy2(item, dest_item)
 
+    elif component.name == "vulkan-headers":
+        dest = context.builder.workspace / "include"
+        src = source_dir / "include"
+        if src.exists():
+            dest.mkdir(parents=True, exist_ok=True)
+            for dirname in ("vulkan", "vk_video"):
+                src_item = src / dirname
+                if src_item.exists():
+                    dest_item = dest / dirname
+                    if dest_item.exists():
+                        _rmtree(dest_item)
+                    shutil.copytree(src_item, dest_item)
+
     elif component.name == "amf":
         dest = context.builder.workspace / "include" / "AMF"
         if dest.exists():

@@ -96,6 +96,54 @@ def test_standard_runners_module_exports():
     assert isinstance(CARGO_C_VERSION, str)
 
 
+def test_install_headers_only_copies_vulkan_headers(tmp_path: Path):
+    from ffmpeg_builder.builders.base import ComponentBuildContext, install_headers_only
+
+    builder = _make_libplacebo_builder(tmp_path, platform="darwin")
+    component = Component(
+        name="vulkan-headers",
+        version="1.4.357.0",
+        url="https://example.invalid/vulkan.tar.gz",
+        category=ComponentCategory.HW_ACCEL,
+        build_system=BuildSystem.HEADERS_ONLY,
+    )
+    source_dir = tmp_path / "Vulkan-Headers"
+    vulkan_dir = source_dir / "include" / "vulkan"
+    vk_video_dir = source_dir / "include" / "vk_video"
+    vulkan_dir.mkdir(parents=True)
+    vk_video_dir.mkdir(parents=True)
+    (vulkan_dir / "vulkan.h").write_text("#pragma once\n", encoding="utf-8")
+    (vk_video_dir / "vulkan_video_codecs_common.h").write_text("#pragma once\n", encoding="utf-8")
+
+    install_headers_only(ComponentBuildContext.from_builder(builder), component, source_dir)
+
+    assert (builder.workspace / "include" / "vulkan" / "vulkan.h").is_file()
+    assert (builder.workspace / "include" / "vk_video" / "vulkan_video_codecs_common.h").is_file()
+
+
+def test_build_component_marks_headers_only_completed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    builder = _make_libplacebo_builder(tmp_path, platform="darwin")
+    component = Component(
+        name="vulkan-headers",
+        version="1.4.357.0",
+        url="https://example.invalid/vulkan.tar.gz",
+        category=ComponentCategory.HW_ACCEL,
+        build_system=BuildSystem.HEADERS_ONLY,
+    )
+    source_dir = builder.packages / component.get_target_dir()
+    header_dir = source_dir / "include" / "vulkan"
+    header_dir.mkdir(parents=True)
+    (header_dir / "vulkan.h").write_text("#pragma once\n", encoding="utf-8")
+    monkeypatch.setattr(builder, "_download_and_extract", lambda component: tmp_path / "archive")
+
+    builder.build_component(component)
+
+    state = builder.state_manager.get().components["vulkan-headers"]
+    assert state.status == ComponentStatus.COMPLETED
+
+
 def test_release_bundle_wrapper_creates_manifest(tmp_path: Path):
     class _Result:
         def __init__(self, stdout: str = "", stderr: str = "", success: bool = True):
@@ -682,6 +730,45 @@ def test_build_libplacebo_merges_windows_pkg_config_path_and_patches_glslang(
     assert env["PKG_CONFIG_PATH"].startswith(expected_prefix)
     assert "C:/deps/pkgconfig" in env["PKG_CONFIG_PATH"]
     assert "dirs: vulkan_lib_dirs" in glsl_meson.read_text(encoding="utf-8")
+
+
+def test_build_libplacebo_installs_vulkan_headers_when_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    builder = _make_libplacebo_builder(tmp_path, platform="darwin")
+    builder.config.enable_libplacebo_vulkan = False
+    component = _make_libplacebo_component()
+    source_dir = tmp_path / "src"
+
+    monkeypatch.setattr(
+        FFmpegBuilder,
+        "_prepend_python_module_parent_to_pythonpath",
+        staticmethod(lambda env, module_name: None),
+    )
+
+    class _Result:
+        success = True
+
+    def _execute_with_log(command, component_name, step, cwd, env, timeout=None, stdin=None):
+        return _Result(), tmp_path / f"{component_name}_{step}.log"
+
+    builder.executor.execute_with_log = _execute_with_log
+
+    built = []
+
+    def _build_component(component):
+        built.append(component.name)
+        header = builder.workspace / "include" / "vulkan" / "vulkan.h"
+        header.parent.mkdir(parents=True, exist_ok=True)
+        header.write_text("#pragma once\n", encoding="utf-8")
+
+    monkeypatch.setattr(builder, "build_component", _build_component)
+    monkeypatch.setattr(FFmpegBuilder, "_run_step", lambda *args, **kwargs: None)
+    monkeypatch.setattr(FFmpegBuilder, "_patch_libplacebo_pc", lambda self: None)
+
+    builder.build_libplacebo(component, source_dir)
+
+    assert built == ["vulkan-headers"]
 
 
 def test_build_libplacebo_fails_when_glslang_patch_target_is_missing(

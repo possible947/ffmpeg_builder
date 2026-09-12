@@ -4,6 +4,17 @@ All notable changes to the FFmpeg Builder project.
 
 ## [Unreleased]
 
+### Fixed — macOS libplacebo build failure when Vulkan SDK is absent (2026-09-12)
+
+- **`libplacebo` compile error (`vulkan/vulkan.h file not found`) on macOS** — `libplacebo` 7.360.1 compiles Vulkan stub files (`src/vulkan/stubs.c`) even when built with `-Dvulkan=disabled`, and those stubs include the public Vulkan header `<vulkan/vulkan.h>`. When no system Vulkan SDK or driver was present on macOS, `ComponentRegistry.get_buildable()` previously filtered out `vulkan-headers`, causing `libplacebo`'s `ninja` build step to fail.
+- **`vulkan-headers` eligibility & installation fixed** —
+  - `components.py`: `vulkan-headers` is now kept buildable on all platforms regardless of Vulkan runtime detection (`glslang` remains gated on Vulkan availability).
+  - `components.yaml`: Reclassified `vulkan-headers` from `cmake` to `headers_only` to avoid invoking CMake compiler test programs with incompatible flags.
+  - `builders/base.py`: Extended `install_headers_only()` to copy `vulkan/` and `vk_video/` header directories into `<workspace>/include/`.
+  - `builders/graphics/placebo.py`: Added an on-demand build check for `vulkan-headers` in `build_libplacebo()` when `<workspace>/include/vulkan/vulkan.h` is missing.
+  - `builder.py`: Updated `build_component()` so `headers_only` components mark status as `COMPLETED` upon installation.
+  - `tests/`: Added unit tests verifying `vulkan-headers` eligibility, header-only installation, and on-demand installation from `build_libplacebo()`.
+
 ## [2.0.0] - 2026-09-11
 
 ### Added

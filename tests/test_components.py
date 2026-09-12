@@ -275,6 +275,29 @@ class TestComponentRegistry:
         names = {c.name for c in buildable}
         assert "nv-codec" not in names
 
+    def test_get_buildable_keeps_vulkan_headers_without_vulkan_runtime(self, mock_tools):
+        class NoVulkan:
+            cuda_available = False
+            vulkan_available = False
+            amf_available = False
+            opencl_available = True
+            opencl_runtime_available = True
+            opencl_dev_available = True
+            qsv_available = True
+            is_msys2 = False
+            is_ucrt64 = False
+            build_backend = "darwin-native"
+
+        buildable = self.registry.get_buildable(
+            gpl_enabled=True,
+            platform="darwin",
+            tools=mock_tools,
+            platform_info=NoVulkan(),
+        )
+        names = {c.name for c in buildable}
+        assert "vulkan-headers" in names
+        assert "glslang" not in names
+
     def test_get_buildable_windows_hw_accel_policy(self, mock_platform_info_windows, mock_tools):
         """On Windows MSYS2 UCRT64, only listed HW accel components pass."""
         from ffmpeg_builder.components import WINDOWS_UCRT64_HW_ACCEL_COMPONENTS

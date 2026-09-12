@@ -111,6 +111,14 @@ def build_libplacebo(builder: FFmpegBuilder, component: Component, source_dir: P
             log_file,
         )
 
+    # libplacebo 7.360.1 still compiles Vulkan stubs when Vulkan is disabled,
+    # and those stubs include the public Vulkan header.
+    if not (builder.workspace / "include" / "vulkan" / "vulkan.h").exists():
+        vulkan_headers = builder.registry.get_by_name("vulkan-headers")
+        if vulkan_headers is None:
+            raise BuildError(component.name, "vulkan-headers component is missing")
+        builder.build_component(vulkan_headers)
+
     # Determine whether to enable Vulkan inside libplacebo.
     pi = builder.platform_detector.platform_info
     vulkan_ok = (

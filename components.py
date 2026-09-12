@@ -454,7 +454,7 @@ class ComponentRegistry:
         if platform_info is not None:
             if comp.name == "nv-codec" and not platform_info.cuda_available:
                 return False
-            if comp.name in ("vulkan-headers", "glslang") and not platform_info.vulkan_available:
+            if comp.name == "glslang" and not platform_info.vulkan_available:
                 return False
             if comp.name == "amf" and not platform_info.amf_available:
                 return False

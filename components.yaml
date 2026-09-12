@@ -774,11 +774,8 @@
   version: 1.4.357.0
   url: https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/vulkan-sdk-{version}.tar.gz
   category: hw_accel
-  build_system: cmake
-  configure_args:
-  - -DCMAKE_INSTALL_PREFIX={workspace}
+  build_system: headers_only
   archive_filename: Vulkan-Headers-{version}.tar.gz
-  workdir: build
   ffmpeg_configure_flag: --enable-vulkan
 - name: glslang
   sha256: 01af17195fbeb59e39e31e9506de35bb39dfd35807ea0c9a1a99d7d1183ddd45

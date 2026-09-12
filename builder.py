@@ -888,6 +888,11 @@ class FFmpegBuilder:
             )
             install_headers_only(build_context, component, source_dir)
             self._execute_post_install(component, source_dir)
+            self.state_manager.mark_component_status(
+                component.name,
+                ComponentStatus.COMPLETED,
+                component.version,
+            )
             return
 
         self.state_manager.mark_component_status(
