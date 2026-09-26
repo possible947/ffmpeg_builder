@@ -349,7 +349,7 @@ def build_cargo(context: ComponentBuildContext, component: "Component", source_d
     env = context.builder.get_build_env(component)
     env["RUSTFLAGS"] = "-C target-cpu=native"
 
-    if type(context.platform_strategy).__name__ == "LinuxGcc15Platform" and "CFLAGS" in env:
+    if context.builder.platform == "linux" and "CFLAGS" in env:
         env["CFLAGS"] = env["CFLAGS"].replace("-std=c11", "-std=gnu11")
 
     rustc_version = get_rustc_version(context)
