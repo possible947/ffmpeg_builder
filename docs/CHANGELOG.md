@@ -4,6 +4,13 @@ All notable changes to the FFmpeg Builder project.
 
 ## [Unreleased]
 
+### Added — Isolated Nix build environment for FFmpeg 8.1 on Linux GCC 15+ (2026-09-26)
+
+- **`shell.nix` environment for FFmpeg 8.1 on modern Linux** — Added a standalone `shell.nix` based on `pkgs.gcc13Stdenv` enabling policy-compliant builds of FFmpeg 8.1 on Linux distributions shipping GCC 15+ (such as Fedora 44). Includes full Python 3.12 environment, build toolchains (CMake, Meson, Ninja, NASM, YASM, Rust/Cargo/cargo-c), hardware acceleration headers/libraries (VAAPI, Vulkan, OpenCL, oneVPL), Wayland headers for SDL2, and system compression libraries (`bzip2`, `zlib`, `giflib`).
+- **Nix environment adjustments** — Added `shellHook` handling to unset `AS` (restoring `nasm` assembler detection in `x264`), unset Nix wrapper variables for `pkg-config`, set `NIX_ENFORCE_NO_NATIVE=0` for `-march=native`, and prioritize workspace package paths.
+- **Cargo C11 POSIX compatibility on Linux** — Updated `builders/base.py` to replace `-std=c11` with `-std=gnu11` in `CFLAGS` for all Linux platforms during cargo builds, resolving `pthread_rwlock_t` and `S_IFMT` compilation errors with modern glibc (>= 2.38).
+- **Documentation** — Added guides in `README.md`, `docs/README.md`, and `docs/DeveloperReadme.md` explaining how to build and embed FFmpeg 8.1 in unsupported host environments via Nix.
+
 ### Fixed — macOS libplacebo build failure when Vulkan SDK is absent (2026-09-12)
 
 - **`libplacebo` compile error (`vulkan/vulkan.h file not found`) on macOS** — `libplacebo` 7.360.1 compiles Vulkan stub files (`src/vulkan/stubs.c`) even when built with `-Dvulkan=disabled`, and those stubs include the public Vulkan header `<vulkan/vulkan.h>`. When no system Vulkan SDK or driver was present on macOS, `ComponentRegistry.get_buildable()` previously filtered out `vulkan-headers`, causing `libplacebo`'s `ninja` build step to fail.

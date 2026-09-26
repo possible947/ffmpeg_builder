@@ -751,6 +751,47 @@ reports a VMAF score instead of failing with `Cannot allocate memory`.
 No toolchain restriction remains: `libvmaf` is safe to enable
 (`enable_libvmaf: true`) on GCC 15/16 hosts as on GCC 12/13 and Clang.
 
+### Isolated Nix environment for FFmpeg 8.1 on Linux GCC 15+ (e.g. Fedora 44)
+
+**Problem context**:
+FFmpeg 8.1 enforces strict compiler policy gating (`gcc_major <= 13`, `clang <= 25`), as upstream FFmpeg 8.1 code and several codec components contain source-level incompatibilities with GCC 15+. While FFmpeg 9.0 builds cleanly on modern Linux distributions (such as Fedora 44 with GCC 16.2.1), projects requiring FFmpeg 8.1 for embedded integration or API/ABI stability cannot compile it natively against host compilers.
+
+**Solution**:
+A dedicated `shell.nix` provides an isolated, reproducible development shell based on `pkgs.gcc13Stdenv`. It satisfies all requirements of `ffmpeg_builder` without system modifications or root permissions:
+
+1. **Toolchain & Python Environment**:
+   - Uses `pkgs.gcc13Stdenv` to supply GCC 13.x and matching GNU binutils.
+   - Embeds Python 3.12 with all required libraries (`rich`, `tqdm`, `pyyaml`, `requests`, `jinja2`).
+   - Packages build tools: `cmake`, `ninja`, `meson`, `nasm`, `yasm`, `pkg-config-unwrapped`, `autoconf`, `automake`, `libtool`, `m4`, `gnumake`, `git`, `patchelf`.
+   - Packages Rust toolchain: `rustc`, `cargo`, and `cargo-c` for AV1 encoders (`rav1e`).
+
+2. **Hardware Acceleration & System Headers**:
+   - `libva`, `libva-utils`, `libdrm` (VAAPI / DRM).
+   - `vulkan-headers`, `vulkan-loader`, `vulkan-tools` (Vulkan & libplacebo).
+   - `opencl-headers`, `ocl-icd`, `clinfo` (OpenCL).
+   - `libvpl` (Intel QSV / oneVPL).
+   - `wayland`, `wayland-protocols`, `wayland-scanner`, `libxkbcommon` (Wayland headers for SDL2 / ffplay).
+   - `zlib`, `giflib`, `bzip2` (system and compression libraries required by FreeType2 and others).
+
+3. **Nix-Specific Environment Shims (`shellHook`)**:
+   - `unset AS`: Nixpkgs `stdenv` exports `AS="as"` by default. `x264`'s `./configure` checks `${AS-nasm}`; if `AS` is set, it attempts to use GNU `as` instead of `nasm` and fails on AVX-512 assembly. Unsetting `AS` allows `x264` to find and use `nasm`.
+   - `unset PKG_CONFIG_PATH_FOR_TARGET` and `unset NIX_PKG_CONFIG_WRAPPER_TARGET_*`: Nix's `pkg-config-wrapper` redirects queries to `PKG_CONFIG_PATH_FOR_TARGET` and ignores local paths outside `/nix/store`. Using `pkg-config-unwrapped` and unsetting wrapper variables ensures Meson and Autotools resolve workspace packages (e.g. `workspace/lib/pkgconfig`).
+   - `export NIX_ENFORCE_NO_NATIVE=0`: Disables Nix's default prohibition against `-march=native`, allowing CPU optimizations.
+   - `export PKG_CONFIG_PATH="$PWD/workspace/lib/pkgconfig:$PKG_CONFIG_PATH"`: Ensures workspace-built libraries take priority.
+
+4. **Codebase Adaptation (`builders/base.py`)**:
+   - Modern glibc (>= 2.38) hides POSIX definitions (`pthread_rwlock_t`, `S_IFMT`) when strict `-std=c11` is present in `CFLAGS` for cargo C dependencies (e.g. `libgit2-sys` inside `rav1e`).
+   - `builders/base.py` automatically substitutes `-std=c11` with `-std=gnu11` in `build_cargo()` for all Linux targets.
+
+**Workflow**:
+```bash
+# Launch the isolated environment
+nix-shell
+
+# Run build as usual (output in ./workspace/release)
+python -m ffmpeg_builder
+```
+
 ## Data Flow
 
 ### Build Process

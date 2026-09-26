@@ -34,6 +34,27 @@ Version `2.0.0` is a stable release. FFmpeg 9 integration is complete and valida
 
 When 8.1 is blocked by policy, the start screen shows the reason and the recommended action (switch to FFmpeg 9.0 or install/configure the required compiler).
 
+### Building FFmpeg 8.1 on modern Linux (Fedora 44+, GCC 15+) via Nix
+
+On modern Linux distributions that ship with GCC 15 or newer (such as Fedora 44), building FFmpeg 8.1 directly is restricted by the compiler policy gate (**GCC <= 13**), as upstream FFmpeg 8.1 and several codec components contain source-level incompatibilities with GCC 15/16.
+
+For building and embedding FFmpeg 8.1 into downstream projects without altering the host OS packages or modifying system libraries, a pre-configured `shell.nix` environment is provided:
+
+- **Isolated GCC 13 toolchain**: Uses `pkgs.gcc13Stdenv` to supply GCC 13.x, satisfying FFmpeg 8.1 policy gating.
+- **Pre-configured build dependencies**: Includes Python 3.12 (with `rich`, `tqdm`, `pyyaml`, `requests`, `jinja2`), build tools (`cmake`, `ninja`, `meson`, `nasm`, `yasm`, `pkg-config-unwrapped`, `cargo`, `cargo-c`, `rustc`), and hardware acceleration/multimedia libraries (`libva`, `libdrm`, `vulkan`, `opencl`, `libvpl`, `wayland`, `bzip2`, `zlib`, `giflib`).
+- **Nix wrapper compatibility**: Unsets `AS` (so x264 detects `nasm` instead of GNU `as`), handles un-wrapped `pkg-config` paths, and sets `NIX_ENFORCE_NO_NATIVE=0` for `-march=native` optimizations.
+- **Standalone artifacts**: Build artifacts reside entirely within `./workspace/` and can be embedded directly into other projects without system installation.
+
+**Usage**:
+
+```bash
+# Enter the isolated Nix environment
+nix-shell
+
+# Run the builder as usual
+python -m ffmpeg_builder
+```
+
 ### System
 
 - **Python** >= 3.12 (required for secure `tar` extraction, PEP 706; runs on Python 3.12–3.14)
