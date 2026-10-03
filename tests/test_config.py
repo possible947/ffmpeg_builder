@@ -181,3 +181,30 @@ class TestConfigManager:
         monkeypatch.chdir(tmp_path)
         mgr = ConfigManager()
         assert mgr.config_path == config_module.PROJECT_ROOT / "build_config.yaml"
+
+
+class TestWorkspaceFolderNaming:
+    """Test workspace folder naming and paths per FFmpeg version."""
+
+    @pytest.mark.parametrize(
+        ("version", "expected_dir"),
+        [
+            ("8.1", "workspace_81"),
+            ("9.0", "workspace_90"),
+        ],
+    )
+    def test_get_workspace_dir_name(self, version, expected_dir):
+        assert config_module.get_workspace_dir_name(version) == expected_dir
+
+    @pytest.mark.parametrize(
+        ("version", "expected_dir"),
+        [
+            ("8.1", "workspace_81"),
+            ("9.0", "workspace_90"),
+        ],
+    )
+    def test_build_config_workspace_paths(self, tmp_path, version, expected_dir):
+        cfg = BuildConfig(ffmpeg_version=version)
+        assert cfg.workspace_dir_name == expected_dir
+        assert cfg.get_workspace_path(tmp_path) == tmp_path / expected_dir
+        assert cfg.get_workspace_path() == config_module.PROJECT_ROOT / expected_dir

@@ -589,3 +589,37 @@ class TestBuildOrder:
     def test_build_order_ffmpeg_last(self):
         all_c = self.registry.get_all()
         assert all_c[-1].name == "ffmpeg"
+
+
+class TestLv2StackConfigureFlags:
+    """Ensure LV2 stack components disable tests/docs/benchmarks to prevent host/toolchain conflicts."""
+
+    @pytest.fixture(autouse=True)
+    def _registry(self):
+        self.registry = ComponentRegistry()
+
+    @pytest.mark.parametrize(
+        ("comp_name", "expected_flag"),
+        [
+            ("zix", "-Dtests=disabled"),
+            ("zix", "-Dbenchmarks=disabled"),
+            ("zix", "-Ddocs=disabled"),
+            ("serd", "-Dtests=disabled"),
+            ("serd", "-Ddocs=disabled"),
+            ("serd", "-Dtools=disabled"),
+            ("sord", "-Dtests=disabled"),
+            ("sord", "-Ddocs=disabled"),
+            ("sord", "-Dtools=disabled"),
+            ("sratom", "-Dtests=disabled"),
+            ("sratom", "-Ddocs=disabled"),
+            ("lilv", "-Dtests=disabled"),
+            ("lilv", "-Ddocs=disabled"),
+            ("lilv", "-Dtools=disabled"),
+            ("lv2", "-Dtests=disabled"),
+            ("lv2", "-Ddocs=disabled"),
+        ],
+    )
+    def test_lv2_components_have_required_disabled_flags(self, comp_name, expected_flag):
+        comp = self.registry.get_by_name(comp_name)
+        assert comp is not None
+        assert expected_flag in comp.configure_args

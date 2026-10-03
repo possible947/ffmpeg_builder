@@ -132,7 +132,7 @@ class StateManager:
         Args:
             state_path: Path to state file. If None, uses default.
         """
-        self.state_path = state_path or PROJECT_ROOT / "workspace" / "build_state.json"
+        self.state_path = state_path or PROJECT_ROOT / "workspace_81" / "build_state.json"
         self.state: Optional[BuildState] = None
         self._lock = threading.RLock()
         self.status_listener: Optional[

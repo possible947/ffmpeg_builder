@@ -57,13 +57,14 @@ The current package version is `2.0.0` (stable release). FFmpeg 9 integration is
 
 ### `__main__.py`
 
-Entry point. Creates the workspace directory and instantiates `FFmpegBuilderApp`.
+Entry point. Instantiates `FFmpegBuilderApp` and executes the application.
 
 ### `app.py` — `FFmpegBuilderApp`
 
 Central orchestrator. Responsibilities:
 
 - Initialize all managers (config, state, platform detection, component registry)
+- Dynamically synchronize version-specific workspaces (`workspace_81`, `workspace_90`) with configuration
 - Run the main event loop: show system report, handle user actions
 - Coordinate the build process: iterate components, handle errors, update state
 - Manage cleanup
@@ -72,10 +73,11 @@ Key methods:
 
 | Method | Description |
 |--------|-------------|
-| `run()` | Main loop — shows screens, dispatches actions |
+| `run()` | Main loop — shows screens, dispatches actions, synchronizes workspace |
+| `_sync_workspace(config)` | Synchronize `workspace`, `packages`, and `StateManager` with current FFmpeg version |
 | `_run_build(config, resume)` | Build loop with retry/skip/abort error handling and Live dashboard lifecycle |
 | `_get_buildable_components(config)` | Resolve the component set shared by build and info screens |
-| `_cleanup()` | Remove workspace, packages, and state file |
+| `_cleanup()` | Remove active versioned workspace, packages, and state file (as well as legacy workspace) |
 
 The build session owns a `BuildDashboard` renderable in `ui/dashboard.py`. `StateManager.status_listener` forwards builder status updates to the dashboard, and `AsyncDownloadManager` uses callback hooks for background download row updates. `Live(..., screen=True)` is active only during the build loop; it is stopped before interactive error prompts and final reports.
 

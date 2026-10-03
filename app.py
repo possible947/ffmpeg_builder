@@ -32,14 +32,14 @@ class FFmpegBuilderApp:
         """Initialize application.
 
         Args:
-            workspace: Workspace directory. If None, uses ./workspace.
+            workspace: Workspace directory. If None, uses versioned workspace (e.g. workspace_81).
         """
-        self.workspace = workspace or PROJECT_ROOT / "workspace"
-        self.packages = self.workspace / "packages"
+        self._custom_workspace = workspace
         self.console = Console()
 
         self.config_manager = ConfigManager(PROJECT_ROOT / "build_config.yaml")
-        self.state_manager = StateManager(self.workspace / "build_state.json")
+        config = self.config_manager.load()
+        self._sync_workspace(config)
 
         self.platform_detector = PlatformDetector()
         self.system_info, self.platform_info, self.tools = self.platform_detector.detect_all()
@@ -48,7 +48,7 @@ class FFmpegBuilderApp:
             self.system_info,
             self.platform_info,
             self.tools,
-            config=self.config_manager.load(),
+            config=config,
         )
         self.system_report = report_gen.generate()
 
@@ -60,6 +60,15 @@ class FFmpegBuilderApp:
         self.final_screen = FinalReportScreen(self.console)
         self.help_screen = HelpScreen(self.console)
         self.error_handler = ErrorHandler(self.console)
+
+    def _sync_workspace(self, config: BuildConfig) -> None:
+        """Synchronize workspace directory and state manager with the current configuration."""
+        if self._custom_workspace is not None:
+            self.workspace = self._custom_workspace
+        else:
+            self.workspace = config.get_workspace_path(PROJECT_ROOT)
+        self.packages = self.workspace / "packages"
+        self.state_manager = StateManager(self.workspace / "build_state.json")
 
     def _build_policy(self, config: BuildConfig) -> FfmpegPolicy:
         return evaluate_ffmpeg_policy(config, self.platform_info, self.tools)
@@ -82,6 +91,7 @@ class FFmpegBuilderApp:
         try:
             while True:
                 config = self.config_manager.get()
+                self._sync_workspace(config)
                 policy = self._build_policy(config)
                 self._refresh_system_report(config)
                 state = self.state_manager.load()
@@ -333,6 +343,11 @@ class FFmpegBuilderApp:
 
         self.state_manager.reset()
         self.console.print("[green]Reset build state[/green]")
+
+        legacy_workspace = PROJECT_ROOT / "workspace"
+        if legacy_workspace.exists():
+            _rmtree(legacy_workspace)
+            self.console.print(f"[green]Removed legacy {legacy_workspace}[/green]")
 
         if self.workspace.exists():
             _rmtree(self.workspace)

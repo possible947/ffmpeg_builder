@@ -94,6 +94,8 @@ def build_libvmaf(builder: FFmpegBuilder, component: Component, source_dir: Path
         "--buildtype=debug" if debug_build else "--buildtype=release",
         "--default-library=static",
         f"--libdir={builder._ws_str()}/lib",
+        "-Denable_tests=false",
+        "-Denable_docs=false",
     ]
     if debug_build:
         # --buildtype=debug still defaults to -Og; force -O0 explicitly so no

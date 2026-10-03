@@ -4,6 +4,19 @@ All notable changes to the FFmpeg Builder project.
 
 ## [Unreleased]
 
+### Added — Versioned workspace isolation (`workspace_81` / `workspace_90`) (2026-10-03)
+
+- **Isolated output workspaces for FFmpeg 8.1 and 9.0** — Separated output and cache directories into `workspace_81` (for FFmpeg 8.1) and `workspace_90` (for FFmpeg 9.0). Each workspace maintains independent binaries, logs, package extractions, and build state tracking (`workspace_<ver>/build_state.json`), preventing cross-version state and artifact collisions.
+- **Dynamic workspace synchronization** — `config.py` provides `get_workspace_dir_name()` and `BuildConfig.get_workspace_path()`; `app.py` dynamically synchronizes `self.workspace`, `self.packages`, and `StateManager` whenever `config.ffmpeg_version` changes.
+- **Cleanup and ignore updates** — Updated `.gitignore` to ignore all versioned workspaces (`workspace_*`, `workspace_81`, `workspace_90`) and legacy `workspace`. `app.py::_cleanup()` removes both current versioned and legacy workspaces.
+- **Nix environment hook** — Updated `shell.nix` `PKG_CONFIG_PATH` to point to `$PWD/workspace_81/lib/pkgconfig`.
+
+### Fixed — Disable tests/benchmarks/docs in LV2 stack and libvmaf (2026-10-03)
+
+- **LV2 stack build conflicts on Linux / Nix (`zix`, `serd`, `sord`, `sratom`, `lilv`, `lv2`)** — Meson-based LV2 components previously built tests and benchmarks by default, causing `zix`'s benchmark linker to pull host `/usr/lib64/libglib-2.0.so` and fail on `GLIBC_2.43` missing symbols when linked with Nix GCC 13. Added explicit `-Dtests=disabled`, `-Dbenchmarks=disabled`, `-Ddocs=disabled`, `-Dtools=disabled`, and `-Dplugins=disabled` configure arguments in `components.yaml`.
+- **`libvmaf` parallel build race condition on `vcs_version.h`** — `builders/graphics/vmaf.py` now passes `-Denable_tests=false` and `-Denable_docs=false` during Meson setup, eliminating a race condition where test source compilation started before `include/vcs_version.h` generation was completed.
+- **Regression test suite** — Added `TestLv2StackConfigureFlags` (16 parameterized checks in `tests/test_components.py`), `test_build_libvmaf_disables_tests_and_docs_in_meson` in `tests/test_builder_split.py`, and comprehensive workspace lifecycle tests in `tests/test_app_workspace.py` and `tests/test_config.py`.
+
 ### Added — Isolated Nix build environment for FFmpeg 8.1 on Linux GCC 15+ (2026-09-26)
 
 - **`shell.nix` environment for FFmpeg 8.1 on modern Linux** — Added a standalone `shell.nix` based on `pkgs.gcc13Stdenv` enabling policy-compliant builds of FFmpeg 8.1 on Linux distributions shipping GCC 15+ (such as Fedora 44). Includes full Python 3.12 environment, build toolchains (CMake, Meson, Ninja, NASM, YASM, Rust/Cargo/cargo-c), hardware acceleration headers/libraries (VAAPI, Vulkan, OpenCL, oneVPL), Wayland headers for SDL2, and system compression libraries (`bzip2`, `zlib`, `giflib`).

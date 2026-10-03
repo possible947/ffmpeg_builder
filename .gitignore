@@ -1,5 +1,8 @@
 packages
 workspace
+workspace_*
+workspace_81
+workspace_90
 .idea
 linux
 .artifacts

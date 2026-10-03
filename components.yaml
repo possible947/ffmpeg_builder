@@ -364,6 +364,9 @@
   build_system: meson
   configure_args:
   - --prefix={workspace}
+  - -Ddocs=disabled
+  - -Dtests=disabled
+  - -Dplugins=disabled
   - --buildtype=release
   - --default-library=static
   - --libdir={workspace}/lib
@@ -380,6 +383,10 @@
   build_system: meson
   configure_args:
   - --prefix={workspace}
+  - -Ddocs=disabled
+  - -Dtests=disabled
+  - -Dtools=disabled
+  - -Dman=disabled
   - --buildtype=release
   - --default-library=static
   - --libdir={workspace}/lib
@@ -415,6 +422,9 @@
   build_system: meson
   configure_args:
   - --prefix={workspace}
+  - -Ddocs=disabled
+  - -Dtests=disabled
+  - -Dbenchmarks=disabled
   - --buildtype=release
   - --default-library=static
   - --libdir={workspace}/lib
@@ -431,6 +441,11 @@
   build_system: meson
   configure_args:
   - --prefix={workspace}
+  - -Ddocs=disabled
+  - -Dtests=disabled
+  - -Dtools=disabled
+  - -Dman=disabled
+  - -Dbindings_cpp=disabled
   - --buildtype=release
   - --default-library=static
   - --libdir={workspace}/lib
@@ -448,6 +463,7 @@
   configure_args:
   - --prefix={workspace}
   - -Ddocs=disabled
+  - -Dtests=disabled
   - --buildtype=release
   - --default-library=static
   - --libdir={workspace}/lib
@@ -465,6 +481,10 @@
   configure_args:
   - --prefix={workspace}
   - -Ddocs=disabled
+  - -Dtests=disabled
+  - -Dtools=disabled
+  - -Dbindings_py=disabled
+  - -Dbindings_cpp=disabled
   - --buildtype=release
   - --default-library=static
   - --libdir={workspace}/lib

@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Added — Разделение рабочих каталогов на `workspace_81` и `workspace_90` (2026-10-03)
+
+- **Изолированные выходные папки для FFmpeg 8.1 и 9.0** — Артефакты сборки, распакованные пакеты, логи и состояния сборки разделены на `workspace_81` (для 8.1) и `workspace_90` (для 9.0). Это устраняет перезапись состояния `build_state.json` и коллизии промежуточных файлов при переключении между версиями.
+- **Динамическая синхронизация workspace** — `config.py` предоставляет `get_workspace_dir_name()` и `BuildConfig.get_workspace_path()`; `app.py` переключает активный workspace и `StateManager` при смене `config.ffmpeg_version`.
+- **Обновление `.gitignore` и `_cleanup`** — Игнорируются `workspace_*`, `workspace_81`, `workspace_90` и `workspace`. Функция очистки `_cleanup()` удаляет текущий активный и устаревший неверсионированный каталоги.
+
+### Fixed — Отключение тестов, бенчмарков и документации в компонентах LV2 и libvmaf (2026-10-03)
+
+- **Стек LV2 (`zix`, `serd`, `sord`, `sratom`, `lilv`, `lv2`)** — В `components.yaml` переданы флаги `-Dtests=disabled`, `-Dbenchmarks=disabled`, `-Ddocs=disabled`, `-Dtools=disabled`, `-Dplugins=disabled`, исключающие линковку с хостовой `glib-2.0` и ошибки символов `GLIBC_2.43` в Nix/GCC 13.
+- **`libvmaf`** — В `builders/graphics/vmaf.py` добавлены `-Denable_tests=false` и `-Denable_docs=false`, устраняющие гонку параллельной сборки тестов до генерации `vcs_version.h`.
+- **Тесты** — Добавлен `TestLv2StackConfigureFlags` в `tests/test_components.py`, `test_build_libvmaf_disables_tests_and_docs_in_meson` в `tests/test_builder_split.py`, и тесты на именование/синхронизацию workspace в `tests/test_app_workspace.py` и `tests/test_config.py`.
+
 ## [2.0.0] - 2026-09-11
 
 ### Added

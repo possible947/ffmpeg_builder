@@ -44,6 +44,6 @@ pkgs.mkShell.override { stdenv = pkgs.gcc13Stdenv; } {
     unset PKG_CONFIG_PATH_FOR_TARGET
     unset NIX_PKG_CONFIG_WRAPPER_TARGET_TARGET_x86_64_unknown_linux_gnu
     export NIX_ENFORCE_NO_NATIVE=0
-    export PKG_CONFIG_PATH="$PWD/workspace/lib/pkgconfig:$PKG_CONFIG_PATH"
+    export PKG_CONFIG_PATH="$PWD/workspace_81/lib/pkgconfig:$PKG_CONFIG_PATH"
   '';
 }

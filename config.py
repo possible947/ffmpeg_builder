@@ -12,6 +12,18 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 SUPPORTED_FFMPEG_VERSIONS = ("8.1", "9.0")
 
 
+def get_workspace_dir_name(ffmpeg_version: str) -> str:
+    """Return workspace folder name for the specified FFmpeg version.
+
+    Args:
+        ffmpeg_version: FFmpeg version string ('8.1', '9.0', etc.)
+
+    Returns:
+        Folder name string, e.g. 'workspace_81' or 'workspace_90'.
+    """
+    return f"workspace_{ffmpeg_version.replace('.', '')}"
+
+
 @dataclass
 class MacOSConfig:
     """macOS-specific configuration."""
@@ -72,6 +84,23 @@ class BuildConfig:
             raise ValueError(
                 f"Unsupported FFmpeg version {self.ffmpeg_version!r}; supported versions: {versions}"
             )
+
+    @property
+    def workspace_dir_name(self) -> str:
+        """Get the workspace folder name for the configured FFmpeg version."""
+        return get_workspace_dir_name(self.ffmpeg_version)
+
+    def get_workspace_path(self, root: Optional[Path] = None) -> Path:
+        """Get full path to the workspace directory.
+
+        Args:
+            root: Optional repository/project root. If None, uses PROJECT_ROOT.
+
+        Returns:
+            Absolute or anchored Path to the version-specific workspace directory.
+        """
+        base = root or PROJECT_ROOT
+        return base / self.workspace_dir_name
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""

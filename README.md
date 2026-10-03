@@ -43,7 +43,7 @@ For building and embedding FFmpeg 8.1 into downstream projects without altering 
 - **Isolated GCC 13 toolchain**: Uses `pkgs.gcc13Stdenv` to supply GCC 13.x, satisfying FFmpeg 8.1 policy gating.
 - **Pre-configured build dependencies**: Includes Python 3.12 (with `rich`, `tqdm`, `pyyaml`, `requests`, `jinja2`), build tools (`cmake`, `ninja`, `meson`, `nasm`, `yasm`, `pkg-config-unwrapped`, `cargo`, `cargo-c`, `rustc`), and hardware acceleration/multimedia libraries (`libva`, `libdrm`, `vulkan`, `opencl`, `libvpl`, `wayland`, `bzip2`, `zlib`, `giflib`).
 - **Nix wrapper compatibility**: Unsets `AS` (so x264 detects `nasm` instead of GNU `as`), handles un-wrapped `pkg-config` paths, and sets `NIX_ENFORCE_NO_NATIVE=0` for `-march=native` optimizations.
-- **Standalone artifacts**: Build artifacts reside entirely within `./workspace/` and can be embedded directly into other projects without system installation.
+- **Standalone artifacts**: Build artifacts reside entirely within `./workspace_81/` (or `./workspace_90/`) and can be embedded directly into other projects without system installation.
 
 **Usage**:
 
@@ -523,18 +523,18 @@ Windows phase-3 policy:
 
 ## Build Output
 
-After a successful build, binaries are located in:
+After a successful build, version-specific binaries are located in:
 
 ```
-workspace/bin/ffmpeg
-workspace/bin/ffprobe
-workspace/bin/ffplay
+workspace_<version>/bin/ffmpeg      # e.g., workspace_81/bin/ffmpeg or workspace_90/bin/ffmpeg
+workspace_<version>/bin/ffprobe
+workspace_<version>/bin/ffplay
 ```
 
 If `make_release: true`, an additional portable release folder is generated:
 
 ```
-workspace/release/
+workspace_<version>/release/
 ```
 
 The release folder contains:
@@ -546,7 +546,7 @@ The release folder contains:
 Build logs are stored in:
 
 ```
-workspace/logs/<component>_<step>.log
+workspace_<version>/logs/<component>_<step>.log
 ```
 
 ## Verified Environments

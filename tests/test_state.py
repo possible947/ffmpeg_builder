@@ -180,7 +180,7 @@ class TestStateManager:
         """M5: the default state path must not depend on the CWD."""
         monkeypatch.chdir(tmp_path)
         mgr = StateManager()
-        assert mgr.state_path == state_module.PROJECT_ROOT / "workspace" / "build_state.json"
+        assert mgr.state_path == state_module.PROJECT_ROOT / "workspace_81" / "build_state.json"
 
 
 class TestStateFileRobustness:

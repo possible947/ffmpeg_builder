@@ -13,10 +13,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 
 def main() -> None:
     """Main entry point."""
-    workspace = PROJECT_ROOT / "workspace"
-    workspace.mkdir(exist_ok=True)
-
-    app = FFmpegBuilderApp(workspace)
+    app = FFmpegBuilderApp()
     sys.exit(app.run())
 
 

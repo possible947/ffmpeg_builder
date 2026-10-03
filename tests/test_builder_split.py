@@ -411,6 +411,8 @@ class _PlatformInfo:
     is_ucrt64 = True
     is_wsl2 = False
     macports_clang = None
+    libvmaf_cuda_supported = False
+    libvmaf_cuda_reason = "disabled"
 
 
 class _PlatformDetector:
@@ -892,3 +894,27 @@ class TestSourcePatchAssertions:
         patched = json11_file.read_text(encoding="utf-8")
         assert "#include <cstdint>" in patched
         assert patched.index("#include <limits>") < patched.index("#include <cstdint>")
+
+
+def test_build_libvmaf_disables_tests_and_docs_in_meson(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from ffmpeg_builder.builders.graphics.vmaf import build_libvmaf
+
+    builder = _make_libplacebo_builder(tmp_path)
+    component = _make_patch_component("libvmaf")
+    source_dir = tmp_path / "libvmaf_src"
+    source_dir.mkdir(parents=True, exist_ok=True)
+
+    executed_commands = []
+
+    def _fake_run_step(comp, status, title, err, cmd, step, cwd, env):
+        executed_commands.append((step, cmd))
+
+    monkeypatch.setattr(builder, "_run_step", _fake_run_step)
+
+    build_libvmaf(builder, component, source_dir)
+
+    configure_cmd = next(cmd for step, cmd in executed_commands if step == "configure")
+    assert "-Denable_tests=false" in configure_cmd
+    assert "-Denable_docs=false" in configure_cmd
