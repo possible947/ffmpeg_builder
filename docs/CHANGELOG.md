@@ -4,6 +4,13 @@ All notable changes to the FFmpeg Builder project.
 
 ## [Unreleased]
 
+### Fixed — Linux release bundles detach FFmpeg from Nix runtime paths (2026-10-07)
+
+- **Host-local ELF runtime normalization** — Linux release assembly now changes dynamic executables to use the current host's ELF interpreter, replaces existing build-time RPATH/RUNPATH values in-place with `chrpath` (avoiding `patchelf` rewrites of shared-library ELF segments), and bundles discovered non-glibc shared dependencies next to FFmpeg with SONAME aliases.
+- **Keep glibc host-provided** — The bundle no longer copies glibc or the ELF loader from Nix into its runtime directory, preventing a Nix `libc.so.6` from overriding the system libc for unrelated applications.
+- **Fail-fast checks** — Release creation fails when runtime dependencies are missing or bundled FFmpeg tools do not pass startup checks. The manifest reports runtime path rewrites and SONAME aliases. Linux release builds require `readelf`, `patchelf`, and `chrpath`.
+- **Scope clarification** — Nix-built Linux release bundles target the same host used for the build; they do not promise portability to other systems or distributions.
+
 ### Added — Versioned workspace isolation (`workspace_81` / `workspace_90`) (2026-10-03)
 
 - **Isolated output workspaces for FFmpeg 8.1 and 9.0** — Separated output and cache directories into `workspace_81` (for FFmpeg 8.1) and `workspace_90` (for FFmpeg 9.0). Each workspace maintains independent binaries, logs, package extractions, and build state tracking (`workspace_<ver>/build_state.json`), preventing cross-version state and artifact collisions.

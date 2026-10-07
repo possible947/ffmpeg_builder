@@ -764,7 +764,7 @@ A dedicated `shell.nix` provides an isolated, reproducible development shell bas
 1. **Toolchain & Python Environment**:
    - Uses `pkgs.gcc13Stdenv` to supply GCC 13.x and matching GNU binutils.
    - Embeds Python 3.12 with all required libraries (`rich`, `tqdm`, `pyyaml`, `requests`, `jinja2`).
-   - Packages build tools: `cmake`, `ninja`, `meson`, `nasm`, `yasm`, `pkg-config-unwrapped`, `autoconf`, `automake`, `libtool`, `m4`, `gnumake`, `git`, `patchelf`.
+   - Packages build tools: `cmake`, `ninja`, `meson`, `nasm`, `yasm`, `pkg-config-unwrapped`, `autoconf`, `automake`, `libtool`, `m4`, `gnumake`, `git`, `patchelf`, `chrpath`.
    - Packages Rust toolchain: `rustc`, `cargo`, and `cargo-c` for AV1 encoders (`rav1e`).
 
 2. **Hardware Acceleration & System Headers**:
@@ -793,6 +793,20 @@ nix-shell
 # Run build as usual (output in ./workspace/release)
 python -m ffmpeg_builder
 ```
+
+On Linux, release bundling is host-local rather than cross-distro portable.
+`make_release_bundle()` uses `patchelf` to replace the Nix ELF interpreter
+with the host interpreter and `chrpath` to replace existing RPATH/RUNPATH
+values in-place rather than using `patchelf` to rewrite shared-library segments.
+It sets `$ORIGIN` lookup on the FFmpeg executables and normalizes any existing
+runtime paths on bundled libraries; libraries without an RPATH/RUNPATH are left
+unchanged. Discovered non-glibc dependencies are copied with SONAME aliases.
+glibc and the ELF loader remain host-provided, so do not add the release
+directory to a global `LD_LIBRARY_PATH`. The builder validates that all three
+tools start successfully and fails if a runtime dependency is missing;
+details are recorded in `release/manifest.json`. `readelf`, `patchelf`, and
+`chrpath` must be available in the build environment (all are included in
+`shell.nix`).
 
 ## Data Flow
 

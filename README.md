@@ -43,7 +43,7 @@ For building and embedding FFmpeg 8.1 into downstream projects without altering 
 - **Isolated GCC 13 toolchain**: Uses `pkgs.gcc13Stdenv` to supply GCC 13.x, satisfying FFmpeg 8.1 policy gating.
 - **Pre-configured build dependencies**: Includes Python 3.12 (with `rich`, `tqdm`, `pyyaml`, `requests`, `jinja2`), build tools (`cmake`, `ninja`, `meson`, `nasm`, `yasm`, `pkg-config-unwrapped`, `cargo`, `cargo-c`, `rustc`), and hardware acceleration/multimedia libraries (`libva`, `libdrm`, `vulkan`, `opencl`, `libvpl`, `wayland`, `bzip2`, `zlib`, `giflib`).
 - **Nix wrapper compatibility**: Unsets `AS` (so x264 detects `nasm` instead of GNU `as`), handles un-wrapped `pkg-config` paths, and sets `NIX_ENFORCE_NO_NATIVE=0` for `-march=native` optimizations.
-- **Standalone artifacts**: Build artifacts reside entirely within `./workspace_81/` (or `./workspace_90/`) and can be embedded directly into other projects without system installation.
+- **Release bundle scope**: On Linux, the generated `release/` bundle is prepared for the same host system used for the build. It uses that host's glibc/ELF loader and bundles other discovered runtime libraries beside FFmpeg; it is not a cross-distro or cross-machine portable package.
 
 **Usage**:
 

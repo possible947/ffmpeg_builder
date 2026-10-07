@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+import stat
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, List, Optional, Set, Tuple
@@ -49,7 +50,9 @@ def make_release_bundle(builder: "FFmpegBuilder") -> Path:
     if not source_binaries:
         raise BuildError("release", f"No FFmpeg binaries found in {source_bin}")
 
-    dependencies, missing_dependencies = _collect_runtime_dependencies(builder, source_binaries)
+    dependencies, missing_dependencies, dependency_aliases = _collect_runtime_dependencies(
+        builder, source_binaries
+    )
     copied_dependencies: List[str] = []
 
     for dep in sorted(dependencies, key=lambda item: item.name.lower()):
@@ -60,9 +63,32 @@ def make_release_bundle(builder: "FFmpegBuilder") -> Path:
         copied_dependencies.append(str(destination))
 
     install_name_rewrites: List[str] = []
+    linux_runtime_rewrites: List[str] = []
     if builder.platform == "darwin":
         install_name_rewrites = _make_macos_bundle_relocatable(
             builder, release_dir, source_binaries, dependencies
+        )
+    elif builder.platform == "linux":
+        for soname, library in sorted(dependency_aliases.items()):
+            target = library.resolve().name
+            if soname == target:
+                continue
+            alias = release_dir / soname
+            if alias.exists() or alias.is_symlink():
+                if alias.resolve() != release_dir / target:
+                    raise BuildError(
+                        "release",
+                        f"Conflicting runtime dependency alias {soname}: {alias.resolve()} "
+                        f"and {target}",
+                    )
+                continue
+            alias.symlink_to(target)
+        linux_runtime_rewrites = _make_linux_bundle_relocatable(
+            builder,
+            release_dir,
+            source_binaries,
+            dependencies,
+            validate_startup=not missing_dependencies,
         )
 
     manifest = {
@@ -75,8 +101,22 @@ def make_release_bundle(builder: "FFmpegBuilder") -> Path:
         "dependencies": copied_dependencies,
         "missing_dependencies": sorted(missing_dependencies),
         "install_name_rewrites": install_name_rewrites,
+        "linux_runtime_rewrites": linux_runtime_rewrites,
+        "dependency_aliases": {
+            alias: library.resolve().name
+            for alias, library in sorted(dependency_aliases.items())
+            if alias != library.resolve().name
+        },
     }
     (release_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+    if builder.platform == "linux" and missing_dependencies:
+        missing = ", ".join(sorted(missing_dependencies))
+        raise BuildError(
+            "release",
+            f"Release bundle has unresolved runtime dependencies: {missing}. "
+            f"See {release_dir / 'manifest.json'}",
+        )
 
     return release_dir
 
@@ -87,12 +127,13 @@ def _rmtree(builder: "FFmpegBuilder", path: Path) -> None:
 
 def _collect_runtime_dependencies(
     builder: "FFmpegBuilder", binaries: List[Path]
-) -> Tuple[Set[Path], Set[str]]:
+) -> Tuple[Set[Path], Set[str], dict[str, Path]]:
     queue = list(binaries)
     visited: Set[str] = set()
     collected: Set[Path] = set()
     collected_keys: Set[str] = set()
     missing: Set[str] = set()
+    aliases: dict[str, Path] = {}
 
     while queue:
         current = queue.pop(0).resolve()
@@ -101,17 +142,37 @@ def _collect_runtime_dependencies(
             continue
         visited.add(current_key)
 
-        for dep in _read_runtime_dependencies(builder, current):
+        if builder.platform == "linux":
+            linux_dependencies = _read_linux_dependency_entries(builder, current)
+            dependencies = [(name, path) for name, path in linux_dependencies]
+        else:
+            dependencies = [(dep, dep) for dep in _read_runtime_dependencies(builder, current)]
+
+        for dep_name, dep in dependencies:
+            if builder.platform == "linux" and _is_linux_system_runtime_name(dep_name):
+                continue
+            if dep is None and builder.platform == "linux":
+                dep = dep_name
+            elif dep is None:
+                missing.add(dep_name)
+                continue
             resolved = _resolve_runtime_dependency(builder, dep, current)
             if resolved is None:
                 if _is_system_dependency_reference(builder, dep):
                     continue
-                missing.add(dep)
+                missing.add(dep_name if builder.platform == "linux" else dep)
                 continue
 
             resolved = resolved.resolve()
+            if builder.platform == "linux":
+                previous = aliases.get(dep_name)
+                if previous is not None and previous.resolve() != resolved:
+                    # A single SONAME can resolve to only one file in this
+                    # flat bundle. Keep the first runtime resolution.
+                    continue
+                aliases.setdefault(dep_name, resolved)
             resolved_key = _path_key(builder, resolved)
-            if _is_system_runtime_library(builder, resolved):
+            if builder.platform != "linux" and _is_system_runtime_library(builder, resolved):
                 visited.add(resolved_key)
                 continue
 
@@ -122,7 +183,7 @@ def _collect_runtime_dependencies(
             collected_keys.add(resolved_key)
             queue.append(resolved)
 
-    return collected, missing
+    return collected, missing, aliases
 
 
 def _read_runtime_dependencies(builder: "FFmpegBuilder", binary_path: Path) -> List[str]:
@@ -152,7 +213,19 @@ def _read_windows_dependencies(builder: "FFmpegBuilder", binary_path: Path) -> L
 
 
 def _read_linux_dependencies(builder: "FFmpegBuilder", binary_path: Path) -> List[str]:
-    result = builder.executor.execute(["ldd", str(binary_path)], env=builder.get_build_env())
+    return [
+        path
+        for _name, path in _read_linux_dependency_entries(builder, binary_path)
+        if path is not None
+    ]
+
+
+def _read_linux_dependency_entries(
+    builder: "FFmpegBuilder", binary_path: Path
+) -> List[Tuple[str, Optional[str]]]:
+    result = builder.executor.execute(
+        ["ldd", str(binary_path)], env=_get_linux_release_env(builder)
+    )
     if not result.success:
         combined = f"{result.stdout}\n{result.stderr}".lower()
         if "not a dynamic executable" in combined or "not a valid dynamic program" in combined:
@@ -160,27 +233,283 @@ def _read_linux_dependencies(builder: "FFmpegBuilder", binary_path: Path) -> Lis
             # with "not a dynamic executable". There is nothing to bundle
             # beyond the binary itself.
             return []
-        raise BuildError(
-            "release",
-            f"Failed to inspect dependencies for {binary_path.name}: {result.stderr.strip()}",
-        )
+        if "=> not found" not in result.stdout:
+            raise BuildError(
+                "release",
+                f"Failed to inspect dependencies for {binary_path.name}: "
+                f"{result.stderr.strip()}",
+            )
 
-    dependencies: List[str] = []
+    dependencies: List[Tuple[str, Optional[str]]] = []
     for raw_line in result.stdout.splitlines():
         line = raw_line.strip()
-        if not line or line.startswith("linux-vdso"):
+        if (
+            not line
+            or line.startswith("linux-vdso")
+            or ": version `" in line
+            or " not found (required by " in line
+        ):
             continue
         if "=> not found" in line:
-            dependencies.append(line.split("=>", 1)[0].strip())
+            name = line.split("=>", 1)[0].strip()
+            dependencies.append((Path(name).name, None))
             continue
         if "=>" in line:
+            name = line.split("=>", 1)[0].strip()
             path = line.split("=>", 1)[1].strip().split(" ", 1)[0].strip()
             if path and path != "not":
-                dependencies.append(path)
+                dependencies.append((Path(name).name, path))
             continue
         if line.startswith("/"):
-            dependencies.append(line.split(" ", 1)[0].strip())
+            path = line.split(" ", 1)[0].strip()
+            dependencies.append((Path(path).name, path))
     return dependencies
+
+
+def _is_linux_system_runtime_name(name: str) -> bool:
+    """Keep the host's glibc and ELF loader out of the application bundle."""
+    basename = Path(name).name
+    return basename in {
+        "libc.so.6",
+        "libm.so.6",
+        "libmvec.so.1",
+        "libpthread.so.0",
+        "libdl.so.2",
+        "librt.so.1",
+        "libresolv.so.2",
+        "libanl.so.1",
+        "libutil.so.1",
+        "libBrokenLocale.so.1",
+    } or basename.startswith(("ld-linux", "ld64.so", "libnss_"))
+
+
+def _get_linux_release_env(builder: "FFmpegBuilder") -> dict[str, str]:
+    """Prevent an inherited Nix or user library path from affecting bundle checks."""
+    env = builder.get_build_env()
+    env["LD_LIBRARY_PATH"] = "/dev/null"
+    return env
+
+
+def _make_linux_bundle_relocatable(
+    builder: "FFmpegBuilder",
+    release_dir: Path,
+    source_binaries: List[Path],
+    dependencies: Set[Path],
+    validate_startup: bool = True,
+) -> List[str]:
+    """Replace Nix ELF paths with the host loader and bundle-local library lookup."""
+    env = _get_linux_release_env(builder)
+    readelf = shutil.which("readelf", path=env.get("PATH"))
+    if not readelf:
+        raise BuildError(
+            "release",
+            "Linux release bundling requires readelf in the build environment.",
+        )
+
+    bundled_elfs = [
+        *(release_dir / binary.name for binary in source_binaries),
+        *(release_dir / dependency.name for dependency in sorted(dependencies)),
+    ]
+    dynamic_elfs: List[Path] = []
+    for path in bundled_elfs:
+        dynamic = builder.executor.execute([readelf, "-d", str(path)], env=env)
+        if not dynamic.success:
+            raise BuildError(
+                "release",
+                f"Cannot inspect ELF dynamic section for {path.name}: " f"{dynamic.stderr.strip()}",
+            )
+        if "There is no dynamic section" not in dynamic.stdout:
+            dynamic_elfs.append(path)
+
+    if not dynamic_elfs:
+        return []
+
+    patchelf = shutil.which("patchelf", path=env.get("PATH"))
+    if not patchelf:
+        raise BuildError(
+            "release",
+            "Dynamic Linux release bundling requires patchelf in the build environment.",
+        )
+    chrpath = shutil.which("chrpath", path=env.get("PATH"))
+    if not chrpath:
+        raise BuildError(
+            "release",
+            "Dynamic Linux release bundling requires chrpath in the build environment.",
+        )
+
+    system_shell = Path("/bin/sh")
+    shell_program = builder.executor.execute([readelf, "-l", str(system_shell)], env=env)
+    if not shell_program.success:
+        raise BuildError(
+            "release",
+            f"Cannot inspect the host ELF loader using {system_shell}: "
+            f"{shell_program.stderr.strip()}",
+        )
+    host_interpreter = _parse_elf_interpreter(shell_program.stdout)
+    if not host_interpreter or "/nix/store/" in host_interpreter:
+        raise BuildError(
+            "release",
+            f"Could not resolve a non-Nix host ELF interpreter from {system_shell}.",
+        )
+    if not Path(host_interpreter).is_file():
+        raise BuildError(
+            "release",
+            f"Host ELF interpreter does not exist: {host_interpreter}",
+        )
+
+    rewritten: List[str] = []
+    for path in dynamic_elfs:
+        rewritten.extend(
+            _rewrite_linux_elf(
+                builder, path, release_dir, readelf, patchelf, chrpath, host_interpreter, env
+            )
+        )
+
+    if validate_startup:
+        for binary in source_binaries:
+            bundled_binary = release_dir / binary.name
+            result = builder.executor.execute([str(bundled_binary), "-version"], env=env)
+            if not result.success:
+                raise BuildError(
+                    "release",
+                    f"Linux release binary {binary.name} failed its startup check: "
+                    f"{result.stderr.strip() or result.stdout.strip()}",
+                )
+
+    return rewritten
+
+
+def _rewrite_linux_elf(
+    builder: "FFmpegBuilder",
+    path: Path,
+    release_dir: Path,
+    readelf: str,
+    patchelf: str,
+    chrpath: str,
+    host_interpreter: str,
+    env: dict[str, str],
+) -> List[str]:
+    mode = stat.S_IMODE(path.stat().st_mode)
+    os.chmod(path, mode | stat.S_IWUSR)
+    try:
+        program_headers = builder.executor.execute([readelf, "-l", str(path)], env=env)
+        if not program_headers.success:
+            raise BuildError(
+                "release",
+                f"Cannot inspect ELF program headers for {path.name}: "
+                f"{program_headers.stderr.strip()}",
+            )
+        interpreter = _parse_elf_interpreter(program_headers.stdout)
+        rewritten: List[str] = []
+        if interpreter:
+            result = builder.executor.execute(
+                [patchelf, "--set-interpreter", host_interpreter, str(path)], env=env
+            )
+            if not result.success:
+                raise BuildError(
+                    "release",
+                    f"patchelf could not set the host interpreter for {path.name}: "
+                    f"{result.stderr.strip()}",
+                )
+            rewritten.append(f"{path.name}: interpreter -> {host_interpreter}")
+
+        current_rpath = builder.executor.execute([patchelf, "--print-rpath", str(path)], env=env)
+        if not current_rpath.success:
+            raise BuildError(
+                "release",
+                f"patchelf could not inspect runtime paths for {path.name}: "
+                f"{current_rpath.stderr.strip()}",
+            )
+        old_rpath = current_rpath.stdout.strip()
+        needs_runtime_path = bool(interpreter or old_rpath)
+        if old_rpath and old_rpath != "$ORIGIN":
+            result = builder.executor.execute([chrpath, "-r", "$ORIGIN", str(path)], env=env)
+            if not result.success:
+                raise BuildError(
+                    "release",
+                    f"chrpath could not replace runtime paths for {path.name}: "
+                    f"{result.stderr.strip()}",
+                )
+        elif not old_rpath and interpreter:
+            result = builder.executor.execute(
+                [patchelf, "--force-rpath", "--set-rpath", "$ORIGIN", str(path)], env=env
+            )
+            if not result.success:
+                raise BuildError(
+                    "release",
+                    f"patchelf could not set $ORIGIN runtime lookup for {path.name}: "
+                    f"{result.stderr.strip()}",
+                )
+
+        needed = builder.executor.execute([patchelf, "--print-needed", str(path)], env=env)
+        if not needed.success:
+            raise BuildError(
+                "release",
+                f"patchelf could not inspect dependencies for {path.name}: "
+                f"{needed.stderr.strip()}",
+            )
+        for dependency in needed.stdout.splitlines():
+            dependency = dependency.strip()
+            if not dependency or (
+                "/nix/store/" not in dependency and not dependency.startswith("/")
+            ):
+                continue
+            replacement = Path(dependency).name
+            if (
+                not _is_linux_system_runtime_name(replacement)
+                and not (release_dir / replacement).exists()
+            ):
+                raise BuildError(
+                    "release",
+                    f"Cannot rewrite absolute ELF dependency {dependency} for {path.name}: "
+                    f"{replacement} is not in the bundle.",
+                )
+            result = builder.executor.execute(
+                [patchelf, "--replace-needed", dependency, replacement, str(path)], env=env
+            )
+            if not result.success:
+                raise BuildError(
+                    "release",
+                    f"patchelf could not rewrite dependency {dependency} in {path.name}: "
+                    f"{result.stderr.strip()}",
+                )
+        verified_needed = builder.executor.execute([patchelf, "--print-needed", str(path)], env=env)
+        if not verified_needed.success or any(
+            "/nix/store/" in dependency or dependency.startswith("/")
+            for dependency in verified_needed.stdout.splitlines()
+        ):
+            raise BuildError(
+                "release",
+                f"Absolute or Nix runtime dependency remains in {path.name}: "
+                f"{verified_needed.stdout.strip() or verified_needed.stderr.strip()}",
+            )
+        verified_rpath = builder.executor.execute([patchelf, "--print-rpath", str(path)], env=env)
+        expected_rpath = "$ORIGIN" if needs_runtime_path else ""
+        if not verified_rpath.success or verified_rpath.stdout.strip() != expected_rpath:
+            raise BuildError(
+                "release",
+                f"Failed to verify bundle-local runtime lookup for {path.name}: "
+                f"{verified_rpath.stdout.strip() or verified_rpath.stderr.strip()}",
+            )
+        if interpreter:
+            verified_headers = builder.executor.execute([readelf, "-l", str(path)], env=env)
+            verified_interpreter = _parse_elf_interpreter(verified_headers.stdout)
+            if not verified_headers.success or verified_interpreter != host_interpreter:
+                raise BuildError(
+                    "release",
+                    f"ELF interpreter was not rewritten for {path.name}: "
+                    f"{verified_interpreter or verified_headers.stderr.strip()}",
+                )
+        if needs_runtime_path:
+            rewritten.append(f"{path.name}: rpath -> $ORIGIN")
+        return rewritten
+    finally:
+        os.chmod(path, mode)
+
+
+def _parse_elf_interpreter(output: str) -> Optional[str]:
+    match = re.search(r"Requesting program interpreter:\s*([^\]]+)", output)
+    return match.group(1).strip() if match else None
 
 
 def _read_macos_dependencies(builder: "FFmpegBuilder", binary_path: Path) -> List[str]:
@@ -428,6 +757,19 @@ def _runtime_search_dirs(builder: "FFmpegBuilder", binary_path: Path) -> List[Pa
         )
     elif builder.platform == "darwin":
         candidates.extend([Path("/opt/local/lib"), Path("/usr/local/lib")])
+    else:
+        candidates.extend(
+            [
+                Path("/lib"),
+                Path("/lib64"),
+                Path("/usr/local/lib"),
+                Path("/usr/lib"),
+                Path("/usr/lib64"),
+            ]
+        )
+        multiarch = getattr(builder.platform_detector, "get_multiarch_dir", lambda: "")()
+        if multiarch:
+            candidates.extend([Path("/lib") / multiarch, Path("/usr/lib") / multiarch])
 
     unique: List[Path] = []
     seen: Set[str] = set()

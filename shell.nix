@@ -15,7 +15,7 @@ pkgs.mkShell.override { stdenv = pkgs.gcc13Stdenv; } {
     rustc
     pythonEnv
     cmake ninja meson nasm yasm pkg-config-unwrapped
-    autoconf automake libtool m4 gnumake git patchelf
+    autoconf automake libtool m4 gnumake git patchelf chrpath
 
     # Системные компоненты из components.yaml
     zlib giflib bzip2

@@ -1,6 +1,7 @@
 """Tests for builder module split compatibility."""
 
 import json
+import os
 import shutil
 from pathlib import Path
 
@@ -155,6 +156,17 @@ def test_release_bundle_wrapper_creates_manifest(tmp_path: Path):
         def execute(self, command, env=None):
             if command[0] == "ldd":
                 return _Result(stdout="")
+            if command[0].endswith("readelf"):
+                if command[1] == "-l":
+                    return _Result(
+                        stdout=(
+                            "      [Requesting program interpreter: "
+                            "/lib64/ld-linux-x86-64.so.2]\n"
+                        )
+                    )
+                return _Result(stdout="There is no dynamic section in this file.")
+            if command[-1] == "-version":
+                return _Result()
             raise AssertionError(f"Unexpected command: {command}")
 
     class _PlatformDetector:
@@ -212,6 +224,17 @@ def test_release_bundle_wrapper_static_binary_skips_dependency_scan(tmp_path: Pa
             if command[0] == "ldd":
                 # ldd on a fully static ELF: exit 1, "not a dynamic executable"
                 return _Result(stdout="", stderr="not a dynamic executable", success=False)
+            if command[0].endswith("readelf"):
+                if command[1] == "-l" and command[2] == "/bin/sh":
+                    return _Result(
+                        stdout=(
+                            "      [Requesting program interpreter: "
+                            "/lib64/ld-linux-x86-64.so.2]\n"
+                        )
+                    )
+                return _Result(stdout="There is no dynamic section in this file.")
+            if command[-1] == "-version":
+                return _Result()
             raise AssertionError(f"Unexpected command: {command}")
 
     class _PlatformDetector:
@@ -255,6 +278,272 @@ def test_release_bundle_wrapper_static_binary_skips_dependency_scan(tmp_path: Pa
     assert manifest["missing_binaries"] == []
     assert manifest["dependencies"] == []
     assert manifest["missing_dependencies"] == []
+
+
+def test_linux_release_bundle_rewrites_nix_elf_paths_and_bundles_sonames(tmp_path: Path):
+    class _Result:
+        def __init__(self, stdout: str = "", stderr: str = "", success: bool = True):
+            self.stdout = stdout
+            self.stderr = stderr
+            self.success = success
+
+    host_loader = tmp_path / "system" / "ld-linux-x86-64.so.2"
+    host_loader.parent.mkdir()
+    host_loader.write_text("host loader", encoding="utf-8")
+    nix_loader = "/nix/store/glibc/lib/ld-linux-x86-64.so.2"
+    nix_libc = "/nix/store/glibc/lib/libc.so.6"
+    libz = tmp_path / "nix" / "libz.so.1.3.2"
+    libz.parent.mkdir()
+    libz.write_text("zlib", encoding="utf-8")
+    host_lib_dir = tmp_path / "lib"
+    host_lib_dir.mkdir()
+    libfoo = host_lib_dir / "libfoo.so.1.2.0"
+    libfoo.write_text("foo", encoding="utf-8")
+    (host_lib_dir / "libfoo.so.1").symlink_to(libfoo.name)
+
+    class _Executor:
+        def __init__(self):
+            self.interpreters = {}
+            self.rpaths = {}
+            self.needed = {}
+            self.patchelf_calls = []
+            self.chrpath_calls = []
+            self.library_paths = []
+
+        def execute(self, command, env=None):
+            executable = Path(command[-1])
+            self.library_paths.append((command[0], (env or {}).get("LD_LIBRARY_PATH")))
+            if command[0] == "ldd":
+                if executable.name in {"ffmpeg", "ffprobe", "ffplay"}:
+                    return _Result(
+                        stdout=(
+                            f"{tmp_path}/bin/ffmpeg: {nix_libc}: version `GLIBC_2.43' "
+                            f"not found (required by {tmp_path}/bin/ffmpeg)\n"
+                            f"libz.so.1 => {libz} (0x1)\n"
+                            "libfoo.so.1 => not found\n"
+                            f"libc.so.6 => {nix_libc} (0x3)\n"
+                            f"{nix_loader} => {host_loader} (0x4)\n"
+                        ),
+                        success=False,
+                    )
+                return _Result(stdout=f"libc.so.6 => {nix_libc} (0x3)\n")
+            if command[0].endswith("readelf"):
+                if command[1] == "-l":
+                    if executable == Path("/bin/sh"):
+                        interp = host_loader
+                    else:
+                        interp = self.interpreters.get(str(executable), nix_loader)
+                    return _Result(
+                        stdout=(
+                            f"      [Requesting program interpreter: {interp}]\n"
+                            if executable.name in {"sh", "ffmpeg", "ffprobe", "ffplay"}
+                            else ""
+                        )
+                    )
+                return _Result(stdout="Dynamic section at offset 0x0 contains 5 entries.")
+            if command[0].endswith("patchelf"):
+                self.patchelf_calls.append(list(command))
+                operation = command[1]
+                if operation == "--set-interpreter":
+                    self.interpreters[command[3]] = command[2]
+                elif operation == "--force-rpath":
+                    self.rpaths[command[-1]] = command[3]
+                elif operation == "--set-rpath":
+                    self.rpaths[command[-1]] = command[2]
+                elif operation == "--print-rpath":
+                    path = command[2]
+                    if path in self.rpaths:
+                        return _Result(stdout=self.rpaths[path])
+                    if Path(path).name in {"ffplay", "libfoo.so.1.2.0"}:
+                        return _Result(stdout="")
+                    return _Result(stdout="/nix/store/build/lib")
+                elif operation == "--print-needed":
+                    path = command[2]
+                    self.needed.setdefault(
+                        path,
+                        f"{nix_libc}\n/nix/store/codec/libfoo.so.1\n",
+                    )
+                    return _Result(stdout=self.needed[path])
+                elif operation == "--replace-needed":
+                    path = command[4]
+                    needed = self.needed.setdefault(
+                        path,
+                        f"{nix_libc}\n/nix/store/codec/libfoo.so.1\n",
+                    )
+                    self.needed[path] = needed.replace(command[2], command[3])
+                return _Result()
+            if command[0].endswith("chrpath"):
+                self.chrpath_calls.append(list(command))
+                self.rpaths[command[3]] = command[2]
+                return _Result()
+            if command[-1] == "-version":
+                return _Result()
+            raise AssertionError(f"Unexpected command: {command}")
+
+    class _PlatformDetector:
+        def get_build_backend_name(self):
+            return "linux-native"
+
+    class _Config:
+        ffmpeg_version = "8.1"
+
+        class windows:
+            msys2_root = "C:/msys64"
+
+    tool_dir = tmp_path / "tools"
+    tool_dir.mkdir()
+    for tool in ("readelf", "patchelf", "chrpath"):
+        executable = tool_dir / tool
+        executable.write_text("", encoding="utf-8")
+        executable.chmod(0o755)
+
+    executor = _Executor()
+
+    class _Builder:
+        platform = "linux"
+        workspace = tmp_path
+        config = _Config()
+        platform_detector = _PlatformDetector()
+
+        @staticmethod
+        def _rmtree(path: Path) -> None:
+            shutil.rmtree(path)
+
+        def get_build_env(self):
+            return {"PATH": str(tool_dir)}
+
+    _Builder.executor = executor
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    source_binaries = []
+    for name in ("ffmpeg", "ffprobe", "ffplay"):
+        binary = bin_dir / name
+        binary.write_text("original", encoding="utf-8")
+        binary.chmod(0o755)
+        source_binaries.append(binary)
+
+    release_dir = make_release_bundle(_Builder())
+    manifest = json.loads((release_dir / "manifest.json").read_text(encoding="utf-8"))
+
+    assert manifest["missing_dependencies"] == []
+    assert set(manifest["dependency_aliases"]) == {"libfoo.so.1", "libz.so.1"}
+    assert (release_dir / "libfoo.so.1").is_symlink()
+    assert os.readlink(release_dir / "libfoo.so.1") == "libfoo.so.1.2.0"
+    assert (release_dir / "libz.so.1").is_symlink()
+    assert not (release_dir / "libc.so.6").exists()
+    assert not (release_dir / "ld-linux-x86-64.so.2").exists()
+    assert len(executor.interpreters) == 3
+    assert set(executor.interpreters.values()) == {str(host_loader)}
+    assert set(executor.rpaths.values()) == {"$ORIGIN"}
+    assert len(executor.chrpath_calls) == 3
+    assert all(Path(call[-1]).name != "libfoo.so.1.2.0" for call in executor.chrpath_calls)
+    assert any(
+        call[1] == "--force-rpath" and Path(call[-1]).name == "ffplay"
+        for call in executor.patchelf_calls
+    )
+    assert not any(
+        "--set-rpath" in call and Path(call[-1]).name not in {"ffmpeg", "ffprobe", "ffplay"}
+        for call in executor.patchelf_calls
+    )
+    assert all("/nix/store" not in needed for needed in executor.needed.values())
+    assert len([call for call in executor.patchelf_calls if call[1] == "--replace-needed"]) == 10
+    assert all(binary.read_text(encoding="utf-8") == "original" for binary in source_binaries)
+    assert all(
+        "/nix/store" not in " ".join(call)
+        for call in executor.patchelf_calls
+        if call[1] != "--replace-needed"
+    )
+    assert all(
+        "/nix/store" not in call[3]
+        for call in executor.patchelf_calls
+        if call[1] == "--replace-needed"
+    )
+    assert all(value == "/dev/null" for _command, value in executor.library_paths)
+
+
+def test_linux_release_bundle_fails_when_runtime_dependency_is_missing(tmp_path: Path):
+    class _Result:
+        def __init__(self, stdout: str = "", stderr: str = "", success: bool = True):
+            self.stdout = stdout
+            self.stderr = stderr
+            self.success = success
+
+    host_loader = tmp_path / "system" / "ld-linux-x86-64.so.2"
+    host_loader.parent.mkdir()
+    host_loader.write_text("host loader", encoding="utf-8")
+
+    class _Executor:
+        def __init__(self):
+            self.interpreters = {}
+
+        def execute(self, command, env=None):
+            if command[0] == "ldd":
+                return _Result(stdout="libmissing.so.1 => not found\n")
+            if command[0].endswith("readelf"):
+                if command[1] == "-l":
+                    interpreter = (
+                        host_loader
+                        if command[2] == "/bin/sh"
+                        else self.interpreters.get(
+                            command[2], "/nix/store/glibc/lib/ld-linux-x86-64.so.2"
+                        )
+                    )
+                    return _Result(
+                        stdout=f"      [Requesting program interpreter: {interpreter}]\n"
+                    )
+                return _Result(stdout="Dynamic section at offset 0x0 contains 1 entry.")
+            if command[0].endswith("patchelf"):
+                if command[1] == "--set-interpreter":
+                    self.interpreters[command[3]] = command[2]
+                if command[1] == "--print-rpath":
+                    return _Result(stdout="$ORIGIN")
+                return _Result()
+            if command[-1] == "-version":
+                return _Result()
+            raise AssertionError(f"Unexpected command: {command}")
+
+    class _PlatformDetector:
+        def get_build_backend_name(self):
+            return "linux-native"
+
+    class _Config:
+        ffmpeg_version = "8.1"
+
+        class windows:
+            msys2_root = "C:/msys64"
+
+    tool_dir = tmp_path / "tools"
+    tool_dir.mkdir()
+    for tool in ("readelf", "patchelf", "chrpath"):
+        executable = tool_dir / tool
+        executable.write_text("", encoding="utf-8")
+        executable.chmod(0o755)
+
+    class _Builder:
+        platform = "linux"
+        workspace = tmp_path
+        config = _Config()
+        platform_detector = _PlatformDetector()
+        executor = _Executor()
+
+        @staticmethod
+        def _rmtree(path: Path) -> None:
+            shutil.rmtree(path)
+
+        def get_build_env(self):
+            return {"PATH": str(tool_dir)}
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for name in ("ffmpeg", "ffprobe", "ffplay"):
+        (bin_dir / name).write_text("binary", encoding="utf-8")
+
+    with pytest.raises(BuildError, match="unresolved runtime dependencies"):
+        make_release_bundle(_Builder())
+
+    manifest = json.loads((tmp_path / "release" / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["missing_dependencies"] == ["libmissing.so.1"]
 
 
 def test_release_bundle_macos_rewrites_install_names_and_rpaths(tmp_path: Path):
