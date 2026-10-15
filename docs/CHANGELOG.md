@@ -4,6 +4,12 @@ All notable changes to the FFmpeg Builder project.
 
 ## [Unreleased]
 
+### Added — Per-component toolchain skip gate (Phase 3b, step 2) (2026-10-15)
+
+- **Toolchain gate in `get_buildable()`** — new optional `toolchain_checker` callable; components whose gate fails are excluded from the buildable list. The app wires `_component_toolchain_checker()`: a component is kept when its resolved toolchain is `system`, or when the required profile is declared, deployable for the platform, and installed in the store. Unknown / non-deployable / not-installed profiles are excluded with the exclusion visible in the buildable list and final report.
+- **rav1e exception** — `rav1e` always survives the gate; a missing toolchain surfaces as a build error (`BuildError`, never `SkipComponent`), so the key encoder can never silently disappear. `build_cargo()` in `builders/base.py` now raises `BuildError` for missing/too-old rustc instead of `SkipComponent`.
+- **Tests** — gate skip/exception tests in `tests/test_components.py`, `BuildError`-on-missing-rustc test in `tests/test_builder_split.py`.
+
 ### Added — CUDA toolkit version detection (Phase 3b, step 1) (2026-10-15)
 
 - **CUDA Toolkit version recorded** — `PlatformDetector._detect_cuda_version()` parses `nvcc --version` ("Cuda compilation tools, release X.Y") into `PlatformInfo.cuda_version` (`"major.minor"`), serialized alongside the existing CUDA fields. This is the declared input for `ToolchainRegistry.toolchain_for_cuda()` in the CUDA-table step.

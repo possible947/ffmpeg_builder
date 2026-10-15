@@ -3,9 +3,16 @@
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 import yaml
+
+if TYPE_CHECKING:
+    ToolchainChecker = Callable[["Component"], bool]
+else:
+    # Runtime alias: get_buildable() accepts an optional per-component
+    # toolchain gate; tests and app code pass lambdas or bound methods.
+    ToolchainChecker = Callable[..., bool]
 
 WINDOWS_UCRT64_HW_ACCEL_COMPONENTS = {
     "nv-codec",
@@ -376,7 +383,15 @@ class ComponentRegistry:
         platform_info: Optional[Any] = None,
         full_static: bool = False,
         ffmpeg_version: str = "8.1",
+        toolchain_checker: Optional["ToolchainChecker"] = None,
     ) -> List[Component]:
+        """Return buildable components in registry order.
+
+        Components whose toolchain gate fails (explicit lower profile that is
+        not satisfied) are excluded, except ``rav1e`` which is always kept so a
+        missing-but-required toolchain surfaces as a build error instead of a
+        silent skip.
+        """
         """Get list of components that should be built.
 
         Tool requirements are evaluated against the *effective* toolset the
@@ -419,6 +434,12 @@ class ComponentRegistry:
 
         result = []
         for comp in candidates:
+            if (
+                comp.name != "rav1e"
+                and toolchain_checker is not None
+                and not toolchain_checker(comp)
+            ):
+                continue
             if comp.requires_tools:
                 missing = [t for t in comp.requires_tools if t not in available_tools]
                 if missing and comp.name not in ("rav1e",):

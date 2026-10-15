@@ -157,6 +157,14 @@ class ToolchainRegistry:
         profile = self.resolve_platform_profile(ffmpeg_version, platform)
         return profile.fallback_toolchain if profile is not None else None
 
+    def is_profile_available(self, profile: ToolchainProfile, platform: str) -> bool:
+        """Whether a toolchain profile applies to ``platform`` and is acquirable.
+
+        A profile must list the platform and carry a usable acquisition source.
+        Installation state is checked by the caller (the store), not here.
+        """
+        return platform in profile.platforms and profile.deployable
+
     def toolchain_for_cuda(self, cuda_version: str) -> Optional[str]:
         """Return the toolchain profile name mapped to a CUDA Toolkit version."""
         return self.cuda_map.get(str(cuda_version))

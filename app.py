@@ -186,7 +186,52 @@ class FFmpegBuilderApp:
             self.platform_info,
             full_static=config.full_static,
             ffmpeg_version=config.ffmpeg_version,
+            toolchain_checker=self._component_toolchain_checker(config),
         )
+
+    def _component_toolchain_checker(self, config: BuildConfig) -> Callable[[Component], bool]:
+        """Per-component toolchain gate for skipped components.
+
+        A component is kept when its resolved toolchain is ``system`` (always
+        available by policy), when the required profile is installed in the
+        store, or when it is ``rav1e`` (always kept so a missing toolchain
+        raises a build error instead of silently skipping). Everything else —
+        unknown profile, non-deployable profile, or not installed — is
+        excluded.
+        """
+        try:
+            toolchain_registry = ToolchainRegistry()
+        except (OSError, ValueError):
+            return lambda component: True
+        installed = {
+            item.profile
+            for item in ToolchainStore(
+                PROJECT_ROOT / "toolchains",
+                workspace=self.workspace,
+            ).list_installed()
+        }
+        versions = self._system_tool_versions()
+        platform = self.platform_detector.get_platform_name()
+
+        def _check(component: Component) -> bool:
+            if component.name == "rav1e":
+                return True
+            assignment = toolchain_registry.resolve_component_toolchain(
+                component.toolchain, config.ffmpeg_version, platform, versions
+            )
+            if assignment is None or assignment.mode == "system":
+                return True
+            profile_name = assignment.profile
+            if profile_name is None:
+                return False
+            profile = toolchain_registry.get_profile(profile_name)
+            if profile is None:
+                return False
+            if not toolchain_registry.is_profile_available(profile, platform):
+                return False
+            return profile_name in installed
+
+        return _check
 
     def _system_tool_versions(self) -> Dict[str, str]:
         """Map detected system tool names to version strings for range checks."""
