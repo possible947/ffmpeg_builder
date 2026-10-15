@@ -100,6 +100,13 @@ class Component:
     extra_libs: str = ""
     sed_patches: Dict[str, str] = field(default_factory=dict)
     versions: Dict[str, ComponentVersion] = field(default_factory=dict)
+    # Toolchain profile this component requires. ``"n/a"`` means "inherit the
+    # platform profile's effective toolchain"; any other value names a profile
+    # declared in ``toolchains.yaml`` (resolved in later phases).
+    toolchain: str = "n/a"
+    # NVENC API major version (as reported by the installed driver) -> declared
+    # nv-codec component version. Replaces the previous driver-based heuristics.
+    driver_nvenc_api_map: Dict[str, str] = field(default_factory=dict)
 
     def with_version(self, version: str) -> "Component":
         """Return this component resolved to a declared source version."""
@@ -228,6 +235,17 @@ class ComponentRegistry:
             )
             for version, source in versions_data.items()
         }
+        driver_nvenc_api_map = {
+            str(api): str(version)
+            for api, version in (data.get("driver_nvenc_api_map") or {}).items()
+        }
+        for api, target_version in driver_nvenc_api_map.items():
+            if target_version not in versions:
+                declared = ", ".join(sorted(versions)) or "<none>"
+                raise ValueError(
+                    f"driver_nvenc_api_map[{api!r}] references undeclared version "
+                    f"{target_version!r}; declared versions: {declared}"
+                )
         return Component(
             name=data["name"],
             version=str(data["version"]),
@@ -266,6 +284,8 @@ class ComponentRegistry:
             extra_libs=data.get("extra_libs") or "",
             sed_patches=dict(data.get("sed_patches") or {}),
             versions=versions,
+            toolchain=str(data.get("toolchain", "n/a")),
+            driver_nvenc_api_map=driver_nvenc_api_map,
         )
 
     def _load_components(self, yaml_path: Path) -> None:
@@ -324,36 +344,27 @@ class ComponentRegistry:
     def get_nv_codec_component(self, platform_info: Optional[Any] = None) -> Component:
         """Get the nv-codec-headers component resolved to a driver-compatible version.
 
-        ``platform_info.nvenc_api_version`` (if set) is the maximum NVENC API
-        version ("<major>.<minor>") reported by the installed NVIDIA driver
-        (see ``PlatformDetector._detect_nvenc_api_version``). The newest
-        declared ``versions`` entry whose major.minor does not exceed that is
-        selected; if the driver reports an API older than every declared
-        release, the oldest declared release is used as a best-effort
-        fallback rather than the (likely incompatible) registry default. When
-        detection did not run or found nothing, the declared default version
-        is kept unchanged.
+        ``platform_info.nvenc_api_version`` ("<major>.<minor>") is the maximum
+        NVENC API version reported by the installed NVIDIA driver (see
+        ``PlatformDetector._detect_nvenc_api_version``). The registry declares an
+        explicit ``driver_nvenc_api_map`` (NVENC API major -> declared version);
+        the matching entry is selected. Without a mapped match (or without
+        detection) the declared default version is kept unchanged. There is no
+        automatic version search or best-effort fallback.
         """
         component = self.get_by_name("nv-codec")
         if component is None:
             raise ValueError("nv-codec component is missing from the registry")
 
         detected = getattr(platform_info, "nvenc_api_version", None) if platform_info else None
-        if not detected or not component.versions:
+        if not detected:
             return component
 
-        try:
-            detected_key = tuple(int(part) for part in str(detected).split(".")[:2])
-        except ValueError:
-            return component
-
-        def version_key(value: str) -> tuple:
-            return tuple(int(part) for part in value.split("."))
-
-        declared = sorted(component.versions, key=version_key)
-        compatible = [v for v in declared if version_key(v)[:2] <= detected_key]
-        selected = compatible[-1] if compatible else declared[0]
-        return component.with_version(selected)
+        major = str(detected).split(".")[0].strip()
+        target = component.driver_nvenc_api_map.get(major)
+        if target and target in component.versions:
+            return component.with_version(target)
+        return component
 
     def get_buildable(
         self,

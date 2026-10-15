@@ -13,6 +13,8 @@ from ..config import BuildConfig, SUPPORTED_FFMPEG_VERSIONS
 from ..ffmpeg_policy import FfmpegPolicy
 from ..state import BuildState, ComponentStatus
 from ..system_report import SystemReport
+from ..toolchain_registry import ComponentToolchainPlan, ToolchainRegistry
+from ..toolchain_store import ToolchainStore
 
 _START_KEYS: List[tuple] = [
     ("b", "Start new build", "Build all components from scratch (resets previous state)"),
@@ -20,6 +22,8 @@ _START_KEYS: List[tuple] = [
     ("c", "Edit configuration", "Change build flags, jobs, async downloads"),
     ("w", "Cleanup workspace", "Remove state, sources, and build artifacts"),
     ("i", "Component info", "List all components (buildable + skipped)"),
+    ("t", "Toolchain plan", "Show the resolved toolchain for each component"),
+    ("p", "Toolchain store", "Acquire, list, or remove toolchain profiles"),
     ("h", "Help", "Show full key reference for all screens"),
     ("q", "Exit", "Quit the application"),
 ]
@@ -59,6 +63,16 @@ def _parse_positive_int(raw: str) -> Optional[int]:
     return value if value >= 1 else None
 
 
+def _format_assignment(entry: ComponentToolchainPlan) -> str:
+    """Render a resolved toolchain assignment for the toolchain-plan screen."""
+    assignment = entry.assignment
+    if assignment is None:
+        return "unresolved (would skip)"
+    if assignment.mode == "system":
+        return "system"
+    return f"deploy: {assignment.profile}"
+
+
 class UIScreen:
     """Base UI screen."""
 
@@ -92,7 +106,8 @@ class SystemReportScreen(UIScreen):
             ffmpeg_policy: FFmpeg policy decision for the current configuration.
 
         Returns:
-            User action: "build", "resume", "config", "cleanup", "info", or "exit".
+            User action: "build", "resume", "config", "cleanup", "info", "toolchain",
+            "store", or "exit".
         """
         self.console.clear()
         self.console.print(
@@ -278,11 +293,15 @@ class SystemReportScreen(UIScreen):
             "w", "Cleanup workspace", "Remove state, sources, and build artifacts"
         )
         actions_table.add_row("i", "Component info", "List all components (buildable + skipped)")
+        actions_table.add_row(
+            "t", "Toolchain plan", "Show the resolved toolchain for each component"
+        )
+        actions_table.add_row("p", "Toolchain store", "Acquire, list, or remove toolchain profiles")
         actions_table.add_row("h", "Help", "Show full key reference for all screens")
         actions_table.add_row("q", "Exit", "Quit the application")
         self.console.print(actions_table)
 
-        choices = ["b", "c", "w", "i", "h", "q"]
+        choices = ["b", "c", "w", "i", "t", "p", "h", "q"]
         if state:
             choices.insert(1, "r")
         choice = Prompt.ask("Choice", choices=choices)
@@ -296,6 +315,8 @@ class SystemReportScreen(UIScreen):
             "c": "config",
             "w": "cleanup",
             "i": "info",
+            "t": "toolchain",
+            "p": "store",
             "q": "exit",
         }[choice]
 
@@ -334,6 +355,116 @@ class HelpScreen(UIScreen):
 
         self.console.print("[dim]All key choices must be confirmed with Enter.[/dim]")
         Prompt.ask("Press Enter to return")
+
+
+class ToolchainPlanScreen(UIScreen):
+    """Read-only view of the resolved toolchain per component."""
+
+    def show(self, plan: List[ComponentToolchainPlan]) -> None:
+        """Show the resolved toolchain plan.
+
+        Args:
+            plan: Resolved per-component toolchain assignments.
+        """
+        self.console.clear()
+        self.console.print(
+            Panel.fit(
+                "[bold blue]FFmpeg Builder - Toolchain Plan[/bold blue]", border_style="blue"
+            )
+        )
+        self.console.print()
+
+        table = Table(title="Resolved toolchains", show_header=True, header_style="bold cyan")
+        table.add_column("Component", style="cyan", no_wrap=True)
+        table.add_column("Declared", style="magenta", no_wrap=True)
+        table.add_column("Effective")
+
+        for entry in plan:
+            table.add_row(entry.component, entry.toolchain, _format_assignment(entry))
+        self.console.print(table)
+        self.console.print()
+        self.console.print("[dim]Read-only: no toolchain is deployed in this phase.[/dim]")
+        Prompt.ask("Press Enter to return")
+
+
+class ToolchainStoreScreen(UIScreen):
+    """Toolchain store: list profiles and acquire/remove them."""
+
+    def show(self, store: ToolchainStore, registry: ToolchainRegistry) -> None:
+        """Show the toolchain store and handle acquire/remove/clean actions.
+
+        Args:
+            store: Persistent toolchain store.
+            registry: Toolchain registry (profile definitions).
+        """
+        while True:
+            self.console.clear()
+            self.console.print(
+                Panel.fit(
+                    "[bold blue]FFmpeg Builder - Toolchain Store[/bold blue]", border_style="blue"
+                )
+            )
+            self.console.print(f"[dim]Store root: {store.root}[/dim]")
+            self.console.print()
+
+            installed = {item.profile: item for item in store.list_installed()}
+            table = Table(title="Profiles", show_header=True, header_style="bold cyan")
+            table.add_column("Profile", style="cyan", no_wrap=True)
+            table.add_column("Version", no_wrap=True)
+            table.add_column("Source", no_wrap=True)
+            table.add_column("Status")
+            for name in sorted(registry.profiles):
+                profile = registry.profiles[name]
+                if profile.deployable:
+                    source = profile.default_source or "-"
+                    if len(profile.sources) > 1:
+                        source += f" (+{len(profile.sources) - 1} alt)"
+                else:
+                    source = "not deployable"
+                entry = installed.get(name)
+                status = f"installed ({entry.variant})" if entry is not None else "not installed"
+                table.add_row(name, profile.version or "-", source, status)
+            self.console.print(table)
+            self.console.print()
+            self.console.print("[dim]Actions: [a]cquire  [r]emove  [c]lean logs  [q]uit[/dim]")
+
+            choice = Prompt.ask("Choice", choices=["a", "r", "c", "q"])
+            if choice == "q":
+                return
+            if choice == "c":
+                store.clean_logs()
+                self.console.print("[green]Cleared acquisition logs.[/green]")
+                Prompt.ask("Press Enter to continue")
+                continue
+
+            name = Prompt.ask("Profile name")
+            profile = registry.get_profile(name)
+            if profile is None:
+                self.console.print(f"[red]Unknown profile {name!r}.[/red]")
+                Prompt.ask("Press Enter to continue")
+                continue
+
+            try:
+                if choice == "r":
+                    removed = store.remove(name)
+                    message = "Removed" if removed else "Not installed"
+                    self.console.print(f"[green]{message}: {name}[/green]")
+                else:
+                    variant = None
+                    if len(profile.sources) > 1:
+                        variant = Prompt.ask(
+                            "Variant",
+                            choices=sorted(profile.sources),
+                            default=profile.default_source,
+                        )
+                    installed_entry = store.acquire(registry, name, variant)
+                    self.console.print(
+                        f"[green]Installed {installed_entry.profile} "
+                        f"({installed_entry.variant}) at {installed_entry.path}[/green]"
+                    )
+            except Exception as exc:  # surfaced to the user, then continue
+                self.console.print(f"[red]Action failed: {exc}[/red]")
+            Prompt.ask("Press Enter to continue")
 
 
 class InfoScreen(UIScreen):

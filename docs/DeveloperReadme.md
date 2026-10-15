@@ -361,6 +361,17 @@ The existing `FFmpegBuilder` methods remain the implementation target during thi
 | glslang with FFmpeg 8.1 | `--enable-libglslang` |
 | glslang with FFmpeg 9.0 | omitted; the option was removed upstream |
 
+**Release bundles** (`release_bundle.py`):
+
+When `make_release: true`, `make_release_bundle()` writes a release directory at `<workspace>/release` after a successful build. It copies the built `ffmpeg`/`ffprobe`/`ffplay` binaries and recursively collects their **non-system runtime dependencies** (via `ldd` on Linux, `otool -L` on macOS, `objdump -p` on Windows) into the same flat directory, then writes a `manifest.json` recording the platform, build backend, FFmpeg version, copied binaries/dependencies, and any missing binaries or dependencies.
+
+Packaging rule (final):
+
+- A release copies **all non-system runtime dependencies** and is **autonomous within the system on which it was built**. System libraries — including glibc and the dynamic loader — are intentionally **not** copied and must be present on the host; a release is not a "portable to any distribution" bundle. This matches the "build on the host, for the host" goal and keeps releases compatible with AppImage-style packaging (which relies on the host C runtime).
+- System paths excluded by `_is_system_runtime_library()`: `/lib`, `/lib64`, `/usr/lib`, `/usr/lib64` (Linux); `WINDIR` (Windows); `/usr/lib`, `/System/Library`, and dyld-shared-cache references (macOS, via `_is_system_dependency_reference()`).
+- Non-system dependencies — workspace-built libraries and any libraries resolved from a local toolchain prefix — are copied into the release directory. A local-toolchain runtime (e.g. `libstdc++`/`libgomp`/`libgcc_s` under the toolchain prefix) is therefore bundled, while the host glibc is not.
+- macOS releases are additionally made relocatable: bundled dylib install names are rewritten to `@rpath/<name>`, `@loader_path` is added as an rpath, and each modified Mach-O is re-signed ad-hoc (`_make_macos_bundle_relocatable()`). Linux/Windows releases copy dependencies flat next to the binaries.
+
 ### `executor.py` — Command Execution
 
 **`CommandExecutor`** — wraps `subprocess.run()` with:

@@ -3,6 +3,7 @@
 from importlib.resources import files
 
 import pytest
+import yaml
 
 from ffmpeg_builder.components import (
     BuildSystem,
@@ -558,9 +559,9 @@ class TestNvCodecVersionSelection:
         component = self.registry.get_nv_codec_component(self._platform_info("13.5"))
         assert component.version == "13.0.19.1"
 
-    def test_driver_older_than_all_declared_versions_uses_oldest(self):
+    def test_driver_major_not_in_map_keeps_declared_default(self):
         component = self.registry.get_nv_codec_component(self._platform_info("11.1"))
-        assert component.version == "12.2.72.0"
+        assert component.version == "13.0.19.1"
 
     def test_malformed_detected_version_keeps_declared_default(self):
         component = self.registry.get_nv_codec_component(self._platform_info("not-a-version"))
@@ -623,3 +624,66 @@ class TestLv2StackConfigureFlags:
         comp = self.registry.get_by_name(comp_name)
         assert comp is not None
         assert expected_flag in comp.configure_args
+
+
+class TestToolchainFields:
+    """Phase 0 toolchain-registry foundation: Component.toolchain + nv-codec map."""
+
+    def test_component_defaults_to_na_toolchain(self):
+        component = Component(
+            name="test",
+            version="1.0.0",
+            url="https://example.org/test-{version}.tar.gz",
+            category=ComponentCategory.OTHER_LIB,
+            build_system=BuildSystem.AUTOTOOLS,
+        )
+        assert component.toolchain == "n/a"
+        assert component.driver_nvenc_api_map == {}
+
+    def test_registry_defaults_components_to_na_toolchain(self):
+        registry = ComponentRegistry()
+        ffmpeg = registry.get_ffmpeg_component("8.1")
+        assert ffmpeg.toolchain == "n/a"
+
+    def test_nv_codec_driver_map_targets_declared_versions(self):
+        registry = ComponentRegistry()
+        component = registry.get_by_name("nv-codec")
+        assert component is not None
+        assert component.driver_nvenc_api_map
+        for api, version in component.driver_nvenc_api_map.items():
+            assert version in component.versions, (api, version)
+
+    def test_driver_map_referencing_undeclared_version_rejected(self, tmp_path):
+        data = [
+            {
+                "name": "nv-codec",
+                "version": "1.0.0",
+                "url": "https://example.org/nv-{version}.tar.gz",
+                "category": "hw_accel",
+                "build_system": "make_only",
+                "versions": {"1.0.0": {"sha256": "a" * 64}},
+                "driver_nvenc_api_map": {"13": "9.9.9"},
+            }
+        ]
+        path = tmp_path / "components.yaml"
+        path.write_text(yaml.safe_dump(data), encoding="utf-8")
+        with pytest.raises(ValueError, match="undeclared version"):
+            ComponentRegistry(yaml_path=path)
+
+    def test_toolchain_field_parsed_from_yaml(self, tmp_path):
+        data = [
+            {
+                "name": "widget",
+                "version": "1.0.0",
+                "url": "https://example.org/widget-{version}.tar.gz",
+                "category": "other_lib",
+                "build_system": "autotools",
+                "toolchain": "gcc12",
+            }
+        ]
+        path = tmp_path / "components.yaml"
+        path.write_text(yaml.safe_dump(data), encoding="utf-8")
+        registry = ComponentRegistry(yaml_path=path)
+        component = registry.get_by_name("widget")
+        assert component is not None
+        assert component.toolchain == "gcc12"

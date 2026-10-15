@@ -1,0 +1,85 @@
+# Toolchain registry (single source of truth for build toolchains).
+#
+# Three sections:
+#   toolchains:         named toolchain profiles (one logical entity per pinned
+#                       toolchain, e.g. gcc12 -> a concrete gcc release)
+#   platform_profiles:  upper-level profiles keyed by (ffmpeg_version, platform);
+#                       the FFmpeg target resolves its effective toolchain here
+#   cuda:               explicit CUDA Toolkit version -> toolchain profile mapping
+#
+# Concrete version pins and acquisition sources are added per profile as they are
+# staged. A profile's `source` block lists acquisition variants (build | binary |
+# download | local); `source.default` names the preselected variant (defaults are
+# data-driven) and the remaining variants are offered as alternatives in the TUI.
+# A profile without a `source` block is declared but not yet deployable.
+---
+toolchains:
+  gcc12:
+    kind: compiler
+    platforms: [linux]
+    provides: [gcc, g++]
+    materialize:
+      bin_subdir: bin
+      cc: bin/gcc
+      cxx: bin/g++
+  gcc13:
+    kind: compiler
+    platforms: [linux]
+    provides: [gcc, g++]
+    materialize:
+      bin_subdir: bin
+      cc: bin/gcc
+      cxx: bin/g++
+  gmp:
+    kind: bootstrap_lib
+    platforms: [linux]
+  mpfr:
+    kind: bootstrap_lib
+    platforms: [linux]
+  mpc:
+    kind: bootstrap_lib
+    platforms: [linux]
+  rust:
+    kind: rust
+    platforms: [linux]
+    provides: [cargo, rustc]
+    materialize:
+      bin_subdir: bin
+  cargo-c:
+    kind: rust_tool
+    platforms: [linux]
+    provides: [cargo-c]
+    materialize:
+      bin_subdir: bin
+
+platform_profiles:
+  linux-ffmpeg-8.1:
+    ffmpeg_version: "8.1"
+    platform: linux
+    system_tool_range:
+      gcc: ">=12,<14"
+      clang: "<=25"
+    fallback_toolchain: gcc12
+  linux-ffmpeg-9.0:
+    ffmpeg_version: "9.0"
+    platform: linux
+    system_tool_range:
+      gcc: ">=15"
+    fallback_toolchain: null
+  darwin-ffmpeg-8.1:
+    ffmpeg_version: "8.1"
+    platform: darwin
+    system_tool_range:
+      clang: ">=17"
+    fallback_toolchain: null
+  darwin-ffmpeg-9.0:
+    ffmpeg_version: "9.0"
+    platform: darwin
+    system_tool_range:
+      clang: ">=17"
+    fallback_toolchain: null
+
+cuda:
+  "12.2": gcc12
+  "12.3": gcc12
+  "13.1": gcc13
