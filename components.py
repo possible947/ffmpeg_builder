@@ -3,16 +3,15 @@
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import yaml
 
-if TYPE_CHECKING:
-    ToolchainChecker = Callable[["Component"], bool]
-else:
-    # Runtime alias: get_buildable() accepts an optional per-component
-    # toolchain gate; tests and app code pass lambdas or bound methods.
-    ToolchainChecker = Callable[..., bool]
+# Per-component toolchain gate used by get_buildable(): returns True when the
+# component's resolved toolchain is satisfied (system, or an installed store
+# profile), False when the component must be excluded. ``rav1e`` is exempt by
+# policy (missing toolchain must raise a build error, never skip silently).
+ToolchainChecker = Callable[["Component"], bool]
 
 WINDOWS_UCRT64_HW_ACCEL_COMPONENTS = {
     "nv-codec",
@@ -383,15 +382,8 @@ class ComponentRegistry:
         platform_info: Optional[Any] = None,
         full_static: bool = False,
         ffmpeg_version: str = "8.1",
-        toolchain_checker: Optional["ToolchainChecker"] = None,
+        toolchain_checker: Optional[ToolchainChecker] = None,
     ) -> List[Component]:
-        """Return buildable components in registry order.
-
-        Components whose toolchain gate fails (explicit lower profile that is
-        not satisfied) are excluded, except ``rav1e`` which is always kept so a
-        missing-but-required toolchain surfaces as a build error instead of a
-        silent skip.
-        """
         """Get list of components that should be built.
 
         Tool requirements are evaluated against the *effective* toolset the
@@ -403,6 +395,11 @@ class ComponentRegistry:
         ``requires_tools`` is either present on the system or provided by an
         earlier component that is itself buildable.
 
+        The toolchain gate runs before the tool gate: an unsatisfied explicit
+        lower toolchain profile excludes the component regardless of tool
+        availability (``rav1e`` excepted — it is always kept so a
+        missing-but-required toolchain surfaces as a build error).
+
         Args:
             gpl_enabled: Whether GPL is enabled.
             platform: Platform name ("linux", "darwin", "windows").
@@ -410,6 +407,9 @@ class ComponentRegistry:
             disable_lv2: Whether LV2 is disabled.
             enable_libvmaf: Whether libvmaf is enabled.
             platform_info: PlatformInfo for HW acceleration filtering.
+            full_static: Whether this is a fully-static build.
+            ffmpeg_version: FFmpeg target version to resolve.
+            toolchain_checker: Optional per-component toolchain gate.
 
         Returns:
             List of components to build.

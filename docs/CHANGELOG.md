@@ -4,6 +4,11 @@ All notable changes to the FFmpeg Builder project.
 
 ## [Unreleased]
 
+### Changed — Toolchain gate consolidation (Phase 3b, step 4) (2026-10-15)
+
+- **Single docstring + clarified gate order in `get_buildable()`** — merged the duplicated docstrings; documented that the toolchain gate runs *before* the `requires_tools` gate and that `rav1e` is exempt from both gates by policy. `ToolchainChecker` is now a plain module-level alias with the exemption policy stated where it is defined.
+- **No behavior change** — consolidation only; covered by the existing gate tests.
+
 ### Added — CUDA host compiler from the registry table (Phase 3b, step 3) (2026-10-15)
 
 - **CUDA table consumed** — `ToolchainStore.cuda_host_compiler()` resolves the store-installed `CC` for the profile mapped to the detected CUDA Toolkit version (`toolchain_for_cuda()`); unmapped versions and not-installed profiles resolve to `None` (no substitution, ever). `PlatformDetector._detect_cuda_nvcc_support()` now probes the store-resolved compiler (after the system default and explicit `CUDA_NVCC_CCBIN`) before declaring nvcc unusable, so `_store_cuda_host_compiler()` closes the Fedora-44-style gap without the removed conda auto-discovery. Store location defaults to `toolchains/` next to the package root, overridable via `FFMPEG_BUILDER_TOOLCHAINS`.
