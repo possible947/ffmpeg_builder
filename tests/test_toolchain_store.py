@@ -284,3 +284,56 @@ class TestComponentEnv:
         assert env["PATH_PREPEND"].endswith("/bin")
         assert env["CC"].endswith("/bin/gcc")
         assert env["CXX"].endswith("/bin/g++")
+
+
+class TestCudaHostCompiler:
+    def _registry(self, tmp_path: Path, cuda_table: dict) -> ToolchainRegistry:
+        path = tmp_path / "toolchains.yaml"
+        data = {
+            "toolchains": {
+                "gcc12": {
+                    "kind": "compiler",
+                    "platforms": ["linux"],
+                    "version": "12.1",
+                    "provides": ["gcc", "g++"],
+                    "materialize": {"bin_subdir": "bin", "cc": "bin/gcc"},
+                    "source": {
+                        "default": "local",
+                        "local": {"type": "local", "path": str(tmp_path / "tc")},
+                    },
+                }
+            },
+            "cuda": dict(cuda_table),
+        }
+        path.write_text(yaml.safe_dump(data), encoding="utf-8")
+        return ToolchainRegistry(path)
+
+    def _store_with_gcc(self, tmp_path: Path) -> ToolchainStore:
+        local_dir = tmp_path / "tc"
+        (local_dir / "bin").mkdir(parents=True)
+        (local_dir / "bin" / "gcc").write_text("#!/bin/sh\n")
+        store = _store(tmp_path)
+        registry = self._registry(tmp_path, {"12.2": "gcc12"})
+        store.acquire(registry, "gcc12")
+        return store
+
+    def test_mapped_and_installed_resolves_cc(self, tmp_path):
+        store = self._store_with_gcc(tmp_path)
+        registry = self._registry(tmp_path, {"12.2": "gcc12"})
+        cc = store.cuda_host_compiler(registry, "12.2")
+        assert cc is not None and cc.endswith("/bin/gcc")
+
+    def test_unmapped_version_resolves_none(self, tmp_path):
+        store = self._store_with_gcc(tmp_path)
+        registry = self._registry(tmp_path, {"12.2": "gcc12"})
+        assert store.cuda_host_compiler(registry, "99.9") is None
+
+    def test_missing_version_resolves_none(self, tmp_path):
+        store = self._store_with_gcc(tmp_path)
+        registry = self._registry(tmp_path, {"12.2": "gcc12"})
+        assert store.cuda_host_compiler(registry, None) is None
+
+    def test_mapped_but_not_installed_resolves_none(self, tmp_path):
+        store = _store(tmp_path)
+        registry = self._registry(tmp_path, {"12.2": "gcc12"})
+        assert store.cuda_host_compiler(registry, "12.2") is None

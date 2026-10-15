@@ -304,6 +304,37 @@ class TestResolution:
         assert plan[0].assignment == ToolchainAssignment(mode="deploy", profile="gcc12")
         assert plan[1].assignment == ToolchainAssignment(mode="deploy", profile="gcc12")
 
+    def test_plan_attaches_cuda_toolchain_to_nv_codec(self, tmp_path):
+        data = {
+            "toolchains": {"gcc12": {"kind": "compiler", "platforms": ["linux"]}},
+            "platform_profiles": {
+                "linux-8.1": {
+                    "ffmpeg_version": "8.1",
+                    "platform": "linux",
+                    "system_tool_range": {"gcc": ">=12,<14"},
+                    "fallback_toolchain": "gcc12",
+                },
+            },
+            "cuda": {"12.2": "gcc12"},
+        }
+        registry = ToolchainRegistry(_write(tmp_path, data))
+        components = [
+            SimpleNamespace(name="nv-codec", toolchain="n/a"),
+            SimpleNamespace(name="x264", toolchain="n/a"),
+        ]
+        plan = registry.plan_component_toolchains(
+            components, "8.1", "linux", {"gcc": "13"}, cuda_version="12.2"
+        )
+        assert plan[0].cuda_toolchain == "gcc12"
+        assert plan[1].cuda_toolchain is None
+
+    def test_plan_without_cuda_version_has_no_cuda_toolchain(self, tmp_path):
+        registry = _range_registry(tmp_path)
+        plan = registry.plan_component_toolchains(
+            [SimpleNamespace(name="nv-codec", toolchain="n/a")], "8.1", "linux", {"gcc": "13"}
+        )
+        assert plan[0].cuda_toolchain is None
+
 
 class TestRangeValidation:
     """Allowed-range strings are validated and evaluated correctly."""

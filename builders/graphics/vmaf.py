@@ -60,8 +60,8 @@ def build_libvmaf(builder: FFmpegBuilder, component: Component, source_dir: Path
 
         # nvcc's host-compiler version check may reject the system default
         # compiler (e.g. gcc newer than a given CUDA toolkit supports).
-        # PlatformDetector's nvcc sanity-check auto-detects a compatible
-        # gcc (system versioned binary or conda/mamba env) and stores it
+        # PlatformDetector's nvcc sanity-check resolves a store-deployed
+        # host compiler via the registry ``cuda`` table and stores it
         # in nvcc_ccbin; forward it to every nvcc invocation via -ccbin.
         nvcc_ccbin = getattr(builder.platform_detector.platform_info, "nvcc_ccbin", None)
         if nvcc_ccbin:

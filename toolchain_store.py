@@ -196,24 +196,68 @@ class ToolchainStore:
         profile's ``materialize`` map, or ``None`` when the profile is not
         installed or declares no materialization.
         """
+        paths = self.profile_paths(registry, profile_name)
+        if not paths:
+            return None
+        env: Dict[str, str] = {}
+        bin_dir = paths.get("BIN_DIR")
+        if bin_dir:
+            env["PATH_PREPEND"] = bin_dir
+        if "CC" in paths:
+            env["CC"] = paths["CC"]
+        if "CXX" in paths:
+            env["CXX"] = paths["CXX"]
+        return env or None
+
+    def profile_paths(self, registry: ToolchainRegistry, profile_name: str) -> Dict[str, str]:
+        """Resolve absolute tool paths (CC/CXX/bin dir) for an installed profile.
+
+        Returns a mapping with any of ``CC``, ``CXX``, ``BIN_DIR`` keys, or an
+        empty dict when the profile is not installed or declares no
+        materialization. Used by the CUDA host-compiler selection
+        (``-ccbin``) as well as :meth:`component_env`.
+        """
         installed = self.installed(profile_name)
         if installed is None:
-            return None
+            return {}
         profile = registry.get_profile(profile_name)
         if profile is None:
-            return None
+            return {}
         prefix = Path(installed.path)
-        env: Dict[str, str] = {}
+        paths: Dict[str, str] = {}
         bin_subdir = profile.materialize.get("bin_subdir")
         if bin_subdir:
-            env["PATH_PREPEND"] = str(prefix / bin_subdir)
+            paths["BIN_DIR"] = str(prefix / bin_subdir)
         cc = profile.materialize.get("cc")
         if cc:
-            env["CC"] = str(prefix / cc)
+            paths["CC"] = str(prefix / cc)
         cxx = profile.materialize.get("cxx")
         if cxx:
-            env["CXX"] = str(prefix / cxx)
-        return env or None
+            paths["CXX"] = str(prefix / cxx)
+        return paths
+
+    def cuda_host_compiler(
+        self, registry: ToolchainRegistry, cuda_version: Optional[str]
+    ) -> Optional[str]:
+        """Resolve the CUDA host compiler from the installed toolchain store.
+
+        The registry's ``cuda`` table maps the detected CUDA Toolkit version
+        (``"major.minor"``) to the required host-compiler profile; when that
+        profile is installed, its ``CC`` path is returned for ``nvcc -ccbin``.
+        Returns ``None`` when the version is unknown, unmapped, or the mapped
+        profile is not installed. There is no automatic substitution: an
+        absent mapping is a skip/error, never a guess.
+        """
+        if not cuda_version:
+            return None
+        profile_name = registry.toolchain_for_cuda(cuda_version)
+        if profile_name is None:
+            return None
+        paths = self.profile_paths(registry, profile_name)
+        cc = paths.get("CC")
+        if cc and Path(cc).exists():
+            return cc
+        return None
 
     # ------------------------------------------------------------------
     # Locking

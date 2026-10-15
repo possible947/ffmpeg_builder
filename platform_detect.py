@@ -841,12 +841,14 @@ class PlatformDetector:
         CUDA toolkits pin a maximum-supported host-compiler major version
         (e.g. CUDA 12.2 supports gcc up to 12), which rolling-release distros
         like Fedora routinely exceed. The system default compiler is probed
-        first, then an explicit ``CUDA_NVCC_CCBIN`` override is honoured. The
-        winning ``-ccbin`` path is stored in ``nvcc_ccbin`` for callers to
+        first, then an explicit ``CUDA_NVCC_CCBIN`` override is honoured. When
+        nvcc rejects the system compiler, the registry's ``cuda`` table is
+        consulted for the mapped host-compiler profile given the detected CUDA
+        Toolkit version (this requires the detector to know the
+        toolchain-store root; without a store the table cannot be applied).
+        The winning ``-ccbin`` path is stored in ``nvcc_ccbin`` for callers to
         forward to nvcc invocations. There is no automatic discovery of
-        alternative host compilers: a compatible compiler must be provided
-        explicitly (for example deployed into the toolchain store and passed
-        via ``CUDA_NVCC_CCBIN``).
+        alternative host compilers.
         """
         self.platform_info.nvcc_ccbin = None
         self.platform_info.nvcc_ccbin_reason = ""
@@ -873,11 +875,54 @@ class PlatformDetector:
             self.platform_info.cuda_nvcc_reason = "System default host compiler is nvcc-compatible"
             return
 
+        store_ccbin = self._store_cuda_host_compiler()
+        if store_ccbin and self._probe_nvcc_compile(nvcc_path, ccbin=store_ccbin):
+            self.platform_info.nvcc_ccbin = store_ccbin
+            self.platform_info.nvcc_ccbin_reason = (
+                f"Resolved from toolchain store for CUDA {self.platform_info.cuda_version}"
+            )
+            self.platform_info.cuda_nvcc_supported = True
+            self.platform_info.cuda_nvcc_reason = self.platform_info.nvcc_ccbin_reason
+            return
+
         self.platform_info.cuda_nvcc_reason = (
             "nvcc rejected the system host compiler (likely too new for this CUDA "
             "toolkit); set CUDA_NVCC_CCBIN to a compatible compiler (for example a "
             "toolchain deployed into the toolchain store)"
         )
+
+    def _store_cuda_host_compiler(self) -> Optional[str]:
+        """Resolve the CUDA host compiler via the registry ``cuda`` table.
+
+        Returns the store-installed ``CC`` for the profile mapped to the
+        detected CUDA Toolkit version, or ``None`` when no store root is
+        configured, the version is unmapped, or the profile is not installed.
+        """
+        from .toolchain_registry import ToolchainRegistry
+        from .toolchain_store import ToolchainStore
+
+        store_root = self._toolchain_store_root()
+        cuda_version = self.platform_info.cuda_version
+        if store_root is None or not cuda_version:
+            return None
+        try:
+            registry = ToolchainRegistry()
+        except (OSError, ValueError):
+            return None
+        return ToolchainStore(store_root).cuda_host_compiler(registry, cuda_version)
+
+    def _toolchain_store_root(self) -> Optional[Path]:
+        """Locate the persistent toolchain store, if configured.
+
+        The default layout is ``toolchains/`` next to the package root (flat
+        layout); ``FFMPEG_BUILDER_TOOLCHAINS`` overrides the location.
+        """
+        override = os.environ.get("FFMPEG_BUILDER_TOOLCHAINS")
+        if override:
+            candidate = Path(override)
+            return candidate if candidate.is_dir() else None
+        candidate = Path(__file__).resolve().parent / "toolchains"
+        return candidate if candidate.is_dir() else None
 
     def _probe_nvcc_compile(self, nvcc_path: str, ccbin: Optional[str] = None) -> bool:
         """Check whether nvcc can compile a minimal CUDA source file.

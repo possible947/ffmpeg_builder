@@ -98,6 +98,7 @@ class ComponentToolchainPlan:
     component: str
     toolchain: str
     assignment: Optional[ToolchainAssignment]
+    cuda_toolchain: Optional[str] = None
 
 
 class _HasToolchain(Protocol):
@@ -219,9 +220,17 @@ class ToolchainRegistry:
         ffmpeg_version: str,
         platform: str,
         system_tool_versions: Mapping[str, str],
+        cuda_version: Optional[str] = None,
     ) -> List[ComponentToolchainPlan]:
-        """Build a read-only toolchain plan for a component list."""
+        """Build a read-only toolchain plan for a component list.
+
+        When ``cuda_version`` is given, the effective toolchain for the
+        ``nv-codec`` component additionally honours the registry ``cuda``
+        table: the mapped host compiler is shown as the CUDA assignment,
+        while ``unresolved`` entries keep their skip semantics.
+        """
         plan: List[ComponentToolchainPlan] = []
+        cuda_profile = self.toolchain_for_cuda(cuda_version) if cuda_version else None
         for component in components:
             assignment = self.resolve_component_toolchain(
                 component.toolchain, ffmpeg_version, platform, system_tool_versions
@@ -231,6 +240,7 @@ class ToolchainRegistry:
                     component=component.name,
                     toolchain=component.toolchain,
                     assignment=assignment,
+                    cuda_toolchain=cuda_profile if component.name == "nv-codec" else None,
                 )
             )
         return plan

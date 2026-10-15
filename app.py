@@ -258,6 +258,7 @@ class FFmpegBuilderApp:
             config.ffmpeg_version,
             self.platform_detector.get_platform_name(),
             self._system_tool_versions(),
+            cuda_version=self.platform_info.cuda_version,
         )
         self.toolchain_screen.show(plan)
 

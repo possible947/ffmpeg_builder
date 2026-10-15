@@ -179,6 +179,25 @@ def test_toolchain_plan_screen_renders(monkeypatch):
     assert "unresolved (would skip)" in output
 
 
+def test_toolchain_plan_screen_renders_cuda_host(monkeypatch):
+    console = Console(file=io.StringIO())
+    screen = ToolchainPlanScreen(console)
+    plan = [
+        ComponentToolchainPlan(
+            component="nv-codec",
+            toolchain="n/a",
+            assignment=ToolchainAssignment(mode="system"),
+            cuda_toolchain="gcc12",
+        ),
+    ]
+
+    monkeypatch.setattr(screens.Prompt, "ask", staticmethod(lambda *args, **kwargs: ""))
+
+    screen.show(plan)
+
+    assert "cuda: gcc12" in console.file.getvalue()
+
+
 def test_toolchain_store_screen_quits(monkeypatch, tmp_path):
     import yaml
 

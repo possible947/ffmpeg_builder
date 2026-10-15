@@ -4,6 +4,12 @@ All notable changes to the FFmpeg Builder project.
 
 ## [Unreleased]
 
+### Added — CUDA host compiler from the registry table (Phase 3b, step 3) (2026-10-15)
+
+- **CUDA table consumed** — `ToolchainStore.cuda_host_compiler()` resolves the store-installed `CC` for the profile mapped to the detected CUDA Toolkit version (`toolchain_for_cuda()`); unmapped versions and not-installed profiles resolve to `None` (no substitution, ever). `PlatformDetector._detect_cuda_nvcc_support()` now probes the store-resolved compiler (after the system default and explicit `CUDA_NVCC_CCBIN`) before declaring nvcc unusable, so `_store_cuda_host_compiler()` closes the Fedora-44-style gap without the removed conda auto-discovery. Store location defaults to `toolchains/` next to the package root, overridable via `FFMPEG_BUILDER_TOOLCHAINS`.
+- **Plan screen shows the CUDA mapping** — `plan_component_toolchains()` carries `cuda_toolchain` for `nv-codec`, and the Toolchain plan TUI gained a "CUDA host" column.
+- **Tests** — `TestCudaHostCompiler` in `tests/test_toolchain_store.py`, plan CUDA-attachment tests in `tests/test_toolchain_registry.py`, CUDA-column render test in `tests/test_screens.py`.
+
 ### Added — Per-component toolchain skip gate (Phase 3b, step 2) (2026-10-15)
 
 - **Toolchain gate in `get_buildable()`** — new optional `toolchain_checker` callable; components whose gate fails are excluded from the buildable list. The app wires `_component_toolchain_checker()`: a component is kept when its resolved toolchain is `system`, or when the required profile is declared, deployable for the platform, and installed in the store. Unknown / non-deployable / not-installed profiles are excluded with the exclusion visible in the buildable list and final report.

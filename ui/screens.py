@@ -73,6 +73,13 @@ def _format_assignment(entry: ComponentToolchainPlan) -> str:
     return f"deploy: {assignment.profile}"
 
 
+def _format_cuda(entry: ComponentToolchainPlan) -> str:
+    """Render the CUDA host-compiler mapping for the toolchain-plan screen."""
+    if entry.cuda_toolchain:
+        return f"cuda: {entry.cuda_toolchain}"
+    return "-"
+
+
 class UIScreen:
     """Base UI screen."""
 
@@ -376,9 +383,15 @@ class ToolchainPlanScreen(UIScreen):
         table.add_column("Component", style="cyan", no_wrap=True)
         table.add_column("Declared", style="magenta", no_wrap=True)
         table.add_column("Effective")
+        table.add_column("CUDA host")
 
         for entry in plan:
-            table.add_row(entry.component, entry.toolchain, _format_assignment(entry))
+            table.add_row(
+                entry.component,
+                entry.toolchain,
+                _format_assignment(entry),
+                _format_cuda(entry),
+            )
         self.console.print(table)
         self.console.print()
         self.console.print("[dim]Read-only: no toolchain is deployed in this phase.[/dim]")

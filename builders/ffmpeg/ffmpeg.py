@@ -128,8 +128,8 @@ def build_ffmpeg(builder: FFmpegBuilder, component: Component, source_dir: Path)
             # distros with a newer system gcc, nvcc rejects it outright.
             # cuda_nvcc_supported/nvcc_ccbin come from PlatformDetector's
             # nvcc compile sanity-check (see _detect_cuda_nvcc_support),
-            # which also auto-detects a compatible conda/mamba gcc to pass
-            # via -ccbin when the system default is too new.
+            # which consults the registry ``cuda`` table for a store-deployed
+            # host compiler when the system default is too new.
             cuda_nvcc_supported = getattr(platform_info, "cuda_nvcc_supported", True)
             cuda_nvcc_reason = getattr(platform_info, "cuda_nvcc_reason", "")
             nvcc_ccbin = getattr(platform_info, "nvcc_ccbin", None)
