@@ -1,8 +1,9 @@
-# Changelog
+### Added — Toolchain pins complete: gcc15, gmp/mpfr/mpc (2026-10-16)
 
-All notable changes to the FFmpeg Builder project.
-
-## [Unreleased]
+- **Archives staged** — `mpfr-4.2.1.tar.gz`, `mpc-1.3.1.tar.gz`, `gcc-15.2.0.tar.xz` copied from `~/Downloads` into `third_party/sources/` (LFS-tracked); `gmp-6.3.0.tar.xz` already present, hash-confirmed identical.
+- **gcc15 deployable** — `version: 15.2.0` + `source.build` (recipe `gcc`, same bootstrap) pinned with verified SHA-256 `438fd996…`; builds the FFmpeg 9.0 toolchain on old systems.
+- **gmp/mpfr/mpc deployable** — `version` + `source.build` (recipe `autotools`) pinned with verified SHA-256; the full gcc bootstrap chain (`gmp → mpfr/mpc → gcc`) is now resolvable.
+- **rust 1.89.0 NOT staged** — the downloaded `rust-1.89.0` tarball is below the `rustc >= 1.95` minimum required by `build_cargo()` (`builders/base.py:359`); staging it would deploy an unusable toolchain. Needs a re-download at ≥ 1.95 before the `rust`/`cargo-c` profiles can be pinned.
 
 ### Added — Toolchain pins staged: gcc12/gcc13 + gcc15 profile (2026-10-16)
 
