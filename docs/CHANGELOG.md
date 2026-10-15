@@ -4,6 +4,11 @@ All notable changes to the FFmpeg Builder project.
 
 ## [Unreleased]
 
+### Added — Toolchain skip reasons surfaced in the UI (Phase 3b, step 5) (2026-10-15)
+
+- **Skip reasons in Component info** — `FFmpegBuilderApp._component_toolchain_reasons()` explains each toolchain-gated exclusion (unknown profile / not available for platform / not installed with a store hint), and `InfoScreen` prints them in the Notes column ("toolchain: …") instead of the generic "not selected". Buildable-list length on the start screen is unchanged.
+- **Tests** — `test_info_screen_shows_toolchain_skip_reason` in `tests/test_screens.py`.
+
 ### Changed — Toolchain gate consolidation (Phase 3b, step 4) (2026-10-15)
 
 - **Single docstring + clarified gate order in `get_buildable()`** — merged the duplicated docstrings; documented that the toolchain gate runs *before* the `requires_tools` gate and that `rav1e` is exempt from both gates by policy. `ToolchainChecker` is now a plain module-level alias with the exemption policy stated where it is defined.

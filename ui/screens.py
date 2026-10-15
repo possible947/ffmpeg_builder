@@ -1,7 +1,7 @@
 """UI screens using rich library."""
 
 from pathlib import Path
-from typing import List, Optional, Set
+from typing import Dict, List, Optional, Set
 
 from rich.console import Console
 from rich.panel import Panel
@@ -482,11 +482,15 @@ class InfoScreen(UIScreen):
     """Component information screen."""
 
     def show(
-        self, buildable: List[Component], all_components: Optional[List[Component]] = None
+        self,
+        buildable: List[Component],
+        all_components: Optional[List[Component]] = None,
+        toolchain_reasons: Optional[Dict[str, str]] = None,
     ) -> None:
         """Show paged component information."""
         selected: Set[str] = {component.name for component in buildable}
         components = all_components or buildable
+        reasons = toolchain_reasons or {}
         page = 0
         page_size = max(8, self.console.size.height - 10)
         while True:
@@ -506,7 +510,8 @@ class InfoScreen(UIScreen):
                 if component.system_component:
                     notes.append("system")
                 if component.name not in selected:
-                    notes.append("not selected")
+                    reason = reasons.get(component.name)
+                    notes.append(f"toolchain: {reason}" if reason else "not selected")
                 table.add_row(
                     str(index),
                     component.name,

@@ -151,7 +151,11 @@ class FFmpegBuilderApp:
                 elif action == "cleanup":
                     self._cleanup()
                 elif action == "info":
-                    self.info_screen.show(components, self.registry.get_all())
+                    self.info_screen.show(
+                        components,
+                        self.registry.get_all(),
+                        toolchain_reasons=self._component_toolchain_reasons(config),
+                    )
                     continue
                 elif action == "toolchain":
                     self._show_toolchain_plan(config)
@@ -232,6 +236,52 @@ class FFmpegBuilderApp:
             return profile_name in installed
 
         return _check
+
+    def _component_toolchain_reasons(self, config: BuildConfig) -> Dict[str, str]:
+        """Explain why buildable-excluded components were gated by toolchain.
+
+        Returns a mapping of component name to a human-readable reason for
+        components that are otherwise eligible but excluded by the toolchain
+        gate (unknown / non-deployable / not-installed required profile).
+        """
+        try:
+            toolchain_registry = ToolchainRegistry()
+        except (OSError, ValueError):
+            return {}
+        installed = {
+            item.profile
+            for item in ToolchainStore(
+                PROJECT_ROOT / "toolchains",
+                workspace=self.workspace,
+            ).list_installed()
+        }
+        versions = self._system_tool_versions()
+        platform = self.platform_detector.get_platform_name()
+        reasons: Dict[str, str] = {}
+        for component in self.registry.get_all():
+            if component.name == "rav1e":
+                continue
+            assignment = toolchain_registry.resolve_component_toolchain(
+                component.toolchain, config.ffmpeg_version, platform, versions
+            )
+            if assignment is None or assignment.mode == "system":
+                continue
+            profile_name = assignment.profile
+            if profile_name is None:
+                continue
+            profile = toolchain_registry.get_profile(profile_name)
+            if profile is None:
+                reasons[component.name] = f"unknown toolchain profile {profile_name!r}"
+            elif not toolchain_registry.is_profile_available(profile, platform):
+                reasons[component.name] = (
+                    f"toolchain {profile_name!r} not available for {platform} "
+                    "(missing source or platform)"
+                )
+            elif profile_name not in installed:
+                reasons[component.name] = (
+                    f"toolchain {profile_name!r} not installed (use the Toolchain store)"
+                )
+        return reasons
 
     def _system_tool_versions(self) -> Dict[str, str]:
         """Map detected system tool names to version strings for range checks."""

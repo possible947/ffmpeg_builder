@@ -14,6 +14,7 @@ from ffmpeg_builder.toolchain_store import ToolchainStore
 from ffmpeg_builder.ui import screens
 from ffmpeg_builder.ui.screens import (
     ConfigScreen,
+    InfoScreen,
     ToolchainPlanScreen,
     ToolchainStoreScreen,
     _parse_positive_int,
@@ -217,3 +218,33 @@ def test_toolchain_store_screen_quits(monkeypatch, tmp_path):
     screen.show(store, registry)
 
     assert "Toolchain Store" in console.file.getvalue()
+
+
+def test_info_screen_shows_toolchain_skip_reason(monkeypatch):
+    from ffmpeg_builder.components import BuildSystem, Component, ComponentCategory
+
+    console = Console(file=io.StringIO(), width=120)
+    screen = InfoScreen(console)
+    gated = Component(
+        name="needs-gcc12",
+        version="1.0",
+        url="https://example.org/needs.tar.gz",
+        category=ComponentCategory.OTHER_LIB,
+        build_system=BuildSystem.AUTOTOOLS,
+        toolchain="gcc12",
+    )
+    plain = Component(
+        name="plain",
+        version="1.0",
+        url="https://example.org/plain.tar.gz",
+        category=ComponentCategory.OTHER_LIB,
+        build_system=BuildSystem.AUTOTOOLS,
+    )
+    monkeypatch.setattr(screens.Prompt, "ask", staticmethod(lambda *args, **kwargs: "q"))
+    screen.show(
+        [plain],
+        [plain, gated],
+        toolchain_reasons={"needs-gcc12": "toolchain 'gcc12' not installed"},
+    )
+    output = console.file.getvalue()
+    assert "toolchain: toolchain 'gcc12' not installed" in output
