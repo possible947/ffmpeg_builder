@@ -243,6 +243,26 @@ class TestBuilders:
                 [],
             )
 
+    def test_build_rust_standalone_runs_installer(self, tmp_path):
+        source_dir = tmp_path / "src"
+        source_dir.mkdir()
+        (source_dir / "install.sh").write_text("#!/bin/sh\n")
+        calls: list = []
+        toolchain_builders.build_rust_standalone(
+            source_dir, tmp_path / "prefix", tmp_path / "logs", _recording_runner(calls)
+        )
+        assert calls[0][0][0] == "sh"
+        assert str(calls[0][0][1]).endswith("install.sh")
+        assert any(arg.startswith("--prefix=") for arg in calls[0][0])
+
+    def test_build_rust_standalone_missing_installer_raises(self, tmp_path):
+        source_dir = tmp_path / "src"
+        source_dir.mkdir()
+        with pytest.raises(FileNotFoundError):
+            toolchain_builders.build_rust_standalone(
+                source_dir, tmp_path / "prefix", tmp_path / "logs", _recording_runner([])
+            )
+
 
 class TestComponentEnv:
     def test_none_when_not_installed(self, tmp_path):

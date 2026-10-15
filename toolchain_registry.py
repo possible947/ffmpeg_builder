@@ -18,7 +18,7 @@ import yaml
 ALLOWED_KINDS = frozenset({"compiler", "build_tool", "rust", "rust_tool", "bootstrap_lib"})
 ALLOWED_PLATFORMS = frozenset({"linux", "darwin", "windows"})
 ALLOWED_SOURCE_TYPES = frozenset({"build", "binary", "download", "local"})
-ALLOWED_RECIPES = frozenset({"gcc", "autotools"})
+ALLOWED_RECIPES = frozenset({"gcc", "autotools", "rust_standalone"})
 
 _SHA256_RE = re.compile(r"\A[0-9a-fA-F]{64}\Z")
 _RANGE_OP_RE = re.compile(r"\A(>=|<=|==|>|<)\s*(\d+(?:\.\d+)*)\Z")

@@ -80,6 +80,39 @@ def build_gcc(
     runner(["make", "install", *install_args], source_dir, log_dir / "install.log")
 
 
+def build_rust_standalone(
+    source_dir: Path,
+    prefix: Path,
+    log_dir: Path,
+    runner: Runner,
+) -> None:
+    """Install a rust-lang standalone tarball into ``prefix``.
+
+    The standalone distribution (``rust-<version>-<target>.tar.gz``) carries
+    rustc + cargo (+ rust-docs/clippy) as component subdirectories plus an
+    ``install.sh`` installer. Running ``install.sh --prefix=<prefix>`` lays
+    out ``bin/`` (rustc, cargo), ``lib/`` and share trees under the prefix,
+    matching the profile's ``materialize: {bin_subdir: bin}`` contract. The
+    installer runs non-interactively with ``--verbose``; the backtrace and
+    manifest components are disabled to keep the install hermetic.
+    """
+    installer = source_dir / "install.sh"
+    if not installer.exists():
+        raise FileNotFoundError(f"No install.sh in {source_dir}")
+    runner(
+        [
+            "sh",
+            str(installer),
+            f"--prefix={prefix}",
+            "--verbose",
+            "--without=rust-docs",
+            "--without=clippy-preview",
+        ],
+        source_dir,
+        log_dir / "install.log",
+    )
+
+
 def run_build(
     recipe: Optional[str],
     source_dir: Path,
@@ -103,5 +136,8 @@ def run_build(
             install_args,
             prerequisites,
         )
+        return
+    if recipe == "rust_standalone":
+        build_rust_standalone(source_dir, prefix, log_dir, runner)
         return
     build_autotools(source_dir, prefix, log_dir, runner, configure_args, build_args, install_args)

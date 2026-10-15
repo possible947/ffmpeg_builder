@@ -1,3 +1,9 @@
+### Added — Rust 1.99.0 staged (2026-10-16)
+
+- **Current stable downloaded** — Rust 1.99.0 (released Oct 1, 2026) Linux x86_64 standalone tarball (397 MB) into `third_party/sources/` (LFS-tracked), SHA-256 `de0581ca…` pinned in `toolchains.yaml`; the earlier `rust-1.89.0` is below the `rustc >= 1.95` build minimum and stays out of the tree.
+- **New `rust_standalone` recipe** — the rust-lang standalone distribution is an installer (`install.sh --prefix=…`), not a build tree, so `toolchain_builders.build_rust_standalone()` runs the installer into the store prefix (rustc + cargo under `bin/`, matching `materialize: {bin_subdir: bin}`); recipe added to `ALLOWED_RECIPES` with `run_build()` dispatch. `rust` profile is `deployable=True`.
+- **Tests** — installer invocation + missing-`install.sh` tests in `tests/test_toolchain_store.py`.
+
 ### Added — Toolchain pins complete: gcc15, gmp/mpfr/mpc (2026-10-16)
 
 - **Archives staged** — `mpfr-4.2.1.tar.gz`, `mpc-1.3.1.tar.gz`, `gcc-15.2.0.tar.xz` copied from `~/Downloads` into `third_party/sources/` (LFS-tracked); `gmp-6.3.0.tar.xz` already present, hash-confirmed identical.
