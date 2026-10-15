@@ -75,6 +75,7 @@ class PlatformInfo:
     macports_clang: Optional[ToolInfo] = None
     cuda_available: bool = False
     cuda_path: Optional[str] = None
+    cuda_version: Optional[str] = None
     cuda_compute_capability: Optional[str] = None
     nvenc_api_version: Optional[str] = None
     nvenc_reason: str = ""
@@ -136,6 +137,7 @@ class PlatformInfo:
             "macports_clang": self.macports_clang.to_dict() if self.macports_clang else None,
             "cuda_available": self.cuda_available,
             "cuda_path": self.cuda_path,
+            "cuda_version": self.cuda_version,
             "cuda_compute_capability": self.cuda_compute_capability,
             "nvenc_api_version": self.nvenc_api_version,
             "nvenc_reason": self.nvenc_reason,
@@ -677,6 +679,7 @@ class PlatformDetector:
         if nvcc_path:
             self.platform_info.cuda_available = True
             self.platform_info.cuda_path = nvcc_path
+            self._detect_cuda_version(nvcc_path)
             self._detect_cuda_compute_capability()
             self._detect_cuda_nvcc_support(nvcc_path)
             return
@@ -702,9 +705,35 @@ class PlatformDetector:
             if nvcc.exists():
                 self.platform_info.cuda_available = True
                 self.platform_info.cuda_path = str(nvcc)
+                self._detect_cuda_version(str(nvcc))
                 self._detect_cuda_compute_capability()
                 self._detect_cuda_nvcc_support(str(nvcc))
                 return
+
+    def _detect_cuda_version(self, nvcc_path: str) -> None:
+        """Detect the CUDA Toolkit version from ``nvcc --version`` output.
+
+        ``nvcc --version`` prints a line like
+        ``Cuda compilation tools, release 12.2, V12.2.140``. The release
+        version is stored (``"major.minor"``) in ``PlatformInfo.cuda_version``
+        so ``ToolchainRegistry.toolchain_for_cuda()`` can select the mapped
+        host-compiler profile. Failures leave the version unset.
+        """
+        self.platform_info.cuda_version = None
+        try:
+            result = subprocess.run(
+                [nvcc_path, "--version"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except Exception:
+            return
+        if result.returncode != 0:
+            return
+        match = re.search(r"release\s+(\d+)\.(\d+)", result.stdout or "")
+        if match:
+            self.platform_info.cuda_version = f"{match.group(1)}.{match.group(2)}"
 
     def _detect_cuda_compute_capability(self) -> None:
         """Detect CUDA compute capability using nvidia-smi.

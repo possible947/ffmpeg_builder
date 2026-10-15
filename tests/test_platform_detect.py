@@ -345,6 +345,36 @@ class TestCudaComputeCapability:
         assert d.platform_info.cuda_compute_capability is None
 
 
+class TestCudaVersionDetection:
+    """_detect_cuda_version(): parse release from ``nvcc --version`` output."""
+
+    _OUTPUT = (
+        "nvcc: NVIDIA (R) Cuda compiler driver\nCuda compilation tools, release 12.2, V12.2.140\n"
+    )
+
+    def _run_with_output(self, monkeypatch, stdout, returncode=0):
+        d = PlatformDetector()
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            lambda *a, **k: subprocess.CompletedProcess(a, returncode, stdout=stdout),
+        )
+        d._detect_cuda_version("nvcc")
+        return d
+
+    def test_parses_major_minor(self, monkeypatch):
+        d = self._run_with_output(monkeypatch, self._OUTPUT)
+        assert d.platform_info.cuda_version == "12.2"
+
+    def test_unparseable_output_leaves_none(self, monkeypatch):
+        d = self._run_with_output(monkeypatch, "no version here")
+        assert d.platform_info.cuda_version is None
+
+    def test_failed_command_leaves_none(self, monkeypatch):
+        d = self._run_with_output(monkeypatch, self._OUTPUT, returncode=1)
+        assert d.platform_info.cuda_version is None
+
+
 class TestNvencApiVersionDetection:
     """_detect_nvenc_api_version(): driver-reported max NVENC API version."""
 

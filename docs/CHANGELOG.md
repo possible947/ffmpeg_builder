@@ -4,6 +4,11 @@ All notable changes to the FFmpeg Builder project.
 
 ## [Unreleased]
 
+### Added — CUDA toolkit version detection (Phase 3b, step 1) (2026-10-15)
+
+- **CUDA Toolkit version recorded** — `PlatformDetector._detect_cuda_version()` parses `nvcc --version` ("Cuda compilation tools, release X.Y") into `PlatformInfo.cuda_version` (`"major.minor"`), serialized alongside the existing CUDA fields. This is the declared input for `ToolchainRegistry.toolchain_for_cuda()` in the CUDA-table step.
+- **Tests** — `TestCudaVersionDetection` in `tests/test_platform_detect.py` (parse, unparseable output, nonzero exit).
+
 ### Changed — Effective toolchain environment and registry-driven policy (Phase 3) (2026-10-15)
 
 - **Effective toolchain injected into the build** — `FFmpegBuilder` accepts per-component environment overrides (`PATH_PREPEND`, `CC`, `CXX`), and `ToolchainStore.component_env()` builds them from a profile's `materialize` map for *installed* profiles. The app resolves each component's toolchain (`toolchain: n/a` inherits the platform profile; explicit lower profiles override) and passes the overrides. Components without a deployable/installed toolchain are unchanged, so system-toolchain builds are unaffected.
