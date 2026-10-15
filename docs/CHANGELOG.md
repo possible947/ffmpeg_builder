@@ -4,6 +4,14 @@ All notable changes to the FFmpeg Builder project.
 
 ## [Unreleased]
 
+### Added — Toolchain pins staged: gcc12/gcc13 + gcc15 profile (2026-10-16)
+
+- **`gcc-12.5.0` / `gcc-13.4.0` archives staged** — official GNU release tarballs copied from `~/Downloads` into `third_party/sources/` (Git LFS-tracked); SHA-256 verified locally (`71cd373d…` / `9c4ce6db…`) and pinned in `toolchains.yaml`.
+- **gcc12/gcc13 deployable** — both profiles now declare `version` + `source.build` (recipe `gcc`, bootstrap `{compiler: system, requires: [gmp, mpfr, mpc]}`); `ToolchainRegistry` confirms `deployable=True`.
+- **gcc15 profile added (declared, not yet pinned)** — builds the FFmpeg 9.0 toolchain on old systems whose system GCC predates the 9.0 range; `deployable=False` until its archive + pin are staged.
+- **gmp/mpfr/mpc still unpinned** — bootstrap prerequisites of the gcc recipes (`gmp-6.3.0.tar.xz` already in sources); their registry `version`+`source` blocks remain to be staged before a real bootstrap run.
+- **Policy tests updated to registry semantics** — staging the pins made `gcc12` deployable, so out-of-range system GCC no longer blocks FFmpeg 8.1 (the fallback covers it); tests now assert keep-on-deployable-fallback plus block-on-undeployable for both GCC and Clang ranges.
+
 ### Added — Toolchain skip reasons surfaced in the UI (Phase 3b, step 5) (2026-10-15)
 
 - **Skip reasons in Component info** — `FFmpegBuilderApp._component_toolchain_reasons()` explains each toolchain-gated exclusion (unknown profile / not available for platform / not installed with a store hint), and `InfoScreen` prints them in the Notes column ("toolchain: …") instead of the generic "not selected". Buildable-list length on the start screen is unchanged.

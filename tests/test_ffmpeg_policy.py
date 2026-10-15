@@ -12,33 +12,60 @@ def _tools(gcc_version=None, clang_version=None):
     return tools
 
 
-def test_linux_gcc15_only_ffmpeg9_policy():
+def test_linux_gcc15_keeps_ffmpeg81_via_deployable_fallback():
+    """Registry policy: out-of-range system GCC is OK when the fallback is deployable."""
     cfg = BuildConfig(ffmpeg_version="8.1")
     info = PlatformInfo(is_linux=True, platform="linux", gcc_major_version=15)
 
     policy = evaluate_ffmpeg_policy(cfg, info, _tools(gcc_version="15.2.1"))
 
-    assert policy.available_versions == ["9.0"]
-    assert policy.selected_version_allowed is False
-    assert "FFmpeg 9.0" in " ".join(policy.notes)
+    assert policy.available_versions == ["8.1", "9.0"]
+    assert policy.selected_version_allowed is True
+    assert policy.blocked_reason == ""
 
 
-def test_non_macos_blocks_ffmpeg81_on_new_gcc():
+def test_non_macos_blocks_ffmpeg81_when_fallback_not_deployable(monkeypatch):
+    """Without a deployable fallback, out-of-range system GCC blocks FFmpeg 8.1."""
+    import ffmpeg_builder.ffmpeg_policy as policy_module
+    from ffmpeg_builder.toolchain_registry import ToolchainRegistry
+
     cfg = BuildConfig(ffmpeg_version="8.1")
     info = PlatformInfo(is_linux=True, platform="linux", gcc_major_version=14)
+    real_init = ToolchainRegistry.__init__
 
-    policy = evaluate_ffmpeg_policy(cfg, info, _tools(gcc_version="14.1.0"))
+    def _undeployable(self, yaml_path=None):
+        real_init(self, yaml_path)
+        for profile in self.profiles.values():
+            object.__setattr__(profile, "default_source", None)
 
-    assert "8.1" not in policy.available_versions
+    monkeypatch.setattr(ToolchainRegistry, "__init__", _undeployable)
+
+    policy = policy_module.evaluate_ffmpeg_policy(cfg, info, _tools(gcc_version="14.1.0"))
+
+    # GCC 14 is outside both version ranges, so with no deployable fallback
+    # neither version is available.
+    assert policy.available_versions == []
     assert policy.selected_version_allowed is False
     assert "GCC 14" in policy.blocked_reason
 
 
-def test_non_macos_blocks_ffmpeg81_on_new_clang():
+def test_non_macos_blocks_ffmpeg81_on_new_clang(monkeypatch):
+    """Clang out of range blocks 8.1 when the fallback cannot cover it."""
+    import ffmpeg_builder.ffmpeg_policy as policy_module
+    from ffmpeg_builder.toolchain_registry import ToolchainRegistry
+
     cfg = BuildConfig(ffmpeg_version="8.1")
     info = PlatformInfo(is_linux=True, platform="linux")
+    real_init = ToolchainRegistry.__init__
 
-    policy = evaluate_ffmpeg_policy(cfg, info, _tools(clang_version="26.0.0"))
+    def _undeployable(self, yaml_path=None):
+        real_init(self, yaml_path)
+        for profile in self.profiles.values():
+            object.__setattr__(profile, "default_source", None)
+
+    monkeypatch.setattr(ToolchainRegistry, "__init__", _undeployable)
+
+    policy = policy_module.evaluate_ffmpeg_policy(cfg, info, _tools(clang_version="26.0.0"))
 
     assert "8.1" not in policy.available_versions
     assert policy.selected_version_allowed is False

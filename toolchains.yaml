@@ -16,13 +16,41 @@
 toolchains:
   gcc12:
     kind: compiler
+    version: "12.5.0"
     platforms: [linux]
     provides: [gcc, g++]
     materialize:
       bin_subdir: bin
       cc: bin/gcc
       cxx: bin/g++
+    source:
+      default: build
+      build:
+        type: build
+        recipe: gcc
+        url: "https://ftpmirror.gnu.org/gnu/gcc/gcc-{version}/gcc-{version}.tar.xz"
+        archive_filename: "gcc-{version}.tar.xz"
+        sha256: 71cd373d0f04615e66c5b5b14d49c1a4c1a08efa7b30625cd240b11bab4062b3
+        bootstrap: {compiler: system, requires: [gmp, mpfr, mpc]}
   gcc13:
+    kind: compiler
+    version: "13.4.0"
+    platforms: [linux]
+    provides: [gcc, g++]
+    materialize:
+      bin_subdir: bin
+      cc: bin/gcc
+      cxx: bin/g++
+    source:
+      default: build
+      build:
+        type: build
+        recipe: gcc
+        url: "https://ftpmirror.gnu.org/gnu/gcc/gcc-{version}/gcc-{version}.tar.xz"
+        archive_filename: "gcc-{version}.tar.xz"
+        sha256: 9c4ce6dbb040568fdc545588ac03c5cbc95a8dbf0c7aa490170843afb59ca8f5
+        bootstrap: {compiler: system, requires: [gmp, mpfr, mpc]}
+  gcc15:
     kind: compiler
     platforms: [linux]
     provides: [gcc, g++]
