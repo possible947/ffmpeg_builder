@@ -74,6 +74,19 @@ new typed surface is intentional.
 - [ ] Missing toolchain → skip component (error only for `rav1e`).
 - [ ] FFmpeg 8.1 builds on Linux+GCC16 via deployed `gcc12`; 9.0 uses system GCC.
 
+### Phase 3b — Toolchain-gated skip and CUDA-table consumption (done 2026-10-15)
+- [x] CUDA Toolkit version detected (`nvcc --version` → `PlatformInfo.cuda_version`).
+- [x] Per-component toolchain gate in `get_buildable()` (`toolchain_checker`);
+      unavailable explicit profiles excluded, `rav1e` always kept and errors
+      (`BuildError`, never `SkipComponent`) on missing/too-old rustc.
+- [x] `cuda` table consumed: store-installed `CC` probed as `-ccbin`
+      (`ToolchainStore.cuda_host_compiler()`); unmapped/absent → `None`.
+- [x] Toolchain plan shows per-component resolution + "CUDA host" for `nv-codec`;
+      Component info shows per-component skip reasons.
+- [ ] Remaining (needs staged pins + Linux runs): toolchain pins
+      (`gmp`/`mpfr`/`mpc`/`gcc12`/`gcc13`/`rust`/`cargo-c`, Git LFS archives);
+      real bootstrap on Linux+GCC16; FFmpeg 8.1 end-to-end with deployed `gcc12`.
+
 ### Phase 4 — Release and ABI/AppImage tail
 - [ ] Release bundles copy all non-system runtime deps (including toolchain-prefix
       runtime); glibc/loader stay host.
