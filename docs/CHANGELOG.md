@@ -4,6 +4,47 @@ All notable changes to the FFmpeg Builder project.
 
 ## [Unreleased]
 
+### Changed — Effective toolchain environment and registry-driven policy (Phase 3) (2026-10-15)
+
+- **Effective toolchain injected into the build** — `FFmpegBuilder` accepts per-component environment overrides (`PATH_PREPEND`, `CC`, `CXX`), and `ToolchainStore.component_env()` builds them from a profile's `materialize` map for *installed* profiles. The app resolves each component's toolchain (`toolchain: n/a` inherits the platform profile; explicit lower profiles override) and passes the overrides. Components without a deployable/installed toolchain are unchanged, so system-toolchain builds are unaffected.
+- **FFmpeg policy is registry-driven (E14)** — on Linux/Windows `evaluate_ffmpeg_policy` consults the platform profile's `system_tool_range`: a version is available when the detected system toolchain is in range, or when an out-of-range toolchain can be replaced by a *deployable* `fallback_toolchain`; otherwise it is blocked with a range-based reason. macOS keeps its existing macports-clang-17 requirement.
+- **Automatic substitution removed** — nvcc host-compiler auto-discovery of conda/mamba/micromamba gcc environments was removed (`platform_detect.py`); only the system-default probe and an explicit `CUDA_NVCC_CCBIN` override remain.
+- **nv-codec version by registry map (A4)** — `get_nv_codec_component()` selects the version from the declared `driver_nvenc_api_map` (NVENC API major → version) with no automatic search or best-effort fallback; unmatched or undetected drivers keep the declared default.
+- **Tests** — updated nv-codec selection tests and added `TestComponentEnv` in `tests/test_toolchain_store.py`; the ffmpeg-policy tests are expected to pass under registry-backed evaluation.
+- **Deferred (Phase 3b)** — per-component skip when an explicit lower-profile toolchain is unavailable (with the `rav1e` exception) and consuming the `cuda` mapping table for CUDA component/toolchain selection. Both depend on the toolchain pins being staged.
+
+### Added — Toolchain preparation mode (Phase 2) (2026-10-15)
+
+- **Persistent toolchain store** (`toolchain_store.py`) — root layout `toolchains/{archives,installed,logs,locks,profiles,build}` with its own `state.json`. The store refuses to overlap the build workspace (path guard) and serializes operations with a cross-process file lock (`fcntl`/`msvcrt`, best effort).
+- **Acquisition** — installs a profile variant into `installed/<profile>-<version>`: `local` (copy directory / extract file), `binary`/`download` (resolve from `third_party/sources`, else download when `allow_network_downloads` is enabled, verifying SHA-256), and `build` (recipes in `toolchain_builders.py`: `gcc` linking GMP/MPFR/MPC from the store, or generic `autotools`). `remove` and `clean_logs` manage the store; toolchain state is independent of the build-workspace state.
+- **Registry build recipes** — `source.build` variants may declare `recipe` (`gcc`/`autotools`) and `configure_args`/`build_args`/`install_args`; declaring them on a non-build variant is rejected. Validated fail-fast at registry load.
+- **TUI: Toolchain store screen** — new start-screen `p` action lists profiles (version, source, installed status) and supports acquire (with variant selection), remove, and clean-logs. No build-behavior change.
+- **Packaging/ignore** — `toolchain_builders`/`toolchain_store` added to `py-modules`; the `toolchains/` store directory added to `.gitignore`.
+- **Tests** — `tests/test_toolchain_store.py` (layout/state, path guards, binary/local acquisition, offline error, remove, build recipes with a recording runner), recipe-validation tests in `tests/test_toolchain_registry.py`, and a store-screen test in `tests/test_screens.py`.
+- **Note** — the shipped `toolchains.yaml` profiles still carry no `source` (declared but not deployable). Concrete `url`/`sha256` pins and the Git LFS archives are added when the toolchain artifacts are staged; the acquisition machinery is fully implemented and covered by tests.
+
+### Added — Toolchain resolution and read-only plan (Phase 1) (2026-10-15)
+
+- **Read-only toolchain resolution** — `ToolchainRegistry` now resolves the effective toolchain for a component: an explicit `toolchain: <name>` is a lower profile used verbatim (no automatic substitution); `toolchain: n/a` inherits the platform profile's effective toolchain. The effective toolchain is `system` when the detected system tool satisfies the profile's `system_tool_range`, otherwise the profile's `fallback_toolchain` is selected for deployment; when neither applies the result is unresolved (a skip candidate). A missing system-tool version counts as out of range (allow-list).
+- **Version-range evaluation** — added `system_tool_range` constraint parsing/validation (`>=`, `<=`, `>`, `<`, `==`; comma-separated) with constraint-precision comparison (e.g. `<=25` compares majors, so `25.3.0` satisfies it). Invalid range strings fail fast at registry load.
+- **Toolchain plan API** — `plan_component_toolchains()` returns one `ComponentToolchainPlan` (`component`, `toolchain`, `assignment`) per component.
+- **TUI: Toolchain plan screen** — the start screen gained a `t` action that renders the resolved toolchain per component (`system` / `deploy: <profile>` / `unresolved`). Read-only: no deployment and no build-behavior change.
+- **macOS platform profiles** — added `darwin-ffmpeg-8.1` alongside `darwin-ffmpeg-9.0` (system clang, no fallback), so macOS resolves to the system toolchain for both versions.
+- **Testing plan** — added `docs/testing_plan.md` documenting the per-phase validation checklist and the environment order (macOS → Linux + GCC 16 → Linux + GCC 12 via WSL → Windows).
+- **Tests** — resolution/range tests in `tests/test_toolchain_registry.py`; `ToolchainPlanScreen` render test in `tests/test_screens.py`.
+
+### Added — Toolchain registry foundation (`toolchains.yaml`, Phase 0) (2026-10-15)
+
+- **Toolchain registry (single source of truth)** — Added `toolchains.yaml` with three sections: named toolchain profiles (`gcc12`, `gcc13`, `gmp`, `mpfr`, `mpc`, `rust`, `cargo-c`), platform profiles keyed by `(ffmpeg_version, platform)` (the upper level the FFmpeg target resolves against, holding the allowed system-tool range and `fallback_toolchain`), and an explicit `cuda` version → toolchain profile mapping table. Concrete version pins and acquisition sources (`build`/`binary`/`download`/`local` variants with a data-driven `default`) are staged per profile; a profile without a `source` block is declared but not yet deployable.
+- **Fail-fast validation** — New `toolchain_registry.py` (`ToolchainRegistry`) loads and validates the registry at load time: allowed kinds/platforms/source types, required `url` + 64-hex `sha256` (or `path` for `local`), `source.default` membership, cross-reference integrity (bootstrap `requires`, `fallback_toolchain`, and `cuda` targets must name declared profiles), and bootstrap-dependency cycle detection. No build path consumes the registry yet — behavior is unchanged in this phase.
+- **Component toolchain fields** — `Component` gains `toolchain` (default `"n/a"` = inherit the platform profile's effective toolchain) and `driver_nvenc_api_map` (driver NVENC API major → declared `nv-codec` version); the map's values are validated against the component's declared `versions`. `components.yaml`'s `nv-codec` entry now declares the map (`13` → `13.0.19.1`, `12` → `12.2.72.0`). Both fields are data-only in this phase (not yet consumed).
+- **Packaging** — `toolchain_registry` added to `py-modules`; `toolchains.yaml` added to package data.
+- **Tests** — Added `tests/test_toolchain_registry.py` (shipped-registry load, structural/reference/cycle validation, empty/missing/top-level-shape cases) and `TestToolchainFields` in `tests/test_components.py`.
+
+### Changed — Windows backend deferred pending re-validation (2026-10-15)
+
+- **Windows MSYS2 UCRT64 remains a distinct, deferred backend.** Only the FFmpeg 8.1 build was exercised on Windows before hardware access was lost, so Windows is out of scope for the toolchain-modernization rollout until access is restored and both version paths are re-validated. The toolchain model stays platform-parameterized so the Windows profile can be added later without core changes.
+
 ### Added — Versioned workspace isolation (`workspace_81` / `workspace_90`) (2026-10-03)
 
 - **Isolated output workspaces for FFmpeg 8.1 and 9.0** — Separated output and cache directories into `workspace_81` (for FFmpeg 8.1) and `workspace_90` (for FFmpeg 9.0). Each workspace maintains independent binaries, logs, package extractions, and build state tracking (`workspace_<ver>/build_state.json`), preventing cross-version state and artifact collisions.

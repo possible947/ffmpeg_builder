@@ -37,3 +37,5 @@ test-driver
 # MSYS2 venvs
 .venv-msys2*/
 build_config.yaml
+# Persistent toolchain store (large, environment-specific)
+toolchains/

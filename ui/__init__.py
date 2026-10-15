@@ -1,7 +1,15 @@
 """UI components for FFmpeg Builder."""
 
 from .dashboard import BuildDashboard, ComponentRow
-from .screens import ConfigScreen, FinalReportScreen, HelpScreen, InfoScreen, SystemReportScreen
+from .screens import (
+    ConfigScreen,
+    FinalReportScreen,
+    HelpScreen,
+    InfoScreen,
+    SystemReportScreen,
+    ToolchainPlanScreen,
+    ToolchainStoreScreen,
+)
 
 __all__ = [
     "BuildDashboard",
@@ -11,4 +19,6 @@ __all__ = [
     "HelpScreen",
     "InfoScreen",
     "SystemReportScreen",
+    "ToolchainPlanScreen",
+    "ToolchainStoreScreen",
 ]

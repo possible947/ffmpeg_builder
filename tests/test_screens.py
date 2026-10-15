@@ -5,8 +5,19 @@ import io
 from rich.console import Console
 
 from ffmpeg_builder.config import BuildConfig
+from ffmpeg_builder.toolchain_registry import (
+    ComponentToolchainPlan,
+    ToolchainAssignment,
+    ToolchainRegistry,
+)
+from ffmpeg_builder.toolchain_store import ToolchainStore
 from ffmpeg_builder.ui import screens
-from ffmpeg_builder.ui.screens import ConfigScreen, _parse_positive_int
+from ffmpeg_builder.ui.screens import (
+    ConfigScreen,
+    ToolchainPlanScreen,
+    ToolchainStoreScreen,
+    _parse_positive_int,
+)
 
 
 class TestParsePositiveInt:
@@ -139,3 +150,51 @@ def test_config_screen_rejects_empty_policy_version_list(monkeypatch):
         assert str(exc) == "No FFmpeg versions available for the current policy."
     else:
         raise AssertionError("Expected ValueError for empty FFmpeg version list")
+
+
+def test_toolchain_plan_screen_renders(monkeypatch):
+    console = Console(file=io.StringIO())
+    screen = ToolchainPlanScreen(console)
+    plan = [
+        ComponentToolchainPlan(component="x264", toolchain="n/a", assignment=None),
+        ComponentToolchainPlan(
+            component="nv-codec",
+            toolchain="gcc12",
+            assignment=ToolchainAssignment(mode="deploy", profile="gcc12"),
+        ),
+        ComponentToolchainPlan(
+            component="ffmpeg",
+            toolchain="n/a",
+            assignment=ToolchainAssignment(mode="system"),
+        ),
+    ]
+
+    monkeypatch.setattr(screens.Prompt, "ask", staticmethod(lambda *args, **kwargs: ""))
+
+    screen.show(plan)
+
+    output = console.file.getvalue()
+    assert "Toolchain Plan" in output
+    assert "deploy: gcc12" in output
+    assert "unresolved (would skip)" in output
+
+
+def test_toolchain_store_screen_quits(monkeypatch, tmp_path):
+    import yaml
+
+    registry_path = tmp_path / "toolchains.yaml"
+    data = {"toolchains": {"gcc12": {"kind": "compiler", "platforms": ["linux"]}}}
+    registry_path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    registry = ToolchainRegistry(registry_path)
+    store = ToolchainStore(
+        tmp_path / "store",
+        workspace=tmp_path / "workspace",
+        source_archives_dir=tmp_path / "sources",
+    )
+    console = Console(file=io.StringIO())
+    screen = ToolchainStoreScreen(console)
+
+    monkeypatch.setattr(screens.Prompt, "ask", staticmethod(lambda *args, **kwargs: "q"))
+    screen.show(store, registry)
+
+    assert "Toolchain Store" in console.file.getvalue()

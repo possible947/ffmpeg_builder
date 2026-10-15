@@ -97,6 +97,7 @@ class FFmpegBuilder:
         on_download_status: Optional[Callable[[str, str], None]] = None,
         on_log: Optional[Callable[[str], None]] = None,
         on_download_progress: Optional[Callable[[str, int, int], None]] = None,
+        toolchain_env: Optional[Dict[str, Dict[str, str]]] = None,
     ):
         """Initialize builder.
 
@@ -110,6 +111,8 @@ class FFmpegBuilder:
             on_log: Optional message callback.
             on_download_progress: Optional per-component download progress
                 callback receiving (component_name, downloaded_bytes, total_bytes).
+            toolchain_env: Optional per-component environment overrides from the
+                resolved toolchain (keys: ``PATH_PREPEND``, ``CC``, ``CXX``).
         """
         self.config = config
         self.workspace = workspace.absolute()
@@ -121,6 +124,7 @@ class FFmpegBuilder:
             self.source_archives = PROJECT_ROOT / archives_dir
         self.state_manager = state_manager
         self.platform_detector = platform_detector
+        self.toolchain_env = toolchain_env or {}
 
         self.executor = CommandExecutor(self.workspace)
         self.downloader = Downloader(
@@ -705,6 +709,15 @@ class FFmpegBuilder:
                     env["LDFLAGS"] += f" {override.extra_ldflags}"
 
             env.update(component.extra_env)
+
+            extra = self.toolchain_env.get(component.name)
+            if extra:
+                prepend = extra.get("PATH_PREPEND")
+                if prepend:
+                    env["PATH"] = f"{prepend}{os.pathsep}{env.get('PATH', '')}"
+                for key in ("CC", "CXX"):
+                    if key in extra:
+                        env[key] = extra[key]
 
         return env
 

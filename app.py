@@ -1,9 +1,10 @@
 """Main application class for FFmpeg Builder."""
 
 import os
+import re
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Callable, List, Optional, Tuple, Type
+from typing import Any, Callable, Dict, List, Optional, Tuple, Type
 
 from rich.console import Console
 from rich.live import Live
@@ -16,13 +17,32 @@ from .ffmpeg_policy import FfmpegPolicy, evaluate_ffmpeg_policy
 from .platform_detect import PlatformDetector
 from .state import ComponentStatus, StateManager
 from .system_report import SystemReportGenerator
+from .toolchain_registry import ToolchainRegistry
+from .toolchain_store import ToolchainStore
 from .ui.dashboard import BuildDashboard
 from .ui.error_handler import ErrorHandler
-from .ui.screens import ConfigScreen, FinalReportScreen, HelpScreen, InfoScreen, SystemReportScreen
+from .ui.screens import (
+    ConfigScreen,
+    FinalReportScreen,
+    HelpScreen,
+    InfoScreen,
+    SystemReportScreen,
+    ToolchainPlanScreen,
+    ToolchainStoreScreen,
+)
 
 # The package is the repository root (flat layout); anchor the default
 # workspace/config paths to it so the app works from any CWD.
 PROJECT_ROOT = Path(__file__).resolve().parent
+
+
+def _leading_version(value: object) -> Optional[str]:
+    """Extract the first dotted version (or bare number) from a raw string."""
+    if not value:
+        return None
+    text = str(value)
+    match = re.search(r"\d+(?:\.\d+)+", text) or re.search(r"\d+", text)
+    return match.group(0) if match else None
 
 
 class FFmpegBuilderApp:
@@ -58,6 +78,8 @@ class FFmpegBuilderApp:
         self.config_screen = ConfigScreen(self.console)
         self.info_screen = InfoScreen(self.console)
         self.final_screen = FinalReportScreen(self.console)
+        self.toolchain_screen = ToolchainPlanScreen(self.console)
+        self.store_screen = ToolchainStoreScreen(self.console)
         self.help_screen = HelpScreen(self.console)
         self.error_handler = ErrorHandler(self.console)
 
@@ -131,6 +153,12 @@ class FFmpegBuilderApp:
                 elif action == "info":
                     self.info_screen.show(components, self.registry.get_all())
                     continue
+                elif action == "toolchain":
+                    self._show_toolchain_plan(config)
+                    continue
+                elif action == "store":
+                    self._show_toolchain_store(config)
+                    continue
                 elif action == "help":
                     self.help_screen.show()
                     continue
@@ -159,6 +187,77 @@ class FFmpegBuilderApp:
             full_static=config.full_static,
             ffmpeg_version=config.ffmpeg_version,
         )
+
+    def _system_tool_versions(self) -> Dict[str, str]:
+        """Map detected system tool names to version strings for range checks."""
+        versions: Dict[str, str] = {}
+        if self.platform_info.gcc_major_version is not None:
+            versions["gcc"] = str(self.platform_info.gcc_major_version)
+        for name in ("gcc", "clang"):
+            info = self.tools.get(name)
+            parsed = _leading_version(getattr(info, "version", None))
+            if parsed:
+                versions[name] = parsed
+        return versions
+
+    def _show_toolchain_plan(self, config: BuildConfig) -> None:
+        """Show the read-only resolved-toolchain plan for the current config."""
+        try:
+            toolchain_registry = ToolchainRegistry()
+        except (OSError, ValueError) as exc:
+            self.console.print(f"[red]Toolchain registry unavailable: {exc}[/red]")
+            return
+        components = self._get_buildable_components(config)
+        plan = toolchain_registry.plan_component_toolchains(
+            components,
+            config.ffmpeg_version,
+            self.platform_detector.get_platform_name(),
+            self._system_tool_versions(),
+        )
+        self.toolchain_screen.show(plan)
+
+    def _show_toolchain_store(self, config: BuildConfig) -> None:
+        """Show the persistent toolchain store (acquire/remove/list)."""
+        try:
+            toolchain_registry = ToolchainRegistry()
+        except (OSError, ValueError) as exc:
+            self.console.print(f"[red]Toolchain registry unavailable: {exc}[/red]")
+            return
+        store = ToolchainStore(
+            PROJECT_ROOT / "toolchains",
+            workspace=self.workspace,
+            source_archives_dir=PROJECT_ROOT / config.source_archives_dir,
+            allow_network_downloads=config.allow_network_downloads,
+        )
+        self.store_screen.show(store, toolchain_registry)
+
+    def _component_toolchain_env(
+        self, config: BuildConfig, components: List[Component]
+    ) -> Dict[str, Dict[str, str]]:
+        """Per-component environment overrides from installed toolchains."""
+        try:
+            toolchain_registry = ToolchainRegistry()
+        except (OSError, ValueError):
+            return {}
+        store = ToolchainStore(
+            PROJECT_ROOT / "toolchains",
+            workspace=self.workspace,
+            source_archives_dir=PROJECT_ROOT / config.source_archives_dir,
+            allow_network_downloads=config.allow_network_downloads,
+        )
+        versions = self._system_tool_versions()
+        platform = self.platform_detector.get_platform_name()
+        result: Dict[str, Dict[str, str]] = {}
+        for component in components:
+            assignment = toolchain_registry.resolve_component_toolchain(
+                component.toolchain, config.ffmpeg_version, platform, versions
+            )
+            if assignment is None or assignment.mode != "deploy" or not assignment.profile:
+                continue
+            env = store.component_env(toolchain_registry, assignment.profile)
+            if env:
+                result[component.name] = env
+        return result
 
     def _run_build(self, config: BuildConfig, resume: bool = False) -> None:
         """Run the build process.
@@ -212,6 +311,7 @@ class FFmpegBuilderApp:
             on_download_status,
             dashboard.log,
             on_download_progress,
+            toolchain_env=self._component_toolchain_env(config, all_components),
         )
 
         state = self.state_manager.get()
