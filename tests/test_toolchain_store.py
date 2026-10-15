@@ -131,9 +131,7 @@ class TestAcquisition:
             store.acquire(registry, "nope")
 
     def test_acquire_not_deployable_rejected(self, tmp_path):
-        registry = _write_registry(
-            tmp_path, {"bare": {"kind": "compiler", "platforms": ["linux"]}}
-        )
+        registry = _write_registry(tmp_path, {"bare": {"kind": "compiler", "platforms": ["linux"]}})
         store = _store(tmp_path)
         with pytest.raises(ValueError, match="not deployable"):
             store.acquire(registry, "bare")

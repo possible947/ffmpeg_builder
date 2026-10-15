@@ -514,6 +514,7 @@ def test_build_cargo_rewrites_strict_c11_for_linux_gcc15(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     builder = _make_builder_with_archives(tmp_path, str(tmp_path / "archives"))
+    builder.platform = "linux"
     builder.platform_strategy = LinuxGcc15Platform()
     builder.env["CFLAGS"] = "-O2 -std=c11"
     component = _make_libplacebo_component()

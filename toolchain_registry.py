@@ -338,9 +338,7 @@ class ToolchainRegistry:
             path_value = variant.get("path")
             if declared_type == "local":
                 if not isinstance(path_value, str) or not path_value:
-                    raise ValueError(
-                        f"Toolchain {name!r} local source requires a non-empty 'path'"
-                    )
+                    raise ValueError(f"Toolchain {name!r} local source requires a non-empty 'path'")
             else:
                 if not isinstance(url, str) or not url:
                     raise ValueError(

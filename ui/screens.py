@@ -368,9 +368,7 @@ class ToolchainPlanScreen(UIScreen):
         """
         self.console.clear()
         self.console.print(
-            Panel.fit(
-                "[bold blue]FFmpeg Builder - Toolchain Plan[/bold blue]", border_style="blue"
-            )
+            Panel.fit("[bold blue]FFmpeg Builder - Toolchain Plan[/bold blue]", border_style="blue")
         )
         self.console.print()
 
@@ -438,8 +436,8 @@ class ToolchainStoreScreen(UIScreen):
                 continue
 
             name = Prompt.ask("Profile name")
-            profile = registry.get_profile(name)
-            if profile is None:
+            selected = registry.get_profile(name)
+            if selected is None:
                 self.console.print(f"[red]Unknown profile {name!r}.[/red]")
                 Prompt.ask("Press Enter to continue")
                 continue
@@ -451,11 +449,11 @@ class ToolchainStoreScreen(UIScreen):
                     self.console.print(f"[green]{message}: {name}[/green]")
                 else:
                     variant = None
-                    if len(profile.sources) > 1:
+                    if len(selected.sources) > 1:
                         variant = Prompt.ask(
                             "Variant",
-                            choices=sorted(profile.sources),
-                            default=profile.default_source,
+                            choices=sorted(selected.sources),
+                            default=selected.default_source,
                         )
                     installed_entry = store.acquire(registry, name, variant)
                     self.console.print(

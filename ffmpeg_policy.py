@@ -34,9 +34,7 @@ def _macports_clang_17_available(config: BuildConfig) -> bool:
     return bool(shutil.which("clang-mp-17"))
 
 
-def _detected_versions(
-    platform_info: PlatformInfo, tools: Dict[str, ToolInfo]
-) -> Dict[str, str]:
+def _detected_versions(platform_info: PlatformInfo, tools: Dict[str, ToolInfo]) -> Dict[str, str]:
     """Map detected compiler names to version strings for range checks."""
     versions: Dict[str, str] = {}
     if platform_info.gcc_major_version is not None:

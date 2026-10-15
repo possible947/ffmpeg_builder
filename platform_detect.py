@@ -756,7 +756,7 @@ class PlatformDetector:
 
             lib: ctypes.CDLL
             if self.platform_info.is_windows:
-                lib = ctypes.WinDLL("nvEncodeAPI64.dll")
+                lib = ctypes.WinDLL("nvEncodeAPI64.dll")  # type: ignore[attr-defined]
             else:
                 lib = ctypes.CDLL("libnvidia-encode.so.1")
 

@@ -362,6 +362,7 @@ class ToolchainStore:
         dest.mkdir(parents=True, exist_ok=True)
         with tarfile.open(archive, "r:*") as tar:
             tar.extractall(dest, filter="data")
+        _flatten_single_top_dir(dest)
 
     def _build(
         self,
@@ -405,6 +406,37 @@ def _single_child_dir(path: Path) -> Path:
     if len(children) == 1 and not any(item.is_file() for item in path.iterdir()):
         return children[0]
     return path
+
+
+def _flatten_single_top_dir(path: Path) -> None:
+    """Move contents of a sole top-level directory up one level.
+
+    Archives of deployable toolchains conventionally carry a single top-level
+    directory (``<name>-<version>/...``). Binary acquisition installs the
+    profile *contents* directly into ``installed/<profile>-<version>`` (so
+    ``component_env()`` finds ``bin/`` there); without flattening the prefix
+    would end up doubled (``installed/<profile>-<version>/<name>-<version>``).
+
+    Multi-root archives (files or several dirs at the top level) are left
+    untouched.
+    """
+    if not path.is_dir():
+        return
+    top = _single_child_dir(path)
+    if top == path:
+        return
+    for child in list(top.iterdir()):
+        target = path / child.name
+        if target.exists():
+            if target.is_dir() and child.is_dir():
+                shutil.copytree(child, target, dirs_exist_ok=True)
+            else:
+                shutil.copy2(child, target)
+        elif child.is_dir():
+            shutil.move(str(child), str(target))
+        else:
+            shutil.move(str(child), str(target))
+    shutil.rmtree(top, ignore_errors=True)
 
 
 def _lock_handle(handle: IO[str]) -> None:

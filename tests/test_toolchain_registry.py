@@ -82,9 +82,7 @@ class TestProfileValidation:
             ToolchainRegistry(path)
 
     def test_unknown_platform_rejected(self, tmp_path):
-        path = _write(
-            tmp_path, {"toolchains": {"x": {"kind": "compiler", "platforms": ["plan9"]}}}
-        )
+        path = _write(tmp_path, {"toolchains": {"x": {"kind": "compiler", "platforms": ["plan9"]}}})
         with pytest.raises(ValueError, match="invalid platform"):
             ToolchainRegistry(path)
 
