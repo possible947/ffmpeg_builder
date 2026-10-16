@@ -86,6 +86,78 @@ new typed surface is intentional.
 - [ ] Remaining (needs staged pins + Linux runs): toolchain pins
       (`gmp`/`mpfr`/`mpc`/`gcc12`/`gcc13`/`rust`/`cargo-c`, Git LFS archives);
       real bootstrap on Linux+GCC16; FFmpeg 8.1 end-to-end with deployed `gcc12`.
+      See Phase 3c for the provisioning/portability work this depends on.
+
+### Phase 3c — Toolchain provisioning and portability (next)
+
+Goal: every declared profile provisions successfully, is verified after
+installation, and is usable on each supported Linux-family backend (native Linux
+and WSL2), either by building on the target or by deploying a prebuilt archive.
+
+Known blockers found in the current code (fix before running a real bootstrap):
+
+- [x] **Bootstrap prerequisites are not plumbed to autotools profiles.**
+      `toolchain_builders.build_autotools()` ignores `prerequisites`, and
+      `run_build()` only forwards them to `build_gcc()`. `mpfr` requires
+      `--with-gmp` and `mpc` requires `--with-gmp --with-mpfr`, so as pinned
+      today neither can link the store GMP/MPFR. Fix: pass prerequisites into
+      the autotools recipe and support a `{prereq:<name>}`-style placeholder in
+      the registry's `configure_args` (the registry already permits
+      `configure_args`/`build_args`/`install_args` on a `build` variant,
+      `toolchain_registry.py:502-514`).
+- [x] **No parallel jobs for toolchain builds.** `build_args` is empty for every
+      shipped profile, so `make` runs serially (a GCC bootstrap is hours serial,
+      ~30-90 min with `-j`). Fix: a `{jobs}` placeholder resolved from the same
+      policy as the FFmpeg build (`PlatformDetector.get_num_jobs`,
+      `platform_detect.py:1545`).
+- [x] **No post-install verification.** Nothing checks that an acquired profile
+      actually works, so a half-built GCC is recorded as `installed`. Fix: a
+      verify step per recipe (gcc: `gcc --version` + a C and C++ compile/link
+      hello; rust: `rustc --version` + `cargo --version`; bootstrap libs: the
+      expected `lib/` archives and headers exist), stamped into the store state,
+      with `ToolchainStore.component_env()` refusing unverified profiles.
+- [x] **Clean bootstrap environment.** Bootstrap must not inherit FFmpeg build
+      flags (`CFLAGS`/`CXXFLAGS`, CUDA include paths, `-march=native`,
+      `-fopenmp`) — see the risk table in `docs/toolchain_analysis_report.md`.
+- [x] **Headless provisioning entry point.** The store is only reachable through
+      the TUI today; add a script/module entry so a full provisioning run is
+      repeatable and CI-able (`scripts/`), reusing `ToolchainStore.acquire()`.
+
+Portability:
+
+- [ ] Decide and document the model: build-on-target (offline, slow) vs prebuilt
+      `source.binary` archives published per `(profile, platform, arch)` with
+      `sha256`, keeping `build` as the fallback. The registry already supports
+      `binary`/`download` variants, so this is data plus a distribution step.
+- [ ] Make the installed prefix relocatable, or fix it. GCC bakes `--prefix`
+      into its search paths; acceptance is: move `toolchains/` to another
+      absolute path, re-run verification, and a probe compile still links.
+      Verify whether the pinned GCC supports a relocation option before relying
+      on it; otherwise require a stable store root and document it.
+- [ ] Artifact identity per platform/arch: `installed/<profile>-<version>-<platform>-<arch>`
+      so two targets can coexist; extend `ToolchainProfile.platforms` or the
+      profile naming if an arch dimension is needed.
+- [ ] WSL2 backend: treat as `linux` for ELF compatibility, but verify the store
+      lives on an ext4 filesystem (fcntl locking is unreliable on `/mnt/*`),
+      and that symlink/permission handling in extraction is correct.
+- [ ] Native Linux run: provision `gmp → mpfr → mpc → gcc12` and `rust` on the
+      GCC 16 host, then build FFmpeg 8.1 with the deployed `gcc12` and FFmpeg
+      9.0 with the system GCC (Phase 3 acceptance). `gmp 6.3.0`, `mpfr 4.2.1`,
+      `mpc 1.3.1`, and `rust 1.99.0` are installed and verified; the `gcc12
+      12.5.0` bootstrap and the FFmpeg end-to-end runs remain.
+- [ ] CI: a long-running, manually triggered toolchain job (nightly or
+      `workflow_dispatch`); the unit suite keeps using recording runners.
+
+### Backlog — cargo-c into the store (after Phase 3c)
+
+- [ ] Give the `cargo-c` profile a real acquisition source so
+      `builders/base.py`'s implicit `cargo install cargo-c --version 0.10.25`
+      (`builders/base.py:366-378`) disappears: either a `binary`/`download`
+      archive or a `cargo`-based recipe with `CARGO_HOME` inside the store
+      (vendored crates for a true offline run), bootstrapped after `rust`.
+- [ ] Then `build_cargo()` resolves `cargo-c` from the store env
+      (`PATH_PREPEND`) and never reaches the network, restoring the
+      offline-first contract flagged in `docs/toolchain_analysis_report.md`.
 
 ### Phase 4 — Release and ABI/AppImage tail
 - [ ] Release bundles copy all non-system runtime deps (including toolchain-prefix

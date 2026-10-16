@@ -9,9 +9,10 @@ load time rather than in the middle of a build.
 from __future__ import annotations
 
 import re
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Protocol, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Protocol, Set, Tuple
 
 import yaml
 
@@ -61,6 +62,7 @@ class ToolchainProfile:
     patches: List[Dict[str, str]] = field(default_factory=list)
     sources: Dict[str, ToolchainSource] = field(default_factory=dict)
     default_source: Optional[str] = None
+    note: str = ""
 
     @property
     def deployable(self) -> bool:
@@ -214,6 +216,119 @@ class ToolchainRegistry:
             return ToolchainAssignment(mode="deploy", profile=component_toolchain)
         return self.resolve_effective_toolchain(ffmpeg_version, platform, system_tool_versions)
 
+    def recommend_profiles(
+        self,
+        ffmpeg_version: str,
+        platform: str,
+        system_tool_versions: Mapping[str, str],
+        components: Iterable[_HasToolchain] = (),
+        installed: Iterable[str] = (),
+        cuda_version: Optional[str] = None,
+    ) -> List[Tuple[str, str]]:
+        """Recommended acquisitions derived from the current system analysis.
+
+        Combines four declarative sources, preserving discovery order:
+
+        1. the platform-profile effective toolchain — when the detected system
+           toolchain is outside the profile's range, its ``fallback_toolchain``
+           is recommended;
+        2. the bootstrap prerequisites of every recommended profile
+           (``source.bootstrap.requires``), expanded before their dependents;
+        3. explicit lower ``toolchain`` requirements declared by ``components``;
+        4. the CUDA table mapping for the detected CUDA Toolkit version.
+
+        Profiles that are already installed, unknown, not applicable to the
+        platform, or not deployable are omitted. Returns ordered
+        ``(profile_name, reason)`` pairs; an empty list means the system
+        analysis resolves everything without deployment.
+        """
+        installed_set = {str(name) for name in installed}
+        ordered: "OrderedDict[str, str]" = OrderedDict()
+
+        def _add(name: Optional[str], reason: str) -> None:
+            if not name or name in ordered or name in installed_set:
+                return
+            profile = self.get_profile(name)
+            if profile is None or not self.is_profile_available(profile, platform):
+                return
+            ordered[name] = reason
+
+        assignment = self.resolve_effective_toolchain(
+            ffmpeg_version, platform, system_tool_versions
+        )
+        if assignment is not None and assignment.mode == "deploy":
+            _add(
+                assignment.profile,
+                f"fallback toolchain for FFmpeg {ffmpeg_version} "
+                "(detected system toolchain is out of range)",
+            )
+
+        for component in components:
+            if component.toolchain and component.toolchain != "n/a":
+                _add(component.toolchain, f"required by component {component.name}")
+
+        if cuda_version:
+            _add(
+                self.toolchain_for_cuda(cuda_version),
+                f"CUDA {cuda_version} host compiler",
+            )
+
+        prerequisites = self._expand_bootstrap(list(ordered))
+        reasons: Dict[str, str] = dict(ordered)
+        result: List[Tuple[str, str]] = []
+        for name in prerequisites:
+            if name in installed_set:
+                continue
+            profile = self.get_profile(name)
+            if profile is None or not self.is_profile_available(profile, platform):
+                continue
+            if name not in reasons:
+                dependents = self._dependents(name, prerequisites)
+                reasons[name] = (
+                    "bootstrap prerequisite of " + "/".join(dependents)
+                    if dependents
+                    else "required by the resolved toolchain plan"
+                )
+            result.append((name, reasons[name]))
+        return result
+
+    def _expand_bootstrap(self, targets: Iterable[str]) -> List[str]:
+        """Expand toolchain names with bootstrap prerequisites, dependencies first."""
+        resolved: List[str] = []
+        seen: Set[str] = set()
+
+        def _visit(name: str) -> None:
+            if name in seen:
+                return
+            profile = self.get_profile(name)
+            if profile is None:
+                return
+            source = profile.sources.get(profile.default_source) if profile.default_source else None
+            if source is not None and source.bootstrap is not None:
+                for requirement in source.bootstrap.requires:
+                    _visit(requirement)
+            seen.add(name)
+            resolved.append(name)
+
+        for target in targets:
+            _visit(target)
+        return resolved
+
+    def _dependents(self, name: str, order: Iterable[str]) -> List[str]:
+        """Names in ``order`` whose bootstrap requires ``name``."""
+        dependents: List[str] = []
+        for candidate in order:
+            if candidate == name:
+                continue
+            profile = self.get_profile(candidate)
+            if profile is None:
+                continue
+            source = profile.sources.get(profile.default_source) if profile.default_source else None
+            if source is not None and source.bootstrap is not None:
+                if name in source.bootstrap.requires:
+                    dependents.append(candidate)
+        return dependents
+
     def plan_component_toolchains(
         self,
         components: Iterable[_HasToolchain],
@@ -298,6 +413,9 @@ class ToolchainRegistry:
                 entry.get("materialize"), f"toolchain {name!r} materialize"
             )
             patches = _as_patch_list(entry.get("patches"), f"toolchain {name!r} patches")
+            note = entry.get("note")
+            if note is not None and not isinstance(note, str):
+                raise ValueError(f"Toolchain {name!r} note must be a string")
             sources, default_source = self._parse_sources(name, entry.get("source"))
             profiles[name] = ToolchainProfile(
                 name=name,
@@ -309,6 +427,7 @@ class ToolchainRegistry:
                 patches=patches,
                 sources=sources,
                 default_source=default_source,
+                note=note or "",
             )
         return profiles
 

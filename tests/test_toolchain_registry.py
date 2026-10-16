@@ -23,6 +23,18 @@ def _build_source(**overrides: object) -> dict:
     return {"default": "build", "build": variant}
 
 
+def _deployable(*, platforms: object = ("linux",), requires: object = ()) -> dict:
+    """A deployable build-source profile with optional bootstrap requirements."""
+    return {
+        "kind": "compiler",
+        "platforms": list(platforms),  # type: ignore[arg-type]
+        "version": "1.0",
+        "source": _build_source(
+            bootstrap={"compiler": "system", "requires": list(requires)}  # type: ignore[arg-type]
+        ),
+    }
+
+
 class TestShippedRegistry:
     """The registry committed with the repository must load and validate."""
 
@@ -47,6 +59,13 @@ class TestShippedRegistry:
         assert registry.toolchain_for_cuda("12.2") == "gcc12"
         assert registry.toolchain_for_cuda("13.1") == "gcc13"
 
+    def test_cargo_c_is_not_deployable_and_documents_build_time_install(self):
+        registry = ToolchainRegistry()
+        profile = registry.get_profile("cargo-c")
+        assert profile is not None
+        assert profile.deployable is False
+        assert "cargo install" in profile.note
+
 
 class TestProfileValidation:
     """Structural validation of toolchain profiles."""
@@ -57,6 +76,20 @@ class TestProfileValidation:
         profile = registry.get_profile("gcc12")
         assert profile is not None
         assert profile.deployable is False
+
+    def test_profile_note_is_parsed(self, tmp_path):
+        path = _write(
+            tmp_path,
+            {"toolchains": {"gcc12": {"kind": "compiler", "note": "installed by the build"}}},
+        )
+        profile = ToolchainRegistry(path).get_profile("gcc12")
+        assert profile is not None
+        assert profile.note == "installed by the build"
+
+    def test_non_string_note_rejected(self, tmp_path):
+        path = _write(tmp_path, {"toolchains": {"gcc12": {"kind": "compiler", "note": 5}}})
+        with pytest.raises(ValueError, match="note must be a string"):
+            ToolchainRegistry(path)
 
     def test_valid_source_profile_is_deployable(self, tmp_path):
         path = _write(
@@ -334,6 +367,105 @@ class TestResolution:
             [SimpleNamespace(name="nv-codec", toolchain="n/a")], "8.1", "linux", {"gcc": "13"}
         )
         assert plan[0].cuda_toolchain is None
+
+
+class TestRecommendProfiles:
+    """System-analysis-driven acquisition recommendations."""
+
+    def _registry(self, tmp_path: Path) -> ToolchainRegistry:
+        data = {
+            "toolchains": {
+                "gcc12": _deployable(requires=["gmp", "mpfr", "mpc"]),
+                "gcc13": _deployable(),
+                "gmp": _deployable(),
+                "mpfr": _deployable(),
+                "mpc": _deployable(),
+                "rust": _deployable(),
+            },
+            "platform_profiles": {
+                "linux-8.1": {
+                    "ffmpeg_version": "8.1",
+                    "platform": "linux",
+                    "system_tool_range": {"gcc": ">=12,<14"},
+                    "fallback_toolchain": "gcc12",
+                },
+                "linux-9.0": {
+                    "ffmpeg_version": "9.0",
+                    "platform": "linux",
+                    "system_tool_range": {"gcc": ">=15"},
+                    "fallback_toolchain": None,
+                },
+            },
+            "cuda": {"12.2": "gcc13"},
+        }
+        return ToolchainRegistry(_write(tmp_path, data))
+
+    def test_out_of_range_recommends_fallback_after_prerequisites(self, tmp_path):
+        registry = self._registry(tmp_path)
+        recommended = registry.recommend_profiles("8.1", "linux", {"gcc": "16.2.1"})
+        names = [name for name, _reason in recommended]
+        assert names == ["gmp", "mpfr", "mpc", "gcc12"]
+        reasons = dict(recommended)
+        assert "fallback toolchain for FFmpeg 8.1" in reasons["gcc12"]
+        assert "bootstrap prerequisite of gcc12" in reasons["gmp"]
+
+    def test_system_in_range_recommends_nothing(self, tmp_path):
+        registry = self._registry(tmp_path)
+        assert registry.recommend_profiles("8.1", "linux", {"gcc": "13.2.0"}) == []
+
+    def test_installed_profiles_are_filtered(self, tmp_path):
+        registry = self._registry(tmp_path)
+        recommended = registry.recommend_profiles(
+            "8.1", "linux", {"gcc": "16"}, installed=["gmp", "mpfr", "mpc"]
+        )
+        assert [name for name, _reason in recommended] == ["gcc12"]
+
+    def test_component_requirement_is_recommended(self, tmp_path):
+        registry = self._registry(tmp_path)
+        components = [SimpleNamespace(name="rav1e", toolchain="rust")]
+        recommended = registry.recommend_profiles(
+            "9.0", "linux", {"gcc": "16"}, components=components
+        )
+        assert [name for name, _reason in recommended] == ["rust"]
+        assert "rav1e" in dict(recommended)["rust"]
+
+    def test_cuda_mapping_is_recommended(self, tmp_path):
+        registry = self._registry(tmp_path)
+        recommended = registry.recommend_profiles(
+            "9.0", "linux", {"gcc": "16"}, cuda_version="12.2"
+        )
+        assert [name for name, _reason in recommended] == ["gcc13"]
+        assert "CUDA 12.2" in dict(recommended)["gcc13"]
+
+    def test_non_deployable_fallback_is_ignored(self, tmp_path):
+        data = {
+            "toolchains": {"gcc12": {"kind": "compiler", "platforms": ["linux"]}},
+            "platform_profiles": {
+                "linux-8.1": {
+                    "ffmpeg_version": "8.1",
+                    "platform": "linux",
+                    "system_tool_range": {"gcc": ">=12,<14"},
+                    "fallback_toolchain": "gcc12",
+                },
+            },
+        }
+        registry = ToolchainRegistry(_write(tmp_path, data))
+        assert registry.recommend_profiles("8.1", "linux", {"gcc": "16"}) == []
+
+    def test_profile_for_other_platform_is_ignored(self, tmp_path):
+        data = {
+            "toolchains": {"gcc12": _deployable(platforms=["darwin"])},
+            "platform_profiles": {
+                "linux-8.1": {
+                    "ffmpeg_version": "8.1",
+                    "platform": "linux",
+                    "system_tool_range": {"gcc": ">=12,<14"},
+                    "fallback_toolchain": "gcc12",
+                },
+            },
+        }
+        registry = ToolchainRegistry(_write(tmp_path, data))
+        assert registry.recommend_profiles("8.1", "linux", {"gcc": "16"}) == []
 
 
 class TestRangeValidation:

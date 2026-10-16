@@ -34,8 +34,14 @@ def _macports_clang_17_available(config: BuildConfig) -> bool:
     return bool(shutil.which("clang-mp-17"))
 
 
-def _detected_versions(platform_info: PlatformInfo, tools: Dict[str, ToolInfo]) -> Dict[str, str]:
-    """Map detected compiler names to version strings for range checks."""
+def detected_system_tool_versions(
+    platform_info: PlatformInfo, tools: Dict[str, ToolInfo]
+) -> Dict[str, str]:
+    """Map detected compiler names to version strings for registry range checks.
+
+    Shared by the FFmpeg version policy and by the toolchain store's
+    recommendation logic so both evaluate the same system analysis.
+    """
     versions: Dict[str, str] = {}
     if platform_info.gcc_major_version is not None:
         versions["gcc"] = str(platform_info.gcc_major_version)
@@ -102,7 +108,7 @@ def evaluate_ffmpeg_policy(
         reasons, notes = _evaluate_macos_policy(config, available)
     else:
         platform = platform_info.platform or "linux"
-        versions = _detected_versions(platform_info, tools)
+        versions = detected_system_tool_versions(platform_info, tools)
         try:
             registry: Optional[ToolchainRegistry] = ToolchainRegistry()
         except (OSError, ValueError):

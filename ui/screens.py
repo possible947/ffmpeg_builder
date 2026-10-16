@@ -1,7 +1,7 @@
 """UI screens using rich library."""
 
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 
 from rich.console import Console
 from rich.panel import Panel
@@ -14,7 +14,7 @@ from ..ffmpeg_policy import FfmpegPolicy
 from ..state import BuildState, ComponentStatus
 from ..system_report import SystemReport
 from ..toolchain_registry import ComponentToolchainPlan, ToolchainRegistry
-from ..toolchain_store import ToolchainStore
+from ..toolchain_store import InstalledToolchain, ToolchainStore
 
 _START_KEYS: List[tuple] = [
     ("b", "Start new build", "Build all components from scratch (resets previous state)"),
@@ -23,7 +23,7 @@ _START_KEYS: List[tuple] = [
     ("w", "Cleanup workspace", "Remove state, sources, and build artifacts"),
     ("i", "Component info", "List all components (buildable + skipped)"),
     ("t", "Toolchain plan", "Show the resolved toolchain for each component"),
-    ("p", "Toolchain store", "Acquire, list, or remove toolchain profiles"),
+    ("p", "Toolchain store", "Review system-analysis recommendations and manage profiles"),
     ("h", "Help", "Show full key reference for all screens"),
     ("q", "Exit", "Quit the application"),
 ]
@@ -39,6 +39,14 @@ _ERROR_KEYS: List[tuple] = [
     ("s", "Skip", "Mark the component as skipped and continue"),
     ("a", "Abort", "Stop the build and return to the start screen"),
     ("l", "Show full log", "Print the full log of the failed step"),
+]
+
+_STORE_KEYS: List[tuple] = [
+    ("p", "Prepare recommended", "Acquire the recommended profiles in dependency order"),
+    ("a", "Acquire one", "Install a single profile chosen from the list"),
+    ("r", "Remove", "Delete an installed profile from the store"),
+    ("c", "Clean logs", "Delete the acquisition logs under the store's logs directory"),
+    ("q", "Quit", "Return to the start screen"),
 ]
 
 _DASHBOARD_KEYS: List[tuple] = [
@@ -345,6 +353,7 @@ class HelpScreen(UIScreen):
         sections = [
             ("Start screen", _START_KEYS),
             ("Component info screen", _INFO_KEYS),
+            ("Toolchain store screen", _STORE_KEYS),
             ("Error prompt", _ERROR_KEYS),
             ("Build dashboard", _DASHBOARD_KEYS),
         ]
@@ -401,12 +410,20 @@ class ToolchainPlanScreen(UIScreen):
 class ToolchainStoreScreen(UIScreen):
     """Toolchain store: list profiles and acquire/remove them."""
 
-    def show(self, store: ToolchainStore, registry: ToolchainRegistry) -> None:
+    def show(
+        self,
+        store: ToolchainStore,
+        registry: ToolchainRegistry,
+        recommended: Optional[List[Tuple[str, str]]] = None,
+    ) -> None:
         """Show the toolchain store and handle acquire/remove/clean actions.
 
         Args:
             store: Persistent toolchain store.
             registry: Toolchain registry (profile definitions).
+            recommended: Ordered ``(profile, reason)`` pairs suggested by the
+                current system analysis (see
+                :meth:`ToolchainRegistry.recommend_profiles`).
         """
         while True:
             self.console.clear()
@@ -419,11 +436,13 @@ class ToolchainStoreScreen(UIScreen):
             self.console.print()
 
             installed = {item.profile: item for item in store.list_installed()}
+            suggested = {name for name, _reason in recommended or []}
             table = Table(title="Profiles", show_header=True, header_style="bold cyan")
             table.add_column("Profile", style="cyan", no_wrap=True)
             table.add_column("Version", no_wrap=True)
             table.add_column("Source", no_wrap=True)
             table.add_column("Status")
+            table.add_column("Recommended", no_wrap=True)
             for name in sorted(registry.profiles):
                 profile = registry.profiles[name]
                 if profile.deployable:
@@ -433,13 +452,28 @@ class ToolchainStoreScreen(UIScreen):
                 else:
                     source = "not deployable"
                 entry = installed.get(name)
-                status = f"installed ({entry.variant})" if entry is not None else "not installed"
-                table.add_row(name, profile.version or "-", source, status)
+                if entry is None:
+                    status = "not installed"
+                elif entry.verified:
+                    status = f"installed ({entry.variant})"
+                else:
+                    status = f"FAILED verification ({entry.variant})"
+                table.add_row(
+                    name,
+                    profile.version or "-",
+                    source,
+                    status,
+                    "yes" if name in suggested else "-",
+                )
             self.console.print(table)
+            self.console.print("[dim]Source: build = built from third_party/sources.[/dim]")
             self.console.print()
-            self.console.print("[dim]Actions: [a]cquire  [r]emove  [c]lean logs  [q]uit[/dim]")
 
-            choice = Prompt.ask("Choice", choices=["a", "r", "c", "q"])
+            self._print_notes(registry)
+            self._print_recommendations(recommended, installed)
+            self._print_key_reference()
+
+            choice = Prompt.ask("Choice", choices=["p", "a", "r", "c", "q"])
             if choice == "q":
                 return
             if choice == "c":
@@ -447,35 +481,170 @@ class ToolchainStoreScreen(UIScreen):
                 self.console.print("[green]Cleared acquisition logs.[/green]")
                 Prompt.ask("Press Enter to continue")
                 continue
-
-            name = Prompt.ask("Profile name")
-            selected = registry.get_profile(name)
-            if selected is None:
-                self.console.print(f"[red]Unknown profile {name!r}.[/red]")
-                Prompt.ask("Press Enter to continue")
+            if choice == "p":
+                self._acquire_recommended(store, registry, recommended, installed)
                 continue
+            self._handle_single_action(store, registry, installed, choice)
 
-            try:
-                if choice == "r":
-                    removed = store.remove(name)
-                    message = "Removed" if removed else "Not installed"
-                    self.console.print(f"[green]{message}: {name}[/green]")
-                else:
-                    variant = None
-                    if len(selected.sources) > 1:
-                        variant = Prompt.ask(
-                            "Variant",
-                            choices=sorted(selected.sources),
-                            default=selected.default_source,
-                        )
-                    installed_entry = store.acquire(registry, name, variant)
-                    self.console.print(
-                        f"[green]Installed {installed_entry.profile} "
-                        f"({installed_entry.variant}) at {installed_entry.path}[/green]"
-                    )
-            except Exception as exc:  # surfaced to the user, then continue
-                self.console.print(f"[red]Action failed: {exc}[/red]")
+    def _print_key_reference(self) -> None:
+        """Render the key reference for this screen."""
+        table = Table(title="Keys", show_header=True, header_style="bold cyan")
+        table.add_column("Key", style="bold", no_wrap=True, width=4)
+        table.add_column("Action", style="cyan", no_wrap=True, width=20)
+        table.add_column("Description")
+        for key, action, description in _STORE_KEYS:
+            table.add_row(key, action, description)
+        self.console.print(table)
+        self.console.print()
+
+    def _print_notes(self, registry: ToolchainRegistry) -> None:
+        """Render registry notes (e.g. why a profile is not deployable)."""
+        notes = [
+            (name, profile.note)
+            for name, profile in sorted(registry.profiles.items())
+            if profile.note
+        ]
+        if not notes:
+            return
+        table = Table(title="Notes", show_header=True, header_style="bold cyan")
+        table.add_column("Profile", style="cyan", no_wrap=True)
+        table.add_column("Note")
+        for name, note in notes:
+            table.add_row(name, note)
+        self.console.print(table)
+        self.console.print()
+
+    def _print_recommendations(
+        self,
+        recommended: Optional[List[Tuple[str, str]]],
+        installed: Dict[str, InstalledToolchain],
+    ) -> None:
+        """Render the system-analysis recommendation list, if any."""
+        pending = [entry for entry in recommended or [] if entry[0] not in installed]
+        if pending:
+            table = Table(
+                title="Recommended (from system analysis)",
+                show_header=True,
+                header_style="bold cyan",
+            )
+            table.add_column("#", justify="right", width=3)
+            table.add_column("Profile", style="cyan", no_wrap=True)
+            table.add_column("Reason")
+            for index, (name, reason) in enumerate(pending, 1):
+                table.add_row(str(index), name, reason)
+            self.console.print(table)
+            self.console.print("[dim]Use the 'p' action to acquire these in order.[/dim]")
+            self.console.print()
+            return
+
+        self.console.print(
+            "[green]System analysis: nothing to deploy for the current FFmpeg "
+            "version — the detected toolchain is in range.[/green]"
+        )
+        self.console.print()
+
+    def _acquire_recommended(
+        self,
+        store: ToolchainStore,
+        registry: ToolchainRegistry,
+        recommended: Optional[List[Tuple[str, str]]],
+        installed: Dict[str, InstalledToolchain],
+    ) -> None:
+        """Acquire every recommended profile in dependency order."""
+        pending = [entry for entry in recommended or [] if entry[0] not in installed]
+        if not pending:
+            self.console.print("[yellow]No recommended profiles to acquire.[/yellow]")
             Prompt.ask("Press Enter to continue")
+            return
+
+        for name, _reason in pending:
+            profile = registry.get_profile(name)
+            variant = None
+            if profile is not None and len(profile.sources) > 1:
+                variant = Prompt.ask(
+                    "Variant",
+                    choices=sorted(profile.sources),
+                    default=profile.default_source,
+                )
+            try:
+                entry = store.acquire(registry, name, variant)
+            except Exception as exc:  # surfaced to the user, then stop the sequence
+                self.console.print(f"[red]{name} failed: {exc}[/red]")
+                break
+            self.console.print(
+                f"[green]Installed {entry.profile} ({entry.variant}) at {entry.path}[/green]"
+            )
+        Prompt.ask("Press Enter to continue")
+
+    def _handle_single_action(
+        self,
+        store: ToolchainStore,
+        registry: ToolchainRegistry,
+        installed: Dict[str, InstalledToolchain],
+        choice: str,
+    ) -> None:
+        """Acquire or remove one profile selected from a filtered list."""
+        if choice == "a":
+            candidates = sorted(
+                name for name, profile in registry.profiles.items() if profile.deployable
+            )
+            if not candidates:
+                self.console.print("[yellow]No deployable profiles.[/yellow]")
+                Prompt.ask("Press Enter to continue")
+                return
+        else:
+            candidates = sorted(installed)
+            if not candidates:
+                self.console.print("[yellow]Nothing installed to remove.[/yellow]")
+                Prompt.ask("Press Enter to continue")
+                return
+
+        name = self._select_profile(registry, candidates)
+        if name is None:
+            return
+
+        try:
+            if choice == "r":
+                removed = store.remove(name)
+                message = "Removed" if removed else "Not installed"
+                self.console.print(f"[green]{message}: {name}[/green]")
+            else:
+                profile = registry.get_profile(name)
+                variant = None
+                if profile is not None and len(profile.sources) > 1:
+                    variant = Prompt.ask(
+                        "Variant",
+                        choices=sorted(profile.sources),
+                        default=profile.default_source,
+                    )
+                entry = store.acquire(registry, name, variant)
+                self.console.print(
+                    f"[green]Installed {entry.profile} ({entry.variant}) at {entry.path}[/green]"
+                )
+        except Exception as exc:  # surfaced to the user, then continue
+            self.console.print(f"[red]Action failed: {exc}[/red]")
+        Prompt.ask("Press Enter to continue")
+
+    def _select_profile(self, registry: ToolchainRegistry, candidates: List[str]) -> Optional[str]:
+        """Prompt for one of ``candidates`` by number or name (empty cancels)."""
+        self.console.print("[dim]Select a profile by number or name (empty to cancel):[/dim]")
+        for index, name in enumerate(candidates, 1):
+            profile = registry.get_profile(name)
+            version = profile.version if profile is not None and profile.version else "-"
+            self.console.print(f"  [cyan]{index}[/cyan]  {name}  [dim]({version})[/dim]")
+        while True:
+            raw = str(Prompt.ask("Profile", default="")).strip()
+            if not raw:
+                return None
+            if raw in candidates:
+                return raw
+            if raw.isdigit():
+                position = int(raw)
+                if 1 <= position <= len(candidates):
+                    return candidates[position - 1]
+            self.console.print(
+                f"[red]Unknown profile {raw!r}: enter a listed name or number.[/red]"
+            )
 
 
 class InfoScreen(UIScreen):

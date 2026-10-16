@@ -1,0 +1,78 @@
+name: Toolchains
+
+# Long-running toolchain provisioning. Never runs on push/PR: it needs the
+# Git LFS source archives, takes 30-90 minutes for a GCC bootstrap, and is a
+# hardware-dependent manual process. Trigger it explicitly from the Actions tab
+# after changing pins, recipes, or provisioning code.
+on:
+  workflow_dispatch:
+    inputs:
+      selection:
+        description: "Profiles to acquire (recommendations, all, or a space-separated list)"
+        required: false
+        default: "recommendations"
+      ffmpeg_version:
+        description: "FFmpeg version for the recommendation"
+        required: false
+        default: "8.1"
+      jobs:
+        description: "Parallel make jobs (empty = auto)"
+        required: false
+        default: ""
+
+jobs:
+  provision:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (with LFS sources)
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+          python -m pip install -r requirements-dev.txt
+
+      - name: Show provisioning plan
+        run: |
+          ARGS=(--dry-run --ffmpeg-version "${{ inputs.ffmpeg_version }}")
+          python scripts/prepare_toolchains.py "${ARGS[@]}"
+
+      - name: Provision toolchains
+        run: |
+          ARGS=(--ffmpeg-version "${{ inputs.ffmpeg_version }}")
+          if [ -n "${{ inputs.jobs }}" ]; then
+            ARGS+=(--jobs "${{ inputs.jobs }}")
+          fi
+          case "${{ inputs.selection }}" in
+            recommendations)
+              python scripts/prepare_toolchains.py "${ARGS[@]}"
+              ;;
+            all)
+              python scripts/prepare_toolchains.py --all "${ARGS[@]}"
+              ;;
+            *)
+              # shellcheck disable=SC2206
+              PROFILES=(${{ inputs.selection }})
+              python scripts/prepare_toolchains.py --profiles "${PROFILES[@]}" "${ARGS[@]}"
+              ;;
+          esac
+
+      - name: Re-verify installed profiles
+        if: always()
+        run: python scripts/prepare_toolchains.py --verify-only
+
+      - name: Upload acquisition logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: toolchain-logs
+          path: toolchains/logs/
+          if-no-files-found: warn

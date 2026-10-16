@@ -1,7 +1,6 @@
 """Main application class for FFmpeg Builder."""
 
 import os
-import re
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Callable, Dict, List, Optional, Tuple, Type
@@ -13,7 +12,11 @@ from .build_types import BuildError, SkipComponent
 from .builder import FFmpegBuilder
 from .components import Component, ComponentRegistry
 from .config import BuildConfig, ConfigManager
-from .ffmpeg_policy import FfmpegPolicy, evaluate_ffmpeg_policy
+from .ffmpeg_policy import (
+    FfmpegPolicy,
+    detected_system_tool_versions,
+    evaluate_ffmpeg_policy,
+)
 from .platform_detect import PlatformDetector
 from .state import ComponentStatus, StateManager
 from .system_report import SystemReportGenerator
@@ -34,15 +37,6 @@ from .ui.screens import (
 # The package is the repository root (flat layout); anchor the default
 # workspace/config paths to it so the app works from any CWD.
 PROJECT_ROOT = Path(__file__).resolve().parent
-
-
-def _leading_version(value: object) -> Optional[str]:
-    """Extract the first dotted version (or bare number) from a raw string."""
-    if not value:
-        return None
-    text = str(value)
-    match = re.search(r"\d+(?:\.\d+)+", text) or re.search(r"\d+", text)
-    return match.group(0) if match else None
 
 
 class FFmpegBuilderApp:
@@ -207,13 +201,7 @@ class FFmpegBuilderApp:
             toolchain_registry = ToolchainRegistry()
         except (OSError, ValueError):
             return lambda component: True
-        installed = {
-            item.profile
-            for item in ToolchainStore(
-                PROJECT_ROOT / "toolchains",
-                workspace=self.workspace,
-            ).list_installed()
-        }
+        installed = self._installed_toolchains()
         versions = self._system_tool_versions()
         platform = self.platform_detector.get_platform_name()
 
@@ -233,9 +221,19 @@ class FFmpegBuilderApp:
                 return False
             if not toolchain_registry.is_profile_available(profile, platform):
                 return False
-            return profile_name in installed
+            return installed.get(profile_name) is True
 
         return _check
+
+    def _installed_toolchains(self) -> Dict[str, bool]:
+        """Installed toolchain profiles mapped to their verification status."""
+        return {
+            item.profile: item.verified
+            for item in ToolchainStore(
+                PROJECT_ROOT / "toolchains",
+                workspace=self.workspace,
+            ).list_installed()
+        }
 
     def _component_toolchain_reasons(self, config: BuildConfig) -> Dict[str, str]:
         """Explain why buildable-excluded components were gated by toolchain.
@@ -248,13 +246,7 @@ class FFmpegBuilderApp:
             toolchain_registry = ToolchainRegistry()
         except (OSError, ValueError):
             return {}
-        installed = {
-            item.profile
-            for item in ToolchainStore(
-                PROJECT_ROOT / "toolchains",
-                workspace=self.workspace,
-            ).list_installed()
-        }
+        installed = self._installed_toolchains()
         versions = self._system_tool_versions()
         platform = self.platform_detector.get_platform_name()
         reasons: Dict[str, str] = {}
@@ -281,19 +273,15 @@ class FFmpegBuilderApp:
                 reasons[component.name] = (
                     f"toolchain {profile_name!r} not installed (use the Toolchain store)"
                 )
+            elif installed.get(profile_name) is not True:
+                reasons[component.name] = (
+                    f"toolchain {profile_name!r} failed verification (re-acquire it)"
+                )
         return reasons
 
     def _system_tool_versions(self) -> Dict[str, str]:
         """Map detected system tool names to version strings for range checks."""
-        versions: Dict[str, str] = {}
-        if self.platform_info.gcc_major_version is not None:
-            versions["gcc"] = str(self.platform_info.gcc_major_version)
-        for name in ("gcc", "clang"):
-            info = self.tools.get(name)
-            parsed = _leading_version(getattr(info, "version", None))
-            if parsed:
-                versions[name] = parsed
-        return versions
+        return detected_system_tool_versions(self.platform_info, self.tools)
 
     def _show_toolchain_plan(self, config: BuildConfig) -> None:
         """Show the read-only resolved-toolchain plan for the current config."""
@@ -325,7 +313,15 @@ class FFmpegBuilderApp:
             source_archives_dir=PROJECT_ROOT / config.source_archives_dir,
             allow_network_downloads=config.allow_network_downloads,
         )
-        self.store_screen.show(store, toolchain_registry)
+        recommended = toolchain_registry.recommend_profiles(
+            config.ffmpeg_version,
+            self.platform_detector.get_platform_name(),
+            self._system_tool_versions(),
+            components=self.registry.get_all(),
+            installed=[item.profile for item in store.list_installed()],
+            cuda_version=self.platform_info.cuda_version,
+        )
+        self.store_screen.show(store, toolchain_registry, recommended=recommended)
 
     def _component_toolchain_env(
         self, config: BuildConfig, components: List[Component]

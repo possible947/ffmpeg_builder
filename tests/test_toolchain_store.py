@@ -163,6 +163,11 @@ def _recording_runner(calls: list):
     return run
 
 
+def _skip_verification(recipe, prefix):  # noqa: ARG001 - verifier contract
+    """Verifier stub for tests that only record commands (no real binaries)."""
+    return []
+
+
 class TestBuildAcquisition:
     def test_build_gcc_links_gmp_prerequisite(self, tmp_path):
         registry = _write_registry(
@@ -206,7 +211,12 @@ class TestBuildAcquisition:
 
         store = _store(tmp_path)
         calls: list = []
-        installed = store.acquire(registry, "gcc12", runner=_recording_runner(calls))
+        installed = store.acquire(
+            registry,
+            "gcc12",
+            runner=_recording_runner(calls),
+            verifier=_skip_verification,
+        )
 
         assert installed.profile == "gcc12"
         gcc_configure = [cmd for cmd, _ in calls if "--enable-languages=c,c++" in cmd]
@@ -214,6 +224,261 @@ class TestBuildAcquisition:
         assert any(arg.startswith("--with-gmp=") for arg in gcc_configure[0])
         # GMP was built first and is recorded in the store.
         assert store.installed("gmp") is not None
+
+    def test_build_resolves_jobs_and_prerequisite_placeholders(self, tmp_path):
+        registry = _write_registry(
+            tmp_path,
+            {
+                "gmp": {
+                    "kind": "bootstrap_lib",
+                    "platforms": ["linux"],
+                    "version": "6.0",
+                    "source": {
+                        "default": "build",
+                        "build": {
+                            "type": "build",
+                            "recipe": "autotools",
+                            "url": "https://example.org/gmp-6.0.tar.gz",
+                            "archive_filename": "gmp-6.0.tar.gz",
+                            "sha256": _SHA,
+                            "build_args": ["-j{jobs}"],
+                        },
+                    },
+                },
+                "mpfr": {
+                    "kind": "bootstrap_lib",
+                    "platforms": ["linux"],
+                    "version": "4.2",
+                    "source": {
+                        "default": "build",
+                        "build": {
+                            "type": "build",
+                            "recipe": "autotools",
+                            "url": "https://example.org/mpfr-4.2.tar.gz",
+                            "archive_filename": "mpfr-4.2.tar.gz",
+                            "sha256": _SHA,
+                            "bootstrap": {"compiler": "system", "requires": ["gmp"]},
+                            "configure_args": ["--with-gmp={prereq:gmp}"],
+                            "build_args": ["-j{jobs}"],
+                        },
+                    },
+                },
+            },
+        )
+        _make_tar(tmp_path / "sources" / "gmp-6.0.tar.gz", {"gmp-6.0/configure": "#!/bin/sh\n"})
+        _make_tar(tmp_path / "sources" / "mpfr-4.2.tar.gz", {"mpfr-4.2/configure": "#!/bin/sh\n"})
+
+        store = _store(tmp_path)
+        calls: list = []
+        store.acquire(
+            registry, "mpfr", runner=_recording_runner(calls), jobs=3, verifier=_skip_verification
+        )
+
+        make_calls = [cmd for cmd, _ in calls if cmd[:1] == ["make"]]
+        assert make_calls and all("-j3" in cmd for cmd in make_calls if cmd[1:2] != ["install"])
+        mpfr_configure = [cmd for cmd, _ in calls if any(a.startswith("--with-gmp=") for a in cmd)]
+        assert mpfr_configure, calls
+        expected = str(store.installed_dir / "gmp-6.0")
+        assert f"--with-gmp={expected}" in mpfr_configure[0]
+
+    def test_verification_failure_is_not_recorded(self, tmp_path):
+        registry = _write_registry(
+            tmp_path,
+            {
+                "gcc12": {
+                    "kind": "compiler",
+                    "platforms": ["linux"],
+                    "version": "12.1",
+                    "source": {
+                        "default": "build",
+                        "build": {
+                            "type": "build",
+                            "recipe": "gcc",
+                            "url": "https://example.org/gcc-12.1.tar.gz",
+                            "archive_filename": "gcc-12.1.tar.gz",
+                            "sha256": _SHA,
+                        },
+                    },
+                },
+            },
+        )
+        _make_tar(tmp_path / "sources" / "gcc-12.1.tar.gz", {"gcc-12.1/configure": "#!/bin/sh\n"})
+        store = _store(tmp_path)
+
+        with pytest.raises(RuntimeError, match="verification failed"):
+            store.acquire(
+                registry,
+                "gcc12",
+                runner=_recording_runner([]),
+                verifier=lambda recipe, prefix: ["C compile/link failed"],
+            )
+
+        assert store.installed("gcc12") is None
+
+    def test_verified_flag_is_stamped_and_gates_env(self, tmp_path):
+        registry = _write_registry(
+            tmp_path,
+            {
+                "gcc12": {
+                    "kind": "compiler",
+                    "platforms": ["linux"],
+                    "version": "12.1",
+                    "materialize": {"bin_subdir": "bin", "cc": "bin/gcc"},
+                    "source": {
+                        "default": "build",
+                        "build": {
+                            "type": "build",
+                            "recipe": "gcc",
+                            "url": "https://example.org/gcc-12.1.tar.gz",
+                            "archive_filename": "gcc-12.1.tar.gz",
+                            "sha256": _SHA,
+                        },
+                    },
+                },
+            },
+        )
+        _make_tar(tmp_path / "sources" / "gcc-12.1.tar.gz", {"gcc-12.1/configure": "#!/bin/sh\n"})
+        store = _store(tmp_path)
+        installed = store.acquire(
+            registry, "gcc12", runner=_recording_runner([]), verifier=_skip_verification
+        )
+        assert installed.verified is True
+        assert store.component_env(registry, "gcc12") is not None
+
+        state = store.load_state()
+        state.profiles["gcc12"].verified = False
+        store.save_state(state)
+
+        assert store.component_env(registry, "gcc12") is None
+        assert store.profile_paths(registry, "gcc12") == {}
+
+    def test_legacy_state_without_verified_flag_is_trusted(self, tmp_path):
+        store = _store(tmp_path)
+        store.ensure_layout()
+        store.state_path.write_text(
+            "profiles:\n"
+            "  gcc12:\n"
+            "    profile: gcc12\n"
+            "    version: '12.1'\n"
+            "    variant: build\n"
+            "    path: /tmp/whatever\n"
+            "    installed_at: '2026-01-01T00:00:00'\n",
+            encoding="utf-8",
+        )
+        entry = store.installed("gcc12")
+        assert entry is not None and entry.verified is True
+
+
+class TestRelocation:
+    """Store relocation: resolve entries through a moved store root."""
+
+    def _state_with_lib(self, tmp_path: Path) -> tuple:
+        from ffmpeg_builder.toolchain_store import InstalledToolchain, ToolchainState
+
+        origin = tmp_path / "probe-1.0"
+        lib = origin / "lib"
+        (origin / "include").mkdir(parents=True)
+        (origin / "include" / "lib.h").write_text("/* probe */\n", encoding="utf-8")
+        lib.mkdir(parents=True)
+        (lib / "libprobe.a").write_text("", encoding="utf-8")
+        store = _store(tmp_path)
+        entry = InstalledToolchain(
+            profile="probe",
+            version="1.0",
+            variant="local",
+            path=str(origin),
+            installed_at="2026-01-01T00:00:00",
+        )
+        store.save_state(ToolchainState(profiles={"probe": entry}))
+        return store, origin, entry
+
+    def _autotools_profile(self, name: str = "probe"):
+        local_dir = Path("/nonexistent")  # unused: entries are pre-recorded
+        _ = local_dir
+        return {
+            name: {
+                "kind": "bootstrap_lib",
+                "platforms": ["linux"],
+                "version": "1.0",
+                "source": {
+                    "default": "build",
+                    "build": {
+                        "type": "build",
+                        "recipe": "autotools",
+                        "url": "https://example.org/lib.tar.gz",
+                        "sha256": _SHA,
+                    },
+                },
+            }
+        }
+
+    def test_recorded_path_wins_when_present(self, tmp_path):
+        store, origin, entry = self._state_with_lib(tmp_path)
+        assert store.resolve_entry_path(entry) == origin
+
+    def test_missing_recorded_path_falls_back_to_new_root(self, tmp_path):
+        import shutil
+
+        store, origin, entry = self._state_with_lib(tmp_path)
+        moved = tmp_path / "moved"
+        moved_installed = moved / "installed" / origin.name
+        moved_installed.parent.mkdir(parents=True)
+        shutil.copytree(origin, moved_installed, dirs_exist_ok=True)
+        shutil.copy(store.state_path, moved / "state.json")
+        # The original is gone: only the moved copy can satisfy the entry.
+        shutil.rmtree(origin)
+        moved_store = ToolchainStore(moved)
+        assert moved_store.resolve_entry_path(entry) == moved_installed
+
+    def test_reverify_marks_failures_and_adopt_rewrites_paths(self, tmp_path):
+        import shutil
+
+        store, origin, _entry = self._state_with_lib(tmp_path)
+        registry = _write_registry(tmp_path, self._autotools_profile())
+        moved = tmp_path / "moved"
+        moved_installed = moved / "installed" / origin.name
+        moved_installed.parent.mkdir(parents=True)
+        shutil.copytree(origin, moved_installed, dirs_exist_ok=True)
+        shutil.copy(store.state_path, moved / "state.json")
+        # The original is gone: verification must resolve through the new root.
+        shutil.rmtree(origin)
+        moved_store = ToolchainStore(moved)
+
+        assert moved_store.reverify(registry) == []
+        # Not adopted yet: the recorded path still points at the origin.
+        assert moved_store.load_state().profiles["probe"].path == str(origin)
+
+        assert moved_store.reverify(registry, adopt_relocated=True) == []
+        assert moved_store.load_state().profiles["probe"].path == str(moved_installed)
+
+    def test_reverify_marks_missing_prefix_unverified(self, tmp_path):
+        from ffmpeg_builder.toolchain_store import InstalledToolchain, ToolchainState
+
+        store = _store(tmp_path)
+        store.save_state(
+            ToolchainState(
+                profiles={
+                    "probe": InstalledToolchain(
+                        profile="probe",
+                        version="1.0",
+                        variant="local",
+                        path=str(tmp_path / "gone"),
+                        installed_at="2026-01-01T00:00:00",
+                    )
+                }
+            )
+        )
+        registry = _write_registry(tmp_path, self._autotools_profile())
+        assert store.reverify(registry) == ["probe"]
+        assert store.load_state().profiles["probe"].verified is False
+        # Filtered from consumers until re-acquired.
+        assert store.installed("probe") is None
+
+    def test_mark_unverified_keeps_entry_but_hides_it(self, tmp_path):
+        store, _origin, _entry = self._state_with_lib(tmp_path)
+        store.mark_unverified("probe")
+        assert store.load_state().profiles["probe"].verified is False
+        assert store.installed("probe") is None
 
 
 class TestBuilders:
@@ -262,6 +527,94 @@ class TestBuilders:
             toolchain_builders.build_rust_standalone(
                 source_dir, tmp_path / "prefix", tmp_path / "logs", _recording_runner([])
             )
+
+
+class TestArgResolution:
+    def test_expands_prefix_jobs_and_prerequisites(self, tmp_path):
+        resolved = toolchain_builders.resolve_args(
+            ["--with-gmp={prereq:gmp}", "--prefix={prefix}", "-j{jobs}"],
+            tmp_path / "prefix",
+            {"gmp": tmp_path / "installed" / "gmp-6.3.0"},
+            jobs=8,
+        )
+        assert resolved == [
+            f"--with-gmp={tmp_path / 'installed' / 'gmp-6.3.0'}",
+            f"--prefix={tmp_path / 'prefix'}",
+            "-j8",
+        ]
+
+    def test_unknown_prerequisite_raises(self, tmp_path):
+        with pytest.raises(ValueError, match="not installed in the store"):
+            toolchain_builders.resolve_args(["{prereq:gmp}"], tmp_path, {}, jobs=1)
+
+    def test_clean_env_drops_build_and_vendor_flags(self, monkeypatch):
+        monkeypatch.setenv("CFLAGS", "-O3 -march=native")
+        monkeypatch.setenv("RUSTFLAGS", "-C target-cpu=native")
+        monkeypatch.setenv("CUDA_HOME", "/opt/cuda")
+        monkeypatch.setenv("PATH", "/usr/bin")
+        env = toolchain_builders.clean_env()
+        assert "CFLAGS" not in env
+        assert "RUSTFLAGS" not in env
+        assert "CUDA_HOME" not in env
+        assert env["PATH"] == "/usr/bin"
+
+
+class TestVerification:
+    def _fake_tool(self, prefix: Path, name: str, exit_code: int) -> None:
+        bin_dir = prefix / "bin"
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        tool = bin_dir / name
+        tool.write_text(f"#!/bin/sh\nexit {exit_code}\n", encoding="utf-8")
+        tool.chmod(0o755)
+
+    def test_unknown_recipe_requires_binaries(self, tmp_path):
+        prefix = tmp_path / "p"
+        prefix.mkdir()
+        assert toolchain_builders.verify_profile(None, prefix)
+        self._fake_tool(prefix, "tool", 0)
+        assert toolchain_builders.verify_profile(None, prefix) == []
+
+    def test_autotools_requires_headers_and_archive(self, tmp_path):
+        prefix = tmp_path / "p"
+        (prefix / "include").mkdir(parents=True)
+        assert any(
+            "no static or shared library" in item
+            for item in toolchain_builders.verify_profile("autotools", prefix)
+        )
+
+        (prefix / "lib").mkdir()
+        (prefix / "lib" / "libfoo.a").write_text("", encoding="utf-8")
+        assert toolchain_builders.verify_profile("autotools", prefix) == []
+
+    def test_rust_requires_rustc_and_cargo(self, tmp_path):
+        prefix = tmp_path / "p"
+        (prefix / "bin").mkdir(parents=True)
+        failures = toolchain_builders.verify_profile("rust_standalone", prefix)
+        assert any("rustc" in item for item in failures)
+        assert any("cargo" in item for item in failures)
+
+        self._fake_tool(prefix, "rustc", 0)
+        self._fake_tool(prefix, "cargo", 0)
+        assert toolchain_builders.verify_profile("rust_standalone", prefix) == []
+
+    def test_compiler_probe_reports_failing_tools(self, tmp_path):
+        prefix = tmp_path / "p"
+        self._fake_tool(prefix, "gcc", 1)
+        self._fake_tool(prefix, "g++", 0)
+        failures = toolchain_builders.verify_profile("gcc", prefix)
+        assert failures  # the failing `gcc --version` probe is reported
+
+    def test_compiler_probe_passes_with_working_tools(self, tmp_path):
+        prefix = tmp_path / "p"
+        self._fake_tool(prefix, "gcc", 0)
+        self._fake_tool(prefix, "g++", 0)
+        assert toolchain_builders.verify_profile("gcc", prefix) == []
+
+    def test_compiler_missing_binary_is_reported(self, tmp_path):
+        prefix = tmp_path / "p"
+        prefix.mkdir()
+        failures = toolchain_builders.verify_profile("gcc", prefix)
+        assert any("missing" in item for item in failures)
 
 
 class TestComponentEnv:

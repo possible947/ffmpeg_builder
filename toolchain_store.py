@@ -18,7 +18,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import IO, Dict, Iterator, List, Optional
+from typing import IO, Callable, Dict, Iterator, List, Optional
 
 import yaml
 
@@ -28,6 +28,8 @@ from .toolchain_registry import ToolchainProfile, ToolchainRegistry, ToolchainSo
 STORE_SUBDIRS = ("archives", "installed", "logs", "locks", "profiles", "build")
 
 Runner = toolchain_builders.Runner
+# (recipe, prefix) -> list of failure descriptions; empty means usable.
+Verifier = Callable[[Optional[str], Path], List[str]]
 
 
 def _now() -> str:
@@ -67,24 +69,28 @@ class InstalledToolchain:
     variant: str
     path: str
     installed_at: str
+    verified: bool = True
 
-    def to_dict(self) -> Dict[str, str]:
+    def to_dict(self) -> Dict[str, object]:
         return {
             "profile": self.profile,
             "version": self.version,
             "variant": self.variant,
             "path": self.path,
             "installed_at": self.installed_at,
+            "verified": self.verified,
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, str]) -> "InstalledToolchain":
+    def from_dict(cls, data: Dict[str, object]) -> "InstalledToolchain":
         return cls(
             profile=str(data["profile"]),
             version=str(data.get("version", "")),
             variant=str(data.get("variant", "")),
             path=str(data.get("path", "")),
             installed_at=str(data.get("installed_at", "")),
+            # Entries written before verification existed default to trusted.
+            verified=bool(data.get("verified", True)),
         )
 
 
@@ -182,7 +188,73 @@ class ToolchainStore:
             yaml.safe_dump(state.to_dict(), handle, default_flow_style=False, sort_keys=True)
 
     def installed(self, profile: str) -> Optional[InstalledToolchain]:
-        return self.load_state().profiles.get(profile)
+        entry = self.load_state().profiles.get(profile)
+        if entry is None or entry.verified:
+            return entry
+        # A failed install was recorded as unverified: treat as absent and warn.
+        return None
+
+    def resolve_entry_path(self, entry: InstalledToolchain) -> Path:
+        """Resolve an entry's install prefix against this store's root.
+
+        The recorded absolute path wins when it exists. Otherwise the same
+        directory basename is tried under this store's ``installed/`` — this is
+        what makes a copied store work at a new location (relocation). When
+        neither exists, the recorded path is returned so verification fails
+        with an honest "missing" report.
+        """
+        recorded = Path(entry.path)
+        if recorded.exists():
+            return recorded
+        relocated = self.installed_dir / recorded.name
+        if relocated.exists():
+            return relocated
+        return recorded
+
+    def mark_unverified(self, profile: str) -> None:
+        """Record an installed profile as failed verification.
+
+        Keeps the state entry (so the broken path is visible) but withholds it
+        from :meth:`installed`, :meth:`profile_paths`, and :meth:`component_env`
+        until the profile is re-acquired.
+        """
+        state = self.load_state()
+        entry = state.profiles.get(profile)
+        if entry is not None and entry.verified:
+            entry.verified = False
+            self.save_state(state)
+
+    def reverify(self, registry: ToolchainRegistry, adopt_relocated: bool = False) -> List[str]:
+        """Re-run verification for every installed profile.
+
+        Prefixes are resolved with :meth:`resolve_entry_path`, so this is also
+        the store-relocation acceptance check: copy the store, run this against
+        the copy, and failures show exactly which profiles did not survive the
+        move. Failed profiles are marked unverified. When ``adopt_relocated``
+        is set, successfully re-anchored entries have their recorded path
+        rewritten to the new root so the moved store becomes authoritative.
+        Returns the names of the failed profiles.
+        """
+        failures: List[str] = []
+        state = self.load_state()
+        changed = False
+        for name, entry in state.profiles.items():
+            prefix = self.resolve_entry_path(entry)
+            recipe: Optional[str] = None
+            profile = registry.get_profile(name)
+            if profile is not None and profile.default_source is not None:
+                source = profile.sources.get(profile.default_source)
+                recipe = source.recipe if source is not None else None
+            if toolchain_builders.verify_profile(recipe, prefix):
+                entry.verified = False
+                changed = True
+                failures.append(name)
+            elif adopt_relocated and str(prefix) != entry.path and prefix.exists():
+                entry.path = str(prefix)
+                changed = True
+        if changed:
+            self.save_state(state)
+        return failures
 
     def list_installed(self) -> List[InstalledToolchain]:
         return list(self.load_state().profiles.values())
@@ -213,12 +285,12 @@ class ToolchainStore:
         """Resolve absolute tool paths (CC/CXX/bin dir) for an installed profile.
 
         Returns a mapping with any of ``CC``, ``CXX``, ``BIN_DIR`` keys, or an
-        empty dict when the profile is not installed or declares no
-        materialization. Used by the CUDA host-compiler selection
+        empty dict when the profile is not installed, failed verification, or
+        declares no materialization. Used by the CUDA host-compiler selection
         (``-ccbin``) as well as :meth:`component_env`.
         """
         installed = self.installed(profile_name)
-        if installed is None:
+        if installed is None or not installed.verified:
             return {}
         profile = registry.get_profile(profile_name)
         if profile is None:
@@ -286,8 +358,16 @@ class ToolchainStore:
         profile_name: str,
         variant: Optional[str] = None,
         runner: Optional[Runner] = None,
+        jobs: Optional[int] = None,
+        verifier: Optional[Verifier] = None,
     ) -> InstalledToolchain:
-        """Acquire (install) a toolchain profile into the store."""
+        """Acquire (install) a toolchain profile into the store.
+
+        Source builds run with ``jobs`` parallel make jobs (defaulting to the
+        detected CPU count) and are verified after installation with ``verifier``
+        (defaults to :func:`toolchain_builders.verify_profile`). A failed
+        verification raises instead of recording a broken profile as installed.
+        """
         profile = registry.get_profile(profile_name)
         if profile is None:
             raise ValueError(f"Unknown toolchain profile {profile_name!r}")
@@ -303,6 +383,8 @@ class ToolchainStore:
             )
         source = profile.sources[chosen]
         build_runner = runner or toolchain_builders.default_runner
+        build_jobs = jobs if jobs is not None else max(1, os.cpu_count() or 1)
+        check = verifier or toolchain_builders.verify_profile
 
         with self.lock(profile_name):
             version_suffix = profile.version or "unversioned"
@@ -317,7 +399,12 @@ class ToolchainStore:
                 archive = self._fetch_or_resolve(source, profile)
                 self._extract(archive, dest)
             elif source.type == "build":
-                self._build(registry, profile, source, dest, build_runner)
+                self._build(registry, profile, source, dest, build_runner, build_jobs, check)
+                failures = check(source.recipe, dest)
+                if failures:
+                    raise RuntimeError(
+                        f"Toolchain {profile_name!r} verification failed: " + "; ".join(failures)
+                    )
             else:  # pragma: no cover - guarded by registry validation
                 raise ValueError(f"Unsupported source type {source.type!r}")
 
@@ -327,6 +414,7 @@ class ToolchainStore:
                 variant=chosen,
                 path=str(dest),
                 installed_at=_now(),
+                verified=True,
             )
             state = self.load_state()
             state.profiles[profile_name] = installed
@@ -415,6 +503,8 @@ class ToolchainStore:
         source: ToolchainSource,
         dest: Path,
         runner: Runner,
+        jobs: int,
+        verifier: Verifier,
     ) -> None:
         archive = self._fetch_or_resolve(source, profile)
         work = self.build_dir / f"{_safe_name(profile.name)}-{profile.version or 'unversioned'}"
@@ -426,7 +516,9 @@ class ToolchainStore:
         bootstrap = source.bootstrap
         if bootstrap is not None:
             for requirement in bootstrap.requires:
-                installed = self.acquire(registry, requirement, runner=runner)
+                installed = self.acquire(
+                    registry, requirement, runner=runner, jobs=jobs, verifier=verifier
+                )
                 prerequisites[requirement] = Path(installed.path)
 
         log_dir = self.logs_dir / _safe_name(profile.name)
@@ -437,9 +529,9 @@ class ToolchainStore:
             dest,
             log_dir,
             runner,
-            source.configure_args,
-            source.build_args,
-            source.install_args,
+            toolchain_builders.resolve_args(source.configure_args, dest, prerequisites, jobs),
+            toolchain_builders.resolve_args(source.build_args, dest, prerequisites, jobs),
+            toolchain_builders.resolve_args(source.install_args, dest, prerequisites, jobs),
             prerequisites,
         )
 

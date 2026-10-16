@@ -137,6 +137,65 @@ Version availability is policy-gated at runtime by detected toolchain:
 Existing configurations without an `ffmpeg_version` field retain the `8.1` default.
 Set `ffmpeg_version: "9.0"` explicitly to select the FFmpeg 9.0 source profile.
 
+### Toolchain store and provisioning
+
+`toolchains.yaml` (repo root) is the declarative source of truth, loaded and
+validated by `toolchain_registry.py`:
+
+- `toolchains:` — named profiles (`gmp`, `mpfr`, `mpc`, `gcc12/13/15`, `rust`,
+  `cargo-c`) with `kind`, `platforms`, `provides`, `materialize`, an optional
+  human-readable `note`, and a `source` block whose variants are `build`,
+  `binary`, `download`, or `local` (`source.default` preselects one).
+- `platform_profiles:` — keyed by `(ffmpeg_version, platform)`; declares the
+  `system_tool_range` that decides whether the host toolchain is used or a
+  `fallback_toolchain` is deployed.
+- `cuda:` — CUDA Toolkit version → host-compiler profile.
+
+`toolchain_store.py` owns `<root>/{archives,installed,logs,locks,profiles,build}`
+and `state.json`. The root must not overlap the build workspace. `acquire()`
+dispatches on the source variant; `build` variants are executed by
+`toolchain_builders.py` recipes (`gcc`, `autotools`, `rust_standalone`).
+
+Registry arguments support three placeholders, expanded by
+`toolchain_builders.resolve_args()` before a recipe runs: `{prefix}` (install
+prefix), `{jobs}` (parallel `make` value from the `jobs=` argument or the
+detected CPU count), and `{prereq:<name>}` (bootstrap prerequisite prefix;
+unresolved names fail fast). `bootstrap.requires` installs prerequisites first,
+so a profile's libraries always come from the store rather than the host.
+
+Two portability rules apply to every recipe:
+
+- Bootstrap commands run through `default_runner()`, which uses `clean_env()` to
+  drop FFmpeg/vendor build variables (`CFLAGS`, `CXXFLAGS`, `LDFLAGS`, `CPATH`,
+  `LIBRARY_PATH`, `CUDA_*`, `VULKAN_SDK`, `RUSTFLAGS`, `AS`, …). A toolchain
+  build must never inherit the FFmpeg build's flags.
+- Recipes use only paths derived from their arguments. Any host-specific flag
+  needed to build pre-C23 sources (e.g. `CFLAGS=-O2 -std=gnu17` for
+  `gmp`/`mpfr`/`mpc`, whose configure probes GCC 15+ rejects under its `gnu23`
+  default) is declared as registry data, not hardcoded in Python.
+
+After every source build, `acquire()` runs `toolchain_builders.verify_profile()`
+and records `InstalledToolchain.verified` in `state.json`. Verification is
+capability-based, not file-presence-based: GCC must report a version and compile
+and link C and C++ probes, Rust must report `rustc`/`cargo` versions, bootstrap
+libraries must provide headers plus an archive. A failure raises and the profile
+is not recorded; `profile_paths()`/`component_env()` return nothing for an
+unverified entry, and the app's gate distinguishes "not installed" from "failed
+verification".
+
+Portability constraint: an installed GCC bakes its `--prefix` into header and
+library search paths, and GCC 12.5.0's configure has no `--enable-relocatable`,
+so a store root must stay where it was built unless relocation is implemented
+(prefix rewriting/RPATH fixups). `scripts/prepare_toolchains.py --verify-only`
+re-runs verification for everything installed and is the acceptance tool for
+relocation tests (move the store, re-verify).
+
+`ToolchainRegistry.recommend_profiles()` derives the profiles to deploy from the
+current system analysis (fallback for an out-of-range host tool, bootstrap
+prerequisites, component-declared toolchains, the CUDA table), and both the TUI
+store and `scripts/prepare_toolchains.py` consume it — the TUI's `p` action and
+the script's default selection are the same computation.
+
 **`ConfigManager`** — loads/saves YAML configuration:
 
 - `load()` — reads `build_config.yaml`, returns `BuildConfig`
