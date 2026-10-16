@@ -715,6 +715,9 @@ def test_build_libplacebo_merges_windows_pkg_config_path_and_patches_glslang(
     builder = _make_libplacebo_builder(tmp_path, platform="windows")
     component = _make_libplacebo_component()
     source_dir = tmp_path / "src"
+    vulkan_header = builder.workspace / "include" / "vulkan" / "vulkan.h"
+    vulkan_header.parent.mkdir(parents=True, exist_ok=True)
+    vulkan_header.write_text("#pragma once\n", encoding="utf-8")
     glsl_meson = source_dir / "src" / "glsl" / "meson.build"
     glsl_meson.parent.mkdir(parents=True, exist_ok=True)
     glsl_meson.write_text(
@@ -807,6 +810,9 @@ def test_build_libplacebo_fails_when_glslang_patch_target_is_missing(
     builder = _make_libplacebo_builder(tmp_path, platform="windows")
     component = _make_libplacebo_component()
     source_dir = tmp_path / "src"
+    vulkan_header = builder.workspace / "include" / "vulkan" / "vulkan.h"
+    vulkan_header.parent.mkdir(parents=True, exist_ok=True)
+    vulkan_header.write_text("#pragma once\n", encoding="utf-8")
     glsl_meson = source_dir / "src" / "glsl" / "meson.build"
     glsl_meson.parent.mkdir(parents=True, exist_ok=True)
     glsl_meson.write_text("project('libplacebo')\n", encoding="utf-8")
