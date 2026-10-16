@@ -4,7 +4,11 @@ This document describes the internal architecture, module responsibilities, data
 
 ## Release Status
 
-The current package version is `2.0.0` (stable release). FFmpeg 9 integration is complete and validated on macOS, Linux, and Windows MSYS2 UCRT64. macOS validation completed with FFmpeg 9.0 and the default non-GPL configuration: all 49 selected components completed (37 source components and 12 system components), with no failures or skips. The generated `ffmpeg`, `ffprobe`, and `ffplay` binaries report FFmpeg 9.0. Linux (Fedora 44, GCC 16.2.1) validation additionally root-caused and fixed the `libvmaf` uncontrolled-memory-growth issue — see "Known issue: libvmaf uncontrolled memory growth on GCC 16" below.
+The current package version is `3.0.0`. The toolchain store replaces the
+external `nix shell` environment: compilers are built on the host for the
+host, and both FFmpeg versions build end-to-end (Linux, GCC 16.2.1 host: 8.1
+with deployed gcc12 12.5.0 and 9.0 with the system GCC — 58/58 components
+each, smoke-tested). See `CHANGELOG.md` for the release history.
 
 ## Architecture Overview
 
@@ -646,13 +650,11 @@ string comparison):
    set, is probed with `-ccbin=$CUDA_NVCC_CCBIN`; this lets any compiler
    install (a manually built GCC 12, a distro `gcc-12` package on distros
    that still carry it, etc.) be forced regardless of auto-detection.
-3. **Conda/mamba/micromamba auto-detection** — `_iter_conda_gcc_candidates()`
-   scans common environment-manager install roots (`~/.local/share/mamba/envs`,
-   `~/micromamba/envs`, `~/miniforge3/envs`, `~/miniconda3/envs`,
-   `~/mambaforge/envs`, `/opt/conda/envs`) for `conda-forge`-style
-   `gcc_linux-64`/`gxx_linux-64` compiler packages (binaries named
-   `x86_64-conda-linux-gnu-gcc` etc.), probing each with `-ccbin=<candidate>`
-   until one succeeds.
+3. **Toolchain store** — `_store_cuda_host_compiler()` resolves the
+   store-installed `CC` for the profile mapped to the detected CUDA Toolkit
+   version (`ToolchainStore.cuda_host_compiler()` over the registry's `cuda`
+   table, e.g. CUDA 12.2 → `gcc12`), probing it with `-ccbin=<candidate>`
+   when that profile is installed and verified.
 
 The winning path is stored in `platform_info.nvcc_ccbin` (with
 `nvcc_ccbin_reason`/`cuda_nvcc_reason` recording which tier matched, for the
@@ -670,25 +672,22 @@ both consumers uniformly instead of only one.
   `NVCC_PREPEND_FLAGS=-ccbin=<path>` for libvmaf's independent Meson/Ninja
   build (which does not read FFmpeg's `--nvccflags`).
 
-**Recommended setup** (validated on Fedora 44 + CUDA 12.2):
+**Provisioning the mapped compiler** (validated on Fedora 44 + CUDA 12.2):
 
 ```bash
-# micromamba (or conda/mamba) — conda-forge ships a relocatable gcc12 toolchain
-micromamba create -n cuda-gcc12 -c conda-forge gcc_linux-64=12 gxx_linux-64=12
+python scripts/prepare_toolchains.py   # deploys gcc12 when the analysis recommends it
 ```
 
-No manual configuration is required afterward — tier 3 auto-detects this
-environment on the next `detect_all()` run by matching the known install
-root (`~/.local/share/mamba/envs/cuda-gcc12/bin/x86_64-conda-linux-gnu-gcc`).
+No manual configuration is required afterward — tier 3 resolves the installed
+store profile on the next `detect_all()` run.
 Use `CUDA_NVCC_CCBIN=/path/to/gcc-12` instead if the compiler was installed
 some other way (e.g. a manually built toolchain, or a distro that still
 packages `gcc-12`).
 
 **Verification**: confirmed via `PlatformDetector.detect_all()` reporting
-`cuda_nvcc_supported=True` with `nvcc_ccbin` pointing at the micromamba
-environment's `x86_64-conda-linux-gnu-gcc`, and via a full end-to-end FFmpeg
-build whose `ffmpeg -version` configuration line includes
-`--nvccflags='-ccbin=/home/.../envs/cuda-gcc12/bin/x86_64-conda-linux-gnu-gcc ...'`
+`cuda_nvcc_supported=True` with `nvcc_ccbin` pointing at the store-installed
+GCC, and via a full end-to-end FFmpeg build whose `ffmpeg -version`
+configuration line includes `--nvccflags='-ccbin=<store-path> ...'`
 with working `h264_nvenc`/`hevc_nvenc`/`av1_nvenc` encoders in the resulting
 binary.
 
@@ -842,46 +841,17 @@ reports a VMAF score instead of failing with `Cannot allocate memory`.
 No toolchain restriction remains: `libvmaf` is safe to enable
 (`enable_libvmaf: true`) on GCC 15/16 hosts as on GCC 12/13 and Clang.
 
-### Isolated Nix environment for FFmpeg 8.1 on Linux GCC 15+ (e.g. Fedora 44)
+### Host-built compilers replace the isolated Nix environment (3.0)
 
-**Problem context**:
-FFmpeg 8.1 enforces strict compiler policy gating (`gcc_major <= 13`, `clang <= 25`), as upstream FFmpeg 8.1 code and several codec components contain source-level incompatibilities with GCC 15+. While FFmpeg 9.0 builds cleanly on modern Linux distributions (such as Fedora 44 with GCC 16.2.1), projects requiring FFmpeg 8.1 for embedded integration or API/ABI stability cannot compile it natively against host compilers.
-
-**Solution**:
-A dedicated `shell.nix` provides an isolated, reproducible development shell based on `pkgs.gcc13Stdenv`. It satisfies all requirements of `ffmpeg_builder` without system modifications or root permissions:
-
-1. **Toolchain & Python Environment**:
-   - Uses `pkgs.gcc13Stdenv` to supply GCC 13.x and matching GNU binutils.
-   - Embeds Python 3.12 with all required libraries (`rich`, `tqdm`, `pyyaml`, `requests`, `jinja2`).
-   - Packages build tools: `cmake`, `ninja`, `meson`, `nasm`, `yasm`, `pkg-config-unwrapped`, `autoconf`, `automake`, `libtool`, `m4`, `gnumake`, `git`, `patchelf`.
-   - Packages Rust toolchain: `rustc`, `cargo`, and `cargo-c` for AV1 encoders (`rav1e`).
-
-2. **Hardware Acceleration & System Headers**:
-   - `libva`, `libva-utils`, `libdrm` (VAAPI / DRM).
-   - `vulkan-headers`, `vulkan-loader`, `vulkan-tools` (Vulkan & libplacebo).
-   - `opencl-headers`, `ocl-icd`, `clinfo` (OpenCL).
-   - `libvpl` (Intel QSV / oneVPL).
-   - `wayland`, `wayland-protocols`, `wayland-scanner`, `libxkbcommon` (Wayland headers for SDL2 / ffplay).
-   - `zlib`, `giflib`, `bzip2` (system and compression libraries required by FreeType2 and others).
-
-3. **Nix-Specific Environment Shims (`shellHook`)**:
-   - `unset AS`: Nixpkgs `stdenv` exports `AS="as"` by default. `x264`'s `./configure` checks `${AS-nasm}`; if `AS` is set, it attempts to use GNU `as` instead of `nasm` and fails on AVX-512 assembly. Unsetting `AS` allows `x264` to find and use `nasm`.
-   - `unset PKG_CONFIG_PATH_FOR_TARGET` and `unset NIX_PKG_CONFIG_WRAPPER_TARGET_*`: Nix's `pkg-config-wrapper` redirects queries to `PKG_CONFIG_PATH_FOR_TARGET` and ignores local paths outside `/nix/store`. Using `pkg-config-unwrapped` and unsetting wrapper variables ensures Meson and Autotools resolve workspace packages (e.g. `workspace/lib/pkgconfig`).
-   - `export NIX_ENFORCE_NO_NATIVE=0`: Disables Nix's default prohibition against `-march=native`, allowing CPU optimizations.
-   - `export PKG_CONFIG_PATH="$PWD/workspace/lib/pkgconfig:$PKG_CONFIG_PATH"`: Ensures workspace-built libraries take priority.
-
-4. **Codebase Adaptation (`builders/base.py`)**:
-   - Modern glibc (>= 2.38) hides POSIX definitions (`pthread_rwlock_t`, `S_IFMT`) when strict `-std=c11` is present in `CFLAGS` for cargo C dependencies (e.g. `libgit2-sys` inside `rav1e`).
-   - `builders/base.py` automatically substitutes `-std=c11` with `-std=gnu11` in `build_cargo()` for all Linux targets.
-
-**Workflow**:
-```bash
-# Launch the isolated environment
-nix-shell
-
-# Run build as usual (output in ./workspace/release)
-python -m ffmpeg_builder
-```
+The `shell.nix` isolated environment (`pkgs.gcc13Stdenv`-based) is removed.
+Its role — providing a compatible compiler on hosts whose system GCC is out
+of range — is now served by the built-in toolchain store (see "Toolchain store
+and provisioning" above): compilers are built on the host for the host from
+pinned Git LFS archives, resolved per `(ffmpeg_version, platform)` profile,
+and verified after installation. The pre-C23 compatibility fixes previously
+carried by the Nix shell notes (e.g. `-std=gnu11` for cargo C dependencies)
+now live as registry data (`configure_args`) and automatic platform handling
+in `builders/base.py`.
 
 ## Data Flow
 

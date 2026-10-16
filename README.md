@@ -1,4 +1,4 @@
-# FFmpeg Builder 2.0
+# FFmpeg Builder 3.0
 
 Interactive Python-based build system for FFmpeg 8.1 (default) and 9.0 on macOS, Linux, and **Windows 11 + MSYS2 UCRT64**.
 
@@ -6,54 +6,46 @@ FFmpeg Builder replaces the traditional bash `build-ffmpeg` script with a modern
 
 ## Release Status
 
-Version `2.0.0` is a stable release. FFmpeg 9 integration is complete and validated on all three supported platforms: macOS (default non-GPL configuration, all 49 selected components: 37 built from source, 12 system-provided, no failures or skips), Windows 11 + MSYS2 UCRT64, and Linux (Fedora 44, GCC 16.2.1, full HW-acceleration stack including CUDA/Vulkan/OpenCL). The `libvmaf` uncontrolled-memory-growth issue that previously affected GCC 15/16 hosts (see "Verified Environments" / Troubleshooting) has been root-caused and fixed — see `docs/DeveloperReadme.md` for the investigation writeup.
+Version `3.0.0` replaces the external `nix shell` environment with compilers
+built on the host for the host: the built-in toolchain store provisions GCC
+and Rust profiles from `toolchains.yaml`, and both FFmpeg versions build
+end-to-end (Linux, GCC 16.2.1 host: 8.1 with deployed gcc12 12.5.0 and 9.0
+with the system GCC — 58/58 components each, 18/18 expected encoders,
+`-march=native -mtune=native -fopenmp`, smoke-tested). Release portability is
+explicitly out of scope: the goal is a maximally host-tuned FFmpeg, and Vulkan
+filters do not work in a fully static binary. See `docs/CHANGELOG.md` for the
+release history and `docs/README.md` → "Toolchain Store" for the provisioning
+guide.
 
 ## Features
 
-- **Interactive TUI** — Rich terminal interface with system report, component info, configuration editor, and live package-manager style build dashboard
+- **Interactive TUI** — Rich terminal interface with system report, component info, configuration editor, toolchain store with system-analysis recommendations, and live package-manager style build dashboard
+- **Toolchain Store** — Built-in compiler provisioning (`toolchains.yaml`): GCC/Rust profiles built on the host for the host, capability-verified after install, relocatable for bootstrap libraries; per-component `CC`/`CXX`/`PATH` injection. See `docs/README.md` → "Toolchain Store"
+- **Headless Scripts** — `scripts/prepare_toolchains.py` (provision by recommendation/all/explicit list, `--dry-run`, `--verify-only`) and `scripts/run_build.py` (full FFmpeg build with `--dry-run`/`--resume`), twins of the TUI flows for repeatable and CI runs
 - **Platform Detection** — Automatic detection of CPU, RAM, GPU, compilers, and build tools
 - **Hardware Acceleration** — Detects and configures CUDA, Vulkan, VAAPI, AMF, and OpenCL support
-- **Resumable Builds** — JSON state file tracks progress; interrupted builds can be resumed
+- **Resumable Builds** — JSON state file tracks progress; interrupted builds can be resumed (TUI or `--resume`)
 - **Local source mirror by default** — Archives are read from `third_party/sources` first; network fallback is configurable
 - **Interactive Error Handling** — On failure, choose to retry, skip component, or abort
 - **YAML Configuration** — Human-readable build profiles with platform-specific settings
-- **~50 Components** — All codecs, libraries, and tools built from source in correct dependency order
+- **~60 Components** — All codecs, libraries, and tools built from source in correct dependency order
 - **macOS Support** — Macports clang detection, OpenMP, VideoToolbox, glibtool handling
-- **Linux Support** — GCC/Clang detection, C11/C++17 standards, full-static builds
+- **Linux Support** — GCC/Clang detection, C11/C++17 standards, host-tuned (`-march=native -mtune=native -fopenmp`) builds
 - **Windows 11 + MSYS2 UCRT64 Support** — Full FFmpeg 8.1 build with CUDA/NVENC, Vulkan, OpenCL; w32threads; static codec libraries
 
 ## Requirements
 
 ### FFmpeg version policy
 
-- FFmpeg **8.1** is available only on supported compiler/toolchain combinations.
-- Global hard limits for 8.1: **GCC <= 13** and **Clang <= 25**.
-- On **Linux GCC15+** platforms, only **FFmpeg 9.0** is available.
+- FFmpeg **8.1** and **9.0** are selected with `ffmpeg_version` (`8.1` default).
+- Each `(ffmpeg_version, platform)` pair declares a `system_tool_range` in
+  `toolchains.yaml`. When the detected system compiler is inside the range,
+  it is used directly; when it is outside, the profile's `fallback_toolchain`
+  is deployed from the built-in toolchain store (see "Toolchain Store" in
+  `docs/README.md`).
+- Example: on a GCC 16 host, FFmpeg 9.0 (`gcc >=15`) builds with the system
+  compiler, while FFmpeg 8.1 (`gcc >=12,<14`) deploys `gcc12` from the store.
 - On **macOS**, FFmpeg 8.1 is allowed only when `macos.clang=macports-clang-17` and `clang-mp-17` is available.
-- Non-system compiler fallback is reserved for CUDA host-compiler compatibility (`nvcc -ccbin` path).
-
-When 8.1 is blocked by policy, the start screen shows the reason and the recommended action (switch to FFmpeg 9.0 or install/configure the required compiler).
-
-### Building FFmpeg 8.1 on modern Linux (Fedora 44+, GCC 15+) via Nix
-
-On modern Linux distributions that ship with GCC 15 or newer (such as Fedora 44), building FFmpeg 8.1 directly is restricted by the compiler policy gate (**GCC <= 13**), as upstream FFmpeg 8.1 and several codec components contain source-level incompatibilities with GCC 15/16.
-
-For building and embedding FFmpeg 8.1 into downstream projects without altering the host OS packages or modifying system libraries, a pre-configured `shell.nix` environment is provided:
-
-- **Isolated GCC 13 toolchain**: Uses `pkgs.gcc13Stdenv` to supply GCC 13.x, satisfying FFmpeg 8.1 policy gating.
-- **Pre-configured build dependencies**: Includes Python 3.12 (with `rich`, `tqdm`, `pyyaml`, `requests`, `jinja2`), build tools (`cmake`, `ninja`, `meson`, `nasm`, `yasm`, `pkg-config-unwrapped`, `cargo`, `cargo-c`, `rustc`), and hardware acceleration/multimedia libraries (`libva`, `libdrm`, `vulkan`, `opencl`, `libvpl`, `wayland`, `bzip2`, `zlib`, `giflib`).
-- **Nix wrapper compatibility**: Unsets `AS` (so x264 detects `nasm` instead of GNU `as`), handles un-wrapped `pkg-config` paths, and sets `NIX_ENFORCE_NO_NATIVE=0` for `-march=native` optimizations.
-- **Standalone artifacts**: Build artifacts reside entirely within `./workspace_81/` (or `./workspace_90/`) and can be embedded directly into other projects without system installation.
-
-**Usage**:
-
-```bash
-# Enter the isolated Nix environment
-nix-shell
-
-# Run the builder as usual
-python -m ffmpeg_builder
-```
 
 ### System
 
@@ -88,13 +80,13 @@ path.
 **Solution**: the builder auto-detects a compatible host compiler in three
 steps (real `nvcc` compile probes, not version-string comparisons): the
 system default compiler, then the `CUDA_NVCC_CCBIN` environment variable, then
-any `conda-forge` `gcc_linux-64`/`gxx_linux-64` toolchain found in a
-conda/mamba/micromamba environment. If your distro no longer packages the GCC
-version your CUDA SDK needs, create one with micromamba/conda and it will be
-picked up automatically — no manual configuration required:
+a store-deployed GCC matching the `cuda` table in `toolchains.yaml` (e.g.
+CUDA 12.2 → `gcc12`). If your distro no longer packages the GCC version your
+CUDA SDK needs, deploy it from the built-in toolchain store — no manual
+configuration required (see "Toolchain Store" in `docs/README.md`):
 
 ```bash
-micromamba create -n cuda-gcc12 -c conda-forge gcc_linux-64=12 gxx_linux-64=12
+python scripts/prepare_toolchains.py   # deploys what the system analysis recommends
 ```
 
 Alternatively, set `CUDA_NVCC_CCBIN=/path/to/gccNN` to force a specific
@@ -361,7 +353,9 @@ From the main menu, type a letter key and press Enter:
 | `c` | **Edit configuration** | Modify build settings interactively |
 | `w` | **Cleanup workspace** | Remove all build artifacts and state |
 | `i` | **Component info** | Show the current buildable component set and non-selected components |
-| `h` | **Help** | Show the full key reference for all screens (start, info, error prompt, dashboard) |
+| `t` | **Toolchain plan** | Show per-component toolchain resolution with skip reasons |
+| `p` | **Toolchain store** | Review system-analysis recommendations, acquire/remove profiles |
+| `h` | **Help** | Show the full key reference for all screens (start, info, store, error prompt, dashboard) |
 | `q` | **Exit** | Exit the application |
 
 During a build, the live dashboard shows a compact header line (`FFmpeg Builder X.Y - Building | Elapsed: HH:MM:SS`), a per-component table with `n/total`, name, a 10-segment progress bar, percentage, status (`pending`/`system`/`downloading`/`config`/`build`/`install`/`complete`/`fail`/`skip`), and a Detail column showing the running command (e.g. `make -j40`) or live download progress (e.g. `12.3/45.7 MB (27%)`). The component table occupies a fixed-height area and scrolls upward as new rows appear, so the messages panel below it stays anchored at the bottom with a fixed size (8 lines of content). The viewport follows the active component in build order, keeping the progression readable while the current phase remains visible. Rows appear as downloads are queued and builds start (not pre-populated). The layout automatically adapts to the terminal height. All status colors follow the same legend: complete green, build magenta, config yellow, downloading/system cyan, install blue, fail red, skip yellow dim, pending dim.
@@ -417,6 +411,12 @@ For archive integrity validation, components in `components.yaml` may define opt
 ```bash
 # Launch interactive UI (no CLI arguments supported)
 python -m ffmpeg_builder
+
+# Headless: provision recommended toolchains, then build
+python scripts/prepare_toolchains.py --dry-run   # show the acquisition plan
+python scripts/prepare_toolchains.py             # acquire recommended profiles
+python scripts/run_build.py --dry-run            # show components + resolved CC
+python scripts/run_build.py                      # full build; --resume to continue
 ```
 
 ## Components
@@ -481,7 +481,7 @@ Windows phase-3 policy:
 - CUDA toolkit must be installed (not just the driver)
 - On WSL2, OpenCL is not available through the paravirtualized driver
 - When CUDA is detected, the builder adds: `--enable-cuda-nvcc`, `--enable-cuvid`, `--enable-nvdec`, `--enable-nvenc`, `--enable-cuda-llvm`, `--enable-ffnvcodec`
-- Host-compiler compatibility (GCC vs the CUDA toolkit's max supported GCC version, e.g. CUDA 12.2 → GCC ≤ 12) is auto-detected via a real `nvcc` compile probe, with fallback to `CUDA_NVCC_CCBIN` or an auto-detected conda/mamba/micromamba `gcc_linux-64` environment — see "CUDA toolkit / GCC compatibility" above and `--nvccflags='-ccbin=...'` in the resulting configure line
+- Host-compiler compatibility (GCC vs the CUDA toolkit's max supported GCC version, e.g. CUDA 12.2 → GCC ≤ 12) is auto-detected via a real `nvcc` compile probe, with fallback to `CUDA_NVCC_CCBIN` or a store-deployed GCC from the `cuda` table — see "CUDA toolkit / GCC compatibility" above and `--nvccflags='-ccbin=...'` in the resulting configure line
 - `enable_libvmaf_cuda: true` enables libvmaf CUDA path only when backend is `linux-native` or `linux-wsl2` and an NVCC compile sanity-check passes
 - On `windows-msys2-ucrt64`, libvmaf CUDA path remains disabled by policy/toolchain limits; CPU `libvmaf` still works
 - For `libvmaf` CUDA builds with `openmp: true`, the builder forwards OpenMP to NVCC host compilation via `NVCC_PREPEND_FLAGS=-Xcompiler=-fopenmp` and removes raw `-fopenmp` from inherited compile/link flags to avoid `nvcc fatal: Unknown option '-fopenmp'`
@@ -599,21 +599,28 @@ ffmpeg_builder/
     config.py                YAML configuration management
     state.py                 JSON build state management
     system_report.py         Environment report generation
-    components.py            Component registry (~50 components)
+    components.py            Component registry (~60 components)
+    toolchain_registry.py    Toolchain profile registry + recommendations
+    toolchain_store.py       Persistent toolchain store (acquire/verify/env)
+    toolchain_builders.py    Portable source-build recipes + verification
+    ffmpeg_policy.py         FFmpeg version policy (shared system analysis)
     builder.py               Build orchestration entry point
     component_builders.py    Explicit custom builder dispatch registry
     platform_detect.py       OS, architecture, tools, HW acceleration detection
     executor.py              Subprocess wrapper with logging
     downloader.py            File downloads with progress (requests + tqdm)
     release_bundle.py        Release bundle packaging and runtime dependency collection
+    toolchains.yaml          Pinned toolchain profiles + platform/CUDA tables
     ui/
-        screens.py           TUI screens: system report, config, info, final
+        screens.py           TUI screens: system report, config, info, store, final
         dashboard.py         Live build dashboard (header / table / messages)
         error_handler.py     Interactive error handling (retry/skip/abort)
     profiles/
         default.yaml         Default build profile
 scripts/
     check_python_env.sh      Environment and dependency checker
+    prepare_toolchains.py    Headless toolchain provisioning (TUI store twin)
+    run_build.py             Headless FFmpeg build driver (TUI build twin)
 ```
 
 ## Troubleshooting
@@ -642,7 +649,7 @@ If `libplacebo` was already built, FFmpeg can still fail this check when `libpla
 
 ### `nvcc` rejects the host compiler (Fedora 44+ / GCC ≥ 15 + CUDA 12.2)
 
-CUDA toolkits pin a maximum supported host-compiler major version (CUDA 12.2 → GCC ≤ 12); rolling-release distros like Fedora ship a much newer default GCC and often no longer package the older `gccNN` version needed. The builder auto-detects a compatible compiler (system default → `CUDA_NVCC_CCBIN` → conda/mamba/micromamba `gcc_linux-64`/`gxx_linux-64` environment) and forwards it via `-ccbin`; see "CUDA toolkit / GCC compatibility" above for the recommended `micromamba create -n cuda-gcc12 -c conda-forge gcc_linux-64=12 gxx_linux-64=12` setup.
+CUDA toolkits pin a maximum supported host-compiler major version (CUDA 12.2 → GCC ≤ 12); rolling-release distros like Fedora ship a much newer default GCC and often no longer package the older `gccNN` version needed. The builder auto-detects a compatible compiler (system default → `CUDA_NVCC_CCBIN` → store-deployed GCC from the `cuda` table) and forwards it via `-ccbin`; deploy the matching profile with `python scripts/prepare_toolchains.py` if it is not installed yet.
 
 ### gettext fails with "expected identifier or '(' before '_Generic'" (GCC ≥ 15)
 

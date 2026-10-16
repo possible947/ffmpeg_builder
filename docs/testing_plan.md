@@ -176,8 +176,10 @@ Portability:
 - [ ] AppImage packaging succeeds on Linux.
 
 ### Phase 5 — Cleanup and documentation
-- [ ] Nix (`shell.nix`) and the conda fallback removed.
-- [ ] Docs updated; CI green (pytest + black + mypy baseline).
+- [x] Nix (`shell.nix`) removed; conda auto-discovery removed (Phase 3b).
+- [x] Docs updated to 3.0 (READMEs, DeveloperReadme, CHANGELOG); CUDA
+      host-compiler docs rewritten to the store tiers.
+- [ ] CI green (pytest + black + mypy baseline).
 
 ### Phase 6 — Windows (deferred)
 - [ ] Platform profile for `windows-msys2-ucrt64`; re-validate 8.1/9.0.

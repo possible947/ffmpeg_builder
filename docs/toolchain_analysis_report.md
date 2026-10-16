@@ -1,5 +1,11 @@
 # Постоянное окружение сборки и декларативные требования к toolchain
 
+> Historical note (3.0): this report is the pre-implementation proposal that
+> the toolchain store was built from. It is kept as a design record; the
+> current behavior is documented in `DeveloperReadme.md` ("Toolchain store and
+> provisioning"), `README.md` ("Toolchain Store"), and `CHANGELOG.md`. The
+> `shell.nix` alternative it mentions was removed in 3.0.
+
 ## 1. Назначение и итог анализа
 
 Отчет объединяет анализ репозитория и последующие уточнения требований.

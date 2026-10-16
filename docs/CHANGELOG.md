@@ -1,3 +1,28 @@
+### Released — 3.0: host-built compilers replace nix shell (2026-10-16)
+
+- **Version bump 2.0.0 → 3.0.0** (`pyproject.toml`, `__init__.py`, root and
+  docs READMEs, DeveloperReadme).
+- **`shell.nix` removed** (file and all usage/setup docs). The conda
+  auto-discovery for CUDA host compilers was already removed from code in
+  Phase 3b; its documentation now describes the store tiers instead
+  (system → `CUDA_NVCC_CCBIN` → store-deployed GCC from the `cuda` table).
+- **Docs rewritten for the new capabilities**: FFmpeg version policy now
+  describes `system_tool_range`/`fallback_toolchain` resolution per
+  `(ffmpeg_version, platform)`; features list the toolchain store and both
+  headless scripts; TUI key tables include `t`/`p`; README and docs README
+  Command Line sections document `prepare_toolchains.py`/`run_build.py`;
+  project structure lists the toolchain modules and scripts; DeveloperReadme
+  replaces the Nix chapter with a "Host-built compilers replace the isolated
+  Nix environment" section.
+- **New: Toolchain Store usage guide** (`docs/README.md` → "Toolchain Store"):
+  recommended and interactive flows, profile table, verification/relocation
+  rules, and the headless command reference.
+- **Measured 3.0 validation** (Linux, GCC 16.2.1): FFmpeg 8.1 with deployed
+  gcc12 12.5.0 and FFmpeg 9.0 with system GCC — 58/58 components each,
+  18/18 expected encoders, `-march=native -mtune=native -fopenmp`,
+  smoke-tested; releases pull nothing from the store at runtime.
+- Suite: 335 passed, black/mypy clean.
+
 ### Released — FFmpeg 9.0 end-to-end with the system GCC (2026-10-16)
 
 - **Second half of the two-version scheme: 58/58 components completed.** After removing the stale `workspace_90` (8.5 GB from an earlier build) and switching `build_config.yaml` to `ffmpeg_version: '9.0'`, `scripts/run_build.py` drove the same 58-component composition with the system GCC 16 — the profile `linux-ffmpeg-9.0` (`gcc >=15`) resolves to `system` mode, so every component except `rav1e` (store rust 1.99.0) built with the host compiler. The binary reports `built with gcc 16 (GCC)` with no `--cc/--cxx` override, all 18 expected library encoders are present, flags are `-march=native -mtune=native -fopenmp`, and the smoke encode (`smptebars → libx264`) passed.
