@@ -196,6 +196,25 @@ prerequisites, component-declared toolchains, the CUDA table), and both the TUI
 store and `scripts/prepare_toolchains.py` consume it — the TUI's `p` action and
 the script's default selection are the same computation.
 
+### Build goal: host-tuned FFmpeg, not a portable release
+
+Release portability is explicitly out of scope. The build goal is an FFmpeg
+maximally tuned for the host it runs on (`-march=native -mtune=native
+-fopenmp`, project default): release binaries may depend on the host's runtime
+(`libgomp`, `libgcc_s`, system X11/Vulkan/VA-API libraries), and a fully static
+release is not wanted because Vulkan filters do not work in it. The toolchain
+store exists to *produce* such a build on hosts whose system compiler is out of
+range (e.g. GCC 16-only host building the FFmpeg 8.1 profile that requires
+`gcc >=12,<14`), not to be bundled into the release — a successful build pulls
+nothing from the store at runtime (verified 2026-10-16: FFmpeg 8.1 built with
+deployed gcc12 links workspace libraries statically and resolves
+`libgomp`/`libgcc_s` to the host).
+
+The project's converter uses FFmpeg 9.0 and 8.1 side by side (`workspace_90/`
+and `workspace_81/`); the toolchain store replaced the earlier `nix shell`
+approach, which broke that two-version scheme, with compilers built on the host
+for the host.
+
 **`ConfigManager`** — loads/saves YAML configuration:
 
 - `load()` — reads `build_config.yaml`, returns `BuildConfig`

@@ -140,13 +140,18 @@ Portability:
 - [ ] WSL2 backend: treat as `linux` for ELF compatibility, but verify the store
       lives on an ext4 filesystem (fcntl locking is unreliable on `/mnt/*`),
       and that symlink/permission handling in extraction is correct.
-- [ ] Native Linux run: provision `gmp → mpfr → mpc → gcc12` and `rust` on the
+- [x] Native Linux run: provision `gmp → mpfr → mpc → gcc12` and `rust` on the
       GCC 16 host, then build FFmpeg 8.1 with the deployed `gcc12` and FFmpeg
       9.0 with the system GCC (Phase 3 acceptance). `gmp 6.3.0`, `mpfr 4.2.1`,
-      `mpc 1.3.1`, and `rust 1.99.0` are installed and verified; the `gcc12
-      12.5.0` bootstrap and the FFmpeg end-to-end runs remain.
+      `mpc 1.3.1`, `rust 1.99.0`, and `gcc12 12.5.0` are installed and verified;
+      **FFmpeg 8.1 end-to-end with deployed gcc12 is done (58/58, 2026-10-16)**:
+      `built with gcc 12.5.0`, 18/18 expected encoders, `-march=native
+      -mtune=native -fopenmp`, smoke encode passed, release pulls nothing from
+      the toolchain store (static workspace libs, host libgomp/libgcc_s).
+      Remaining: FFmpeg 9.0 with the system GCC.
 - [ ] CI: a long-running, manually triggered toolchain job (nightly or
       `workflow_dispatch`); the unit suite keeps using recording runners.
+      (Provisioning workflow created: `.github/workflows/toolchains.yml`.)
 
 ### Backlog — cargo-c into the store (after Phase 3c)
 
