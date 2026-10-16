@@ -484,6 +484,33 @@ def test_absolute_source_archives_dir_kept(tmp_path: Path):
     assert builder.source_archives == archives
 
 
+def test_build_cargo_missing_rustc_is_build_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """rav1e is never silently skipped: missing rustc raises BuildError, not SkipComponent."""
+    from ffmpeg_builder.build_types import BuildError, SkipComponent
+    from ffmpeg_builder.components import BuildSystem, Component, ComponentCategory
+
+    builder = _make_builder_with_archives(tmp_path, str(tmp_path / "archives"))
+    component = Component(
+        name="rav1e",
+        version="0.8.1",
+        url="https://example.org/rav1e.tar.gz",
+        category=ComponentCategory.VIDEO_CODEC,
+        build_system=BuildSystem.CARGO,
+    )
+
+    monkeypatch.setattr(FFmpegBuilder, "_get_rustc_version", lambda self: None)
+    monkeypatch.setattr("ffmpeg_builder.builders.base.get_rustc_version", lambda context: None)
+
+    try:
+        builder._build_cargo(component, tmp_path / "src")
+    except SkipComponent as exc:  # pragma: no cover - regression tripwire
+        pytest.fail(f"cargo missing rustc must not skip: {exc}")
+    except BuildError as exc:
+        assert "rustc is not available" in str(exc)
+    else:  # pragma: no cover - missing rustc must fail
+        pytest.fail("cargo missing rustc must raise BuildError")
+
+
 def test_build_cargo_installs_pinned_cargo_c(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """M6: the cargo-c install must pin an explicit version."""
     builder = _make_builder_with_archives(tmp_path, str(tmp_path / "archives"))
@@ -514,6 +541,7 @@ def test_build_cargo_rewrites_strict_c11_for_linux_gcc15(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     builder = _make_builder_with_archives(tmp_path, str(tmp_path / "archives"))
+    builder.platform = "linux"
     builder.platform_strategy = LinuxGcc15Platform()
     builder.env["CFLAGS"] = "-O2 -std=c11"
     component = _make_libplacebo_component()
@@ -687,6 +715,9 @@ def test_build_libplacebo_merges_windows_pkg_config_path_and_patches_glslang(
     builder = _make_libplacebo_builder(tmp_path, platform="windows")
     component = _make_libplacebo_component()
     source_dir = tmp_path / "src"
+    vulkan_header = builder.workspace / "include" / "vulkan" / "vulkan.h"
+    vulkan_header.parent.mkdir(parents=True, exist_ok=True)
+    vulkan_header.write_text("#pragma once\n", encoding="utf-8")
     glsl_meson = source_dir / "src" / "glsl" / "meson.build"
     glsl_meson.parent.mkdir(parents=True, exist_ok=True)
     glsl_meson.write_text(
@@ -779,6 +810,9 @@ def test_build_libplacebo_fails_when_glslang_patch_target_is_missing(
     builder = _make_libplacebo_builder(tmp_path, platform="windows")
     component = _make_libplacebo_component()
     source_dir = tmp_path / "src"
+    vulkan_header = builder.workspace / "include" / "vulkan" / "vulkan.h"
+    vulkan_header.parent.mkdir(parents=True, exist_ok=True)
+    vulkan_header.write_text("#pragma once\n", encoding="utf-8")
     glsl_meson = source_dir / "src" / "glsl" / "meson.build"
     glsl_meson.parent.mkdir(parents=True, exist_ok=True)
     glsl_meson.write_text("project('libplacebo')\n", encoding="utf-8")

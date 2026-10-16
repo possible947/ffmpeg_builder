@@ -137,6 +137,84 @@ Version availability is policy-gated at runtime by detected toolchain:
 Existing configurations without an `ffmpeg_version` field retain the `8.1` default.
 Set `ffmpeg_version: "9.0"` explicitly to select the FFmpeg 9.0 source profile.
 
+### Toolchain store and provisioning
+
+`toolchains.yaml` (repo root) is the declarative source of truth, loaded and
+validated by `toolchain_registry.py`:
+
+- `toolchains:` — named profiles (`gmp`, `mpfr`, `mpc`, `gcc12/13/15`, `rust`,
+  `cargo-c`) with `kind`, `platforms`, `provides`, `materialize`, an optional
+  human-readable `note`, and a `source` block whose variants are `build`,
+  `binary`, `download`, or `local` (`source.default` preselects one).
+- `platform_profiles:` — keyed by `(ffmpeg_version, platform)`; declares the
+  `system_tool_range` that decides whether the host toolchain is used or a
+  `fallback_toolchain` is deployed.
+- `cuda:` — CUDA Toolkit version → host-compiler profile.
+
+`toolchain_store.py` owns `<root>/{archives,installed,logs,locks,profiles,build}`
+and `state.json`. The root must not overlap the build workspace. `acquire()`
+dispatches on the source variant; `build` variants are executed by
+`toolchain_builders.py` recipes (`gcc`, `autotools`, `rust_standalone`).
+
+Registry arguments support three placeholders, expanded by
+`toolchain_builders.resolve_args()` before a recipe runs: `{prefix}` (install
+prefix), `{jobs}` (parallel `make` value from the `jobs=` argument or the
+detected CPU count), and `{prereq:<name>}` (bootstrap prerequisite prefix;
+unresolved names fail fast). `bootstrap.requires` installs prerequisites first,
+so a profile's libraries always come from the store rather than the host.
+
+Two portability rules apply to every recipe:
+
+- Bootstrap commands run through `default_runner()`, which uses `clean_env()` to
+  drop FFmpeg/vendor build variables (`CFLAGS`, `CXXFLAGS`, `LDFLAGS`, `CPATH`,
+  `LIBRARY_PATH`, `CUDA_*`, `VULKAN_SDK`, `RUSTFLAGS`, `AS`, …). A toolchain
+  build must never inherit the FFmpeg build's flags.
+- Recipes use only paths derived from their arguments. Any host-specific flag
+  needed to build pre-C23 sources (e.g. `CFLAGS=-O2 -std=gnu17` for
+  `gmp`/`mpfr`/`mpc`, whose configure probes GCC 15+ rejects under its `gnu23`
+  default) is declared as registry data, not hardcoded in Python.
+
+After every source build, `acquire()` runs `toolchain_builders.verify_profile()`
+and records `InstalledToolchain.verified` in `state.json`. Verification is
+capability-based, not file-presence-based: GCC must report a version and compile
+and link C and C++ probes, Rust must report `rustc`/`cargo` versions, bootstrap
+libraries must provide headers plus an archive. A failure raises and the profile
+is not recorded; `profile_paths()`/`component_env()` return nothing for an
+unverified entry, and the app's gate distinguishes "not installed" from "failed
+verification".
+
+Portability constraint: an installed GCC bakes its `--prefix` into header and
+library search paths, and GCC 12.5.0's configure has no `--enable-relocatable`,
+so a store root must stay where it was built unless relocation is implemented
+(prefix rewriting/RPATH fixups). `scripts/prepare_toolchains.py --verify-only`
+re-runs verification for everything installed and is the acceptance tool for
+relocation tests (move the store, re-verify).
+
+`ToolchainRegistry.recommend_profiles()` derives the profiles to deploy from the
+current system analysis (fallback for an out-of-range host tool, bootstrap
+prerequisites, component-declared toolchains, the CUDA table), and both the TUI
+store and `scripts/prepare_toolchains.py` consume it — the TUI's `p` action and
+the script's default selection are the same computation.
+
+### Build goal: host-tuned FFmpeg, not a portable release
+
+Release portability is explicitly out of scope. The build goal is an FFmpeg
+maximally tuned for the host it runs on (`-march=native -mtune=native
+-fopenmp`, project default): release binaries may depend on the host's runtime
+(`libgomp`, `libgcc_s`, system X11/Vulkan/VA-API libraries), and a fully static
+release is not wanted because Vulkan filters do not work in it. The toolchain
+store exists to *produce* such a build on hosts whose system compiler is out of
+range (e.g. GCC 16-only host building the FFmpeg 8.1 profile that requires
+`gcc >=12,<14`), not to be bundled into the release — a successful build pulls
+nothing from the store at runtime (verified 2026-10-16: FFmpeg 8.1 built with
+deployed gcc12 links workspace libraries statically and resolves
+`libgomp`/`libgcc_s` to the host).
+
+The project's converter uses FFmpeg 9.0 and 8.1 side by side (`workspace_90/`
+and `workspace_81/`); the toolchain store replaced the earlier `nix shell`
+approach, which broke that two-version scheme, with compilers built on the host
+for the host.
+
 **`ConfigManager`** — loads/saves YAML configuration:
 
 - `load()` — reads `build_config.yaml`, returns `BuildConfig`
@@ -360,6 +438,17 @@ The existing `FFmpegBuilder` methods remain the implementation target during thi
 | OpenCL ready (`opencl_available` or runtime+dev ready, or OpenCL components built) | `--enable-opencl` |
 | glslang with FFmpeg 8.1 | `--enable-libglslang` |
 | glslang with FFmpeg 9.0 | omitted; the option was removed upstream |
+
+**Release bundles** (`release_bundle.py`):
+
+When `make_release: true`, `make_release_bundle()` writes a release directory at `<workspace>/release` after a successful build. It copies the built `ffmpeg`/`ffprobe`/`ffplay` binaries and recursively collects their **non-system runtime dependencies** (via `ldd` on Linux, `otool -L` on macOS, `objdump -p` on Windows) into the same flat directory, then writes a `manifest.json` recording the platform, build backend, FFmpeg version, copied binaries/dependencies, and any missing binaries or dependencies.
+
+Packaging rule (final):
+
+- A release copies **all non-system runtime dependencies** and is **autonomous within the system on which it was built**. System libraries — including glibc and the dynamic loader — are intentionally **not** copied and must be present on the host; a release is not a "portable to any distribution" bundle. This matches the "build on the host, for the host" goal and keeps releases compatible with AppImage-style packaging (which relies on the host C runtime).
+- System paths excluded by `_is_system_runtime_library()`: `/lib`, `/lib64`, `/usr/lib`, `/usr/lib64` (Linux); `WINDIR` (Windows); `/usr/lib`, `/System/Library`, and dyld-shared-cache references (macOS, via `_is_system_dependency_reference()`).
+- Non-system dependencies — workspace-built libraries and any libraries resolved from a local toolchain prefix — are copied into the release directory. A local-toolchain runtime (e.g. `libstdc++`/`libgomp`/`libgcc_s` under the toolchain prefix) is therefore bundled, while the host glibc is not.
+- macOS releases are additionally made relocatable: bundled dylib install names are rewritten to `@rpath/<name>`, `@loader_path` is added as an rpath, and each modified Mach-O is re-signed ad-hoc (`_make_macos_bundle_relocatable()`). Linux/Windows releases copy dependencies flat next to the binaries.
 
 ### `executor.py` — Command Execution
 

@@ -266,6 +266,9 @@
   url: https://github.com/xiph/rav1e/archive/refs/tags/v{version}.tar.gz
   category: video_codec
   build_system: cargo
+  # Rust toolchain comes from the store; cargo/rustc availability is enforced
+  # by build_cargo() instead of the host PATH.
+  toolchain: rust
   requires_tools:
   - cargo
   - rustc
@@ -748,6 +751,9 @@
       sha256: eab9d02d461035a4baded23d4f2e2834e5b17934820b79cea45baaf0c85383eb
     '12.2.72.0':
       sha256: c295a2ba8a06434d4bdc5c2208f8a825285210d71d91d572329b2c51fd0d4d03
+  driver_nvenc_api_map:
+    '13': '13.0.19.1'
+    '12': '12.2.72.0'
 - name: libvmaf
   sha256: 52a3e53bc5acf6c90a74cba4a6ede40264b46653e1c6cb060361e9600a050dee
   version: 3.2.0-8fc71e30

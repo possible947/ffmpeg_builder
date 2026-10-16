@@ -3,7 +3,7 @@
 import os
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Callable, List, Optional, Tuple, Type
+from typing import Any, Callable, Dict, List, Optional, Tuple, Type
 
 from rich.console import Console
 from rich.live import Live
@@ -12,13 +12,27 @@ from .build_types import BuildError, SkipComponent
 from .builder import FFmpegBuilder
 from .components import Component, ComponentRegistry
 from .config import BuildConfig, ConfigManager
-from .ffmpeg_policy import FfmpegPolicy, evaluate_ffmpeg_policy
+from .ffmpeg_policy import (
+    FfmpegPolicy,
+    detected_system_tool_versions,
+    evaluate_ffmpeg_policy,
+)
 from .platform_detect import PlatformDetector
 from .state import ComponentStatus, StateManager
 from .system_report import SystemReportGenerator
+from .toolchain_registry import ToolchainRegistry
+from .toolchain_store import ToolchainStore
 from .ui.dashboard import BuildDashboard
 from .ui.error_handler import ErrorHandler
-from .ui.screens import ConfigScreen, FinalReportScreen, HelpScreen, InfoScreen, SystemReportScreen
+from .ui.screens import (
+    ConfigScreen,
+    FinalReportScreen,
+    HelpScreen,
+    InfoScreen,
+    SystemReportScreen,
+    ToolchainPlanScreen,
+    ToolchainStoreScreen,
+)
 
 # The package is the repository root (flat layout); anchor the default
 # workspace/config paths to it so the app works from any CWD.
@@ -58,6 +72,8 @@ class FFmpegBuilderApp:
         self.config_screen = ConfigScreen(self.console)
         self.info_screen = InfoScreen(self.console)
         self.final_screen = FinalReportScreen(self.console)
+        self.toolchain_screen = ToolchainPlanScreen(self.console)
+        self.store_screen = ToolchainStoreScreen(self.console)
         self.help_screen = HelpScreen(self.console)
         self.error_handler = ErrorHandler(self.console)
 
@@ -129,7 +145,17 @@ class FFmpegBuilderApp:
                 elif action == "cleanup":
                     self._cleanup()
                 elif action == "info":
-                    self.info_screen.show(components, self.registry.get_all())
+                    self.info_screen.show(
+                        components,
+                        self.registry.get_all(),
+                        toolchain_reasons=self._component_toolchain_reasons(config),
+                    )
+                    continue
+                elif action == "toolchain":
+                    self._show_toolchain_plan(config)
+                    continue
+                elif action == "store":
+                    self._show_toolchain_store(config)
                     continue
                 elif action == "help":
                     self.help_screen.show()
@@ -158,7 +184,172 @@ class FFmpegBuilderApp:
             self.platform_info,
             full_static=config.full_static,
             ffmpeg_version=config.ffmpeg_version,
+            toolchain_checker=self._component_toolchain_checker(config),
         )
+
+    def _component_toolchain_checker(self, config: BuildConfig) -> Callable[[Component], bool]:
+        """Per-component toolchain gate for skipped components.
+
+        A component is kept when its resolved toolchain is ``system`` (always
+        available by policy), when the required profile is installed in the
+        store, or when it is ``rav1e`` (always kept so a missing toolchain
+        raises a build error instead of silently skipping). Everything else —
+        unknown profile, non-deployable profile, or not installed — is
+        excluded.
+        """
+        try:
+            toolchain_registry = ToolchainRegistry()
+        except (OSError, ValueError):
+            return lambda component: True
+        installed = self._installed_toolchains()
+        versions = self._system_tool_versions()
+        platform = self.platform_detector.get_platform_name()
+
+        def _check(component: Component) -> bool:
+            if component.name == "rav1e":
+                return True
+            assignment = toolchain_registry.resolve_component_toolchain(
+                component.toolchain, config.ffmpeg_version, platform, versions
+            )
+            if assignment is None or assignment.mode == "system":
+                return True
+            profile_name = assignment.profile
+            if profile_name is None:
+                return False
+            profile = toolchain_registry.get_profile(profile_name)
+            if profile is None:
+                return False
+            if not toolchain_registry.is_profile_available(profile, platform):
+                return False
+            return installed.get(profile_name) is True
+
+        return _check
+
+    def _installed_toolchains(self) -> Dict[str, bool]:
+        """Installed toolchain profiles mapped to their verification status."""
+        return {
+            item.profile: item.verified
+            for item in ToolchainStore(
+                PROJECT_ROOT / "toolchains",
+                workspace=self.workspace,
+            ).list_installed()
+        }
+
+    def _component_toolchain_reasons(self, config: BuildConfig) -> Dict[str, str]:
+        """Explain why buildable-excluded components were gated by toolchain.
+
+        Returns a mapping of component name to a human-readable reason for
+        components that are otherwise eligible but excluded by the toolchain
+        gate (unknown / non-deployable / not-installed required profile).
+        """
+        try:
+            toolchain_registry = ToolchainRegistry()
+        except (OSError, ValueError):
+            return {}
+        installed = self._installed_toolchains()
+        versions = self._system_tool_versions()
+        platform = self.platform_detector.get_platform_name()
+        reasons: Dict[str, str] = {}
+        for component in self.registry.get_all():
+            if component.name == "rav1e":
+                continue
+            assignment = toolchain_registry.resolve_component_toolchain(
+                component.toolchain, config.ffmpeg_version, platform, versions
+            )
+            if assignment is None or assignment.mode == "system":
+                continue
+            profile_name = assignment.profile
+            if profile_name is None:
+                continue
+            profile = toolchain_registry.get_profile(profile_name)
+            if profile is None:
+                reasons[component.name] = f"unknown toolchain profile {profile_name!r}"
+            elif not toolchain_registry.is_profile_available(profile, platform):
+                reasons[component.name] = (
+                    f"toolchain {profile_name!r} not available for {platform} "
+                    "(missing source or platform)"
+                )
+            elif profile_name not in installed:
+                reasons[component.name] = (
+                    f"toolchain {profile_name!r} not installed (use the Toolchain store)"
+                )
+            elif installed.get(profile_name) is not True:
+                reasons[component.name] = (
+                    f"toolchain {profile_name!r} failed verification (re-acquire it)"
+                )
+        return reasons
+
+    def _system_tool_versions(self) -> Dict[str, str]:
+        """Map detected system tool names to version strings for range checks."""
+        return detected_system_tool_versions(self.platform_info, self.tools)
+
+    def _show_toolchain_plan(self, config: BuildConfig) -> None:
+        """Show the read-only resolved-toolchain plan for the current config."""
+        try:
+            toolchain_registry = ToolchainRegistry()
+        except (OSError, ValueError) as exc:
+            self.console.print(f"[red]Toolchain registry unavailable: {exc}[/red]")
+            return
+        components = self._get_buildable_components(config)
+        plan = toolchain_registry.plan_component_toolchains(
+            components,
+            config.ffmpeg_version,
+            self.platform_detector.get_platform_name(),
+            self._system_tool_versions(),
+            cuda_version=self.platform_info.cuda_version,
+        )
+        self.toolchain_screen.show(plan)
+
+    def _show_toolchain_store(self, config: BuildConfig) -> None:
+        """Show the persistent toolchain store (acquire/remove/list)."""
+        try:
+            toolchain_registry = ToolchainRegistry()
+        except (OSError, ValueError) as exc:
+            self.console.print(f"[red]Toolchain registry unavailable: {exc}[/red]")
+            return
+        store = ToolchainStore(
+            PROJECT_ROOT / "toolchains",
+            workspace=self.workspace,
+            source_archives_dir=PROJECT_ROOT / config.source_archives_dir,
+            allow_network_downloads=config.allow_network_downloads,
+        )
+        recommended = toolchain_registry.recommend_profiles(
+            config.ffmpeg_version,
+            self.platform_detector.get_platform_name(),
+            self._system_tool_versions(),
+            components=self.registry.get_all(),
+            installed=[item.profile for item in store.list_installed()],
+            cuda_version=self.platform_info.cuda_version,
+        )
+        self.store_screen.show(store, toolchain_registry, recommended=recommended)
+
+    def _component_toolchain_env(
+        self, config: BuildConfig, components: List[Component]
+    ) -> Dict[str, Dict[str, str]]:
+        """Per-component environment overrides from installed toolchains."""
+        try:
+            toolchain_registry = ToolchainRegistry()
+        except (OSError, ValueError):
+            return {}
+        store = ToolchainStore(
+            PROJECT_ROOT / "toolchains",
+            workspace=self.workspace,
+            source_archives_dir=PROJECT_ROOT / config.source_archives_dir,
+            allow_network_downloads=config.allow_network_downloads,
+        )
+        versions = self._system_tool_versions()
+        platform = self.platform_detector.get_platform_name()
+        result: Dict[str, Dict[str, str]] = {}
+        for component in components:
+            assignment = toolchain_registry.resolve_component_toolchain(
+                component.toolchain, config.ffmpeg_version, platform, versions
+            )
+            if assignment is None or assignment.mode != "deploy" or not assignment.profile:
+                continue
+            env = store.component_env(toolchain_registry, assignment.profile)
+            if env:
+                result[component.name] = env
+        return result
 
     def _run_build(self, config: BuildConfig, resume: bool = False) -> None:
         """Run the build process.
@@ -212,6 +403,7 @@ class FFmpegBuilderApp:
             on_download_status,
             dashboard.log,
             on_download_progress,
+            toolchain_env=self._component_toolchain_env(config, all_components),
         )
 
         state = self.state_manager.get()

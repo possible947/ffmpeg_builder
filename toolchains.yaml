@@ -1,0 +1,183 @@
+# Toolchain registry (single source of truth for build toolchains).
+#
+# Three sections:
+#   toolchains:         named toolchain profiles (one logical entity per pinned
+#                       toolchain, e.g. gcc12 -> a concrete gcc release)
+#   platform_profiles:  upper-level profiles keyed by (ffmpeg_version, platform);
+#                       the FFmpeg target resolves its effective toolchain here
+#   cuda:               explicit CUDA Toolkit version -> toolchain profile mapping
+#
+# Concrete version pins and acquisition sources are added per profile as they are
+# staged. A profile's `source` block lists acquisition variants (build | binary |
+# download | local); `source.default` names the preselected variant (defaults are
+# data-driven) and the remaining variants are offered as alternatives in the TUI.
+# A profile without a `source` block is declared but not yet deployable.
+---
+toolchains:
+  gcc12:
+    kind: compiler
+    version: "12.5.0"
+    platforms: [linux]
+    provides: [gcc, g++]
+    materialize:
+      bin_subdir: bin
+      cc: bin/gcc
+      cxx: bin/g++
+    source:
+      default: build
+      build:
+        type: build
+        recipe: gcc
+        url: "https://ftpmirror.gnu.org/gnu/gcc/gcc-{version}/gcc-{version}.tar.xz"
+        archive_filename: "gcc-{version}.tar.xz"
+        sha256: 71cd373d0f04615e66c5b5b14d49c1a4c1a08efa7b30625cd240b11bab4062b3
+        bootstrap: {compiler: system, requires: [gmp, mpfr, mpc]}
+        # libsanitizer in GCC 12 includes <linux/scc.h>, removed from 6.x
+        # kernel headers; sanitizers are unnecessary for building FFmpeg.
+        configure_args: ["--disable-libsanitizer"]
+        build_args: ["-j{jobs}"]
+  gcc13:
+    kind: compiler
+    version: "13.4.0"
+    platforms: [linux]
+    provides: [gcc, g++]
+    materialize:
+      bin_subdir: bin
+      cc: bin/gcc
+      cxx: bin/g++
+    source:
+      default: build
+      build:
+        type: build
+        recipe: gcc
+        url: "https://ftpmirror.gnu.org/gnu/gcc/gcc-{version}/gcc-{version}.tar.xz"
+        archive_filename: "gcc-{version}.tar.xz"
+        sha256: 9c4ce6dbb040568fdc545588ac03c5cbc95a8dbf0c7aa490170843afb59ca8f5
+        bootstrap: {compiler: system, requires: [gmp, mpfr, mpc]}
+        build_args: ["-j{jobs}"]
+  gcc15:
+    kind: compiler
+    version: "15.2.0"
+    platforms: [linux]
+    provides: [gcc, g++]
+    materialize:
+      bin_subdir: bin
+      cc: bin/gcc
+      cxx: bin/g++
+    source:
+      default: build
+      build:
+        type: build
+        recipe: gcc
+        url: "https://ftpmirror.gnu.org/gnu/gcc/gcc-{version}/gcc-{version}.tar.xz"
+        archive_filename: "gcc-{version}.tar.xz"
+        sha256: 438fd996826b0c82485a29da03a72d71d6e3541a83ec702df4271f6fe025d24e
+        bootstrap: {compiler: system, requires: [gmp, mpfr, mpc]}
+        build_args: ["-j{jobs}"]
+  gmp:
+    kind: bootstrap_lib
+    version: "6.3.0"
+    platforms: [linux]
+    source:
+      default: build
+      build:
+        type: build
+        recipe: autotools
+        url: "https://ftp.gnu.org/gnu/gmp/gmp-{version}.tar.xz"
+        archive_filename: "gmp-{version}.tar.xz"
+        sha256: a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898
+        # Pre-C23 sources: GCC 15+ defaults to gnu23 and rejects their
+        # no-prototype configure probes, so pin the C standard explicitly.
+        configure_args: ["CFLAGS=-O2 -std=gnu17"]
+        build_args: ["-j{jobs}"]
+  mpfr:
+    kind: bootstrap_lib
+    version: "4.2.1"
+    platforms: [linux]
+    source:
+      default: build
+      build:
+        type: build
+        recipe: autotools
+        url: "https://ftp.gnu.org/gnu/mpfr/mpfr-{version}.tar.gz"
+        archive_filename: "mpfr-{version}.tar.gz"
+        sha256: 116715552bd966c85b417c424db1bbdf639f53836eb361549d1f8d6ded5cb4c6
+        bootstrap: {compiler: system, requires: [gmp]}
+        configure_args: ["--with-gmp={prereq:gmp}", "CFLAGS=-O2 -std=gnu17"]
+        build_args: ["-j{jobs}"]
+  mpc:
+    kind: bootstrap_lib
+    version: "1.3.1"
+    platforms: [linux]
+    source:
+      default: build
+      build:
+        type: build
+        recipe: autotools
+        url: "https://ftp.gnu.org/gnu/mpc/mpc-{version}.tar.gz"
+        archive_filename: "mpc-{version}.tar.gz"
+        sha256: ab642492f5cf882b74aa0cb730cd410a81edcdbec895183ce930e706c1c759b8
+        bootstrap: {compiler: system, requires: [gmp, mpfr]}
+        configure_args:
+          - "--with-gmp={prereq:gmp}"
+          - "--with-mpfr={prereq:mpfr}"
+          - "CFLAGS=-O2 -std=gnu17"
+        build_args: ["-j{jobs}"]
+  rust:
+    kind: rust
+    version: "1.99.0"
+    platforms: [linux]
+    provides: [cargo, rustc]
+    materialize:
+      bin_subdir: bin
+    source:
+      default: build
+      build:
+        type: build
+        recipe: rust_standalone
+        url: "https://static.rust-lang.org/dist/rust-{version}-x86_64-unknown-linux-gnu.tar.gz"
+        archive_filename: "rust-{version}-x86_64-unknown-linux-gnu.tar.gz"
+        sha256: de0581ca9d732295a6474cfbd02461db27d69acd5050a8206523a8d6fa1599db
+  cargo-c:
+    kind: rust_tool
+    platforms: [linux]
+    provides: [cargo-c]
+    materialize:
+      bin_subdir: bin
+    note: >-
+      No store source: the rav1e cargo build installs cargo-c on demand
+      (pinned 0.10.25) when it is absent from PATH. That install runs
+      "cargo install", so it needs network access unless cargo-c is already
+      installed.
+
+platform_profiles:
+  linux-ffmpeg-8.1:
+    ffmpeg_version: "8.1"
+    platform: linux
+    system_tool_range:
+      gcc: ">=12,<14"
+      clang: "<=25"
+    fallback_toolchain: gcc12
+  linux-ffmpeg-9.0:
+    ffmpeg_version: "9.0"
+    platform: linux
+    system_tool_range:
+      gcc: ">=15"
+    fallback_toolchain: null
+  darwin-ffmpeg-8.1:
+    ffmpeg_version: "8.1"
+    platform: darwin
+    system_tool_range:
+      clang: ">=17"
+    fallback_toolchain: null
+  darwin-ffmpeg-9.0:
+    ffmpeg_version: "9.0"
+    platform: darwin
+    system_tool_range:
+      clang: ">=17"
+    fallback_toolchain: null
+
+cuda:
+  "12.2": gcc12
+  "12.3": gcc12
+  "13.1": gcc13

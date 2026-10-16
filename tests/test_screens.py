@@ -5,8 +5,20 @@ import io
 from rich.console import Console
 
 from ffmpeg_builder.config import BuildConfig
+from ffmpeg_builder.toolchain_registry import (
+    ComponentToolchainPlan,
+    ToolchainAssignment,
+    ToolchainRegistry,
+)
+from ffmpeg_builder.toolchain_store import ToolchainStore
 from ffmpeg_builder.ui import screens
-from ffmpeg_builder.ui.screens import ConfigScreen, _parse_positive_int
+from ffmpeg_builder.ui.screens import (
+    ConfigScreen,
+    InfoScreen,
+    ToolchainPlanScreen,
+    ToolchainStoreScreen,
+    _parse_positive_int,
+)
 
 
 class TestParsePositiveInt:
@@ -139,3 +151,257 @@ def test_config_screen_rejects_empty_policy_version_list(monkeypatch):
         assert str(exc) == "No FFmpeg versions available for the current policy."
     else:
         raise AssertionError("Expected ValueError for empty FFmpeg version list")
+
+
+def test_toolchain_plan_screen_renders(monkeypatch):
+    console = Console(file=io.StringIO())
+    screen = ToolchainPlanScreen(console)
+    plan = [
+        ComponentToolchainPlan(component="x264", toolchain="n/a", assignment=None),
+        ComponentToolchainPlan(
+            component="nv-codec",
+            toolchain="gcc12",
+            assignment=ToolchainAssignment(mode="deploy", profile="gcc12"),
+        ),
+        ComponentToolchainPlan(
+            component="ffmpeg",
+            toolchain="n/a",
+            assignment=ToolchainAssignment(mode="system"),
+        ),
+    ]
+
+    monkeypatch.setattr(screens.Prompt, "ask", staticmethod(lambda *args, **kwargs: ""))
+
+    screen.show(plan)
+
+    output = console.file.getvalue()
+    assert "Toolchain Plan" in output
+    assert "deploy: gcc12" in output
+    assert "unresolved (would skip)" in output
+
+
+def test_toolchain_plan_screen_renders_cuda_host(monkeypatch):
+    console = Console(file=io.StringIO())
+    screen = ToolchainPlanScreen(console)
+    plan = [
+        ComponentToolchainPlan(
+            component="nv-codec",
+            toolchain="n/a",
+            assignment=ToolchainAssignment(mode="system"),
+            cuda_toolchain="gcc12",
+        ),
+    ]
+
+    monkeypatch.setattr(screens.Prompt, "ask", staticmethod(lambda *args, **kwargs: ""))
+
+    screen.show(plan)
+
+    assert "cuda: gcc12" in console.file.getvalue()
+
+
+def test_toolchain_store_screen_quits(monkeypatch, tmp_path):
+    import yaml
+
+    registry_path = tmp_path / "toolchains.yaml"
+    data = {"toolchains": {"gcc12": {"kind": "compiler", "platforms": ["linux"]}}}
+    registry_path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    registry = ToolchainRegistry(registry_path)
+    store = ToolchainStore(
+        tmp_path / "store",
+        workspace=tmp_path / "workspace",
+        source_archives_dir=tmp_path / "sources",
+    )
+    console = Console(file=io.StringIO())
+    screen = ToolchainStoreScreen(console)
+
+    monkeypatch.setattr(screens.Prompt, "ask", staticmethod(lambda *args, **kwargs: "q"))
+    screen.show(store, registry)
+
+    assert "Toolchain Store" in console.file.getvalue()
+
+
+def test_info_screen_shows_toolchain_skip_reason(monkeypatch):
+    from ffmpeg_builder.components import BuildSystem, Component, ComponentCategory
+
+    console = Console(file=io.StringIO(), width=120)
+    screen = InfoScreen(console)
+    gated = Component(
+        name="needs-gcc12",
+        version="1.0",
+        url="https://example.org/needs.tar.gz",
+        category=ComponentCategory.OTHER_LIB,
+        build_system=BuildSystem.AUTOTOOLS,
+        toolchain="gcc12",
+    )
+    plain = Component(
+        name="plain",
+        version="1.0",
+        url="https://example.org/plain.tar.gz",
+        category=ComponentCategory.OTHER_LIB,
+        build_system=BuildSystem.AUTOTOOLS,
+    )
+    monkeypatch.setattr(screens.Prompt, "ask", staticmethod(lambda *args, **kwargs: "q"))
+    screen.show(
+        [plain],
+        [plain, gated],
+        toolchain_reasons={"needs-gcc12": "toolchain 'gcc12' not installed"},
+    )
+    output = console.file.getvalue()
+    assert "toolchain: toolchain 'gcc12' not installed" in output
+
+
+def _local_profile(tmp_path, name: str) -> dict:
+    local_dir = tmp_path / f"local-{name}"
+    (local_dir / "bin").mkdir(parents=True, exist_ok=True)
+    (local_dir / "bin" / name).write_text("#!/bin/sh\n")
+    return {
+        "kind": "compiler",
+        "platforms": ["linux"],
+        "version": "1.0",
+        "materialize": {"bin_subdir": "bin"},
+        "source": {"default": "local", "local": {"type": "local", "path": str(local_dir)}},
+    }
+
+
+def _store_registry(tmp_path, profiles: dict) -> ToolchainRegistry:
+    import yaml
+
+    path = tmp_path / "toolchains.yaml"
+    path.write_text(yaml.safe_dump({"toolchains": profiles}), encoding="utf-8")
+    return ToolchainRegistry(path)
+
+
+def _store(tmp_path) -> ToolchainStore:
+    return ToolchainStore(
+        tmp_path / "store",
+        workspace=tmp_path / "workspace",
+        source_archives_dir=tmp_path / "sources",
+    )
+
+
+def test_toolchain_store_screen_renders_keys_and_recommendations(monkeypatch, tmp_path):
+    registry = _store_registry(tmp_path, {"gcc12": _local_profile(tmp_path, "gcc12")})
+    store = _store(tmp_path)
+    console = Console(file=io.StringIO(), width=120)
+    screen = ToolchainStoreScreen(console)
+
+    monkeypatch.setattr(screens.Prompt, "ask", staticmethod(lambda *args, **kwargs: "q"))
+    screen.show(
+        store,
+        registry,
+        recommended=[("gcc12", "fallback toolchain for FFmpeg 8.1")],
+    )
+
+    output = console.file.getvalue()
+    assert "Prepare recommended" in output
+    assert "Recommended (from system analysis)" in output
+    assert "fallback toolchain for FFmpeg 8.1" in output
+
+
+def test_toolchain_store_screen_renders_profile_notes(monkeypatch, tmp_path):
+    import yaml
+
+    path = tmp_path / "toolchains.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "toolchains": {
+                    "cargo-c": {
+                        "kind": "rust_tool",
+                        "platforms": ["linux"],
+                        "note": "installed on demand by the rav1e cargo build",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    registry = ToolchainRegistry(path)
+    console = Console(file=io.StringIO(), width=120)
+
+    monkeypatch.setattr(screens.Prompt, "ask", staticmethod(lambda *args, **kwargs: "q"))
+    ToolchainStoreScreen(console).show(_store(tmp_path), registry)
+
+    output = console.file.getvalue()
+    assert "Notes" in output
+    assert "installed on demand by the rav1e cargo build" in output
+
+
+def test_toolchain_store_screen_reports_nothing_to_deploy(monkeypatch, tmp_path):
+    registry = _store_registry(tmp_path, {"gcc12": _local_profile(tmp_path, "gcc12")})
+    store = _store(tmp_path)
+    console = Console(file=io.StringIO(), width=120)
+
+    monkeypatch.setattr(screens.Prompt, "ask", staticmethod(lambda *args, **kwargs: "q"))
+    ToolchainStoreScreen(console).show(store, registry, recommended=[])
+
+    assert "nothing to deploy" in console.file.getvalue()
+
+
+def test_toolchain_store_prepares_recommended_in_order(monkeypatch, tmp_path):
+    registry = _store_registry(
+        tmp_path,
+        {
+            "gmp": _local_profile(tmp_path, "gmp"),
+            "gcc12": _local_profile(tmp_path, "gcc12"),
+        },
+    )
+    store = _store(tmp_path)
+    console = Console(file=io.StringIO(), width=120)
+    answers = iter(["p", "", "q"])
+    monkeypatch.setattr(screens.Prompt, "ask", staticmethod(lambda *args, **kwargs: next(answers)))
+
+    ToolchainStoreScreen(console).show(
+        store,
+        registry,
+        recommended=[("gmp", "bootstrap prerequisite of gcc12"), ("gcc12", "fallback")],
+    )
+
+    assert store.installed("gmp") is not None
+    assert store.installed("gcc12") is not None
+    output = console.file.getvalue()
+    assert output.index("Installed gmp") < output.index("Installed gcc12")
+
+
+def test_toolchain_store_selection_accepts_list_number(monkeypatch, tmp_path):
+    registry = _store_registry(tmp_path, {"gcc12": _local_profile(tmp_path, "gcc12")})
+    store = _store(tmp_path)
+    console = Console(file=io.StringIO(), width=120)
+    answers = iter(["a", "1", "", "q"])
+    monkeypatch.setattr(screens.Prompt, "ask", staticmethod(lambda *args, **kwargs: next(answers)))
+
+    ToolchainStoreScreen(console).show(store, registry)
+
+    assert store.installed("gcc12") is not None
+
+
+def test_toolchain_store_selection_reprompts_on_unknown_name(monkeypatch, tmp_path):
+    registry = _store_registry(tmp_path, {"gcc12": _local_profile(tmp_path, "gcc12")})
+    store = _store(tmp_path)
+    console = Console(file=io.StringIO(), width=120)
+    answers = iter(["a", "typo", "gcc12", "", "q"])
+    monkeypatch.setattr(screens.Prompt, "ask", staticmethod(lambda *args, **kwargs: next(answers)))
+
+    ToolchainStoreScreen(console).show(store, registry)
+
+    assert store.installed("gcc12") is not None
+    assert "Unknown profile 'typo'" in console.file.getvalue()
+
+
+def test_toolchain_store_acquire_without_deployable_profiles(monkeypatch, tmp_path):
+    import yaml
+
+    path = tmp_path / "toolchains.yaml"
+    path.write_text(
+        yaml.safe_dump({"toolchains": {"cargo-c": {"kind": "rust_tool", "platforms": ["linux"]}}}),
+        encoding="utf-8",
+    )
+    registry = ToolchainRegistry(path)
+    store = _store(tmp_path)
+    console = Console(file=io.StringIO(), width=120)
+    answers = iter(["a", "", "q"])
+    monkeypatch.setattr(screens.Prompt, "ask", staticmethod(lambda *args, **kwargs: next(answers)))
+
+    ToolchainStoreScreen(console).show(store, registry)
+
+    assert "No deployable profiles" in console.file.getvalue()

@@ -3,6 +3,7 @@
 from importlib.resources import files
 
 import pytest
+import yaml
 
 from ffmpeg_builder.components import (
     BuildSystem,
@@ -385,7 +386,7 @@ class TestComponentRegistry:
         assert "dav1d" not in names
 
     def test_get_buildable_rav1e_special_case_preserved(self, mock_platform_info):
-        """rav1e is kept in the list even without cargo/rustc (skipped at build time)."""
+        """rav1e is kept in the list even without cargo/rustc (errors at build time)."""
         tools = self._tools(cargo=False, rustc=False)
         buildable = self.registry.get_buildable(
             gpl_enabled=True,
@@ -395,6 +396,66 @@ class TestComponentRegistry:
         )
         names = {c.name for c in buildable}
         assert "rav1e" in names
+
+    def test_get_buildable_toolchain_gate_skips_unavailable(self, mock_platform_info, tmp_path):
+        """A component with an unsatisfiable toolchain gate is excluded (except rav1e)."""
+        data = [
+            {
+                "name": "needs-gcc12",
+                "version": "1.0.0",
+                "url": "https://example.org/needs-{version}.tar.gz",
+                "category": "other_lib",
+                "build_system": "autotools",
+                "toolchain": "gcc12",
+            },
+            {
+                "name": "plain",
+                "version": "1.0.0",
+                "url": "https://example.org/plain-{version}.tar.gz",
+                "category": "other_lib",
+                "build_system": "autotools",
+            },
+        ]
+        path = tmp_path / "components.yaml"
+        path.write_text(yaml.safe_dump(data), encoding="utf-8")
+        registry = ComponentRegistry(yaml_path=path)
+
+        def _reject_gcc12(component):
+            return component.toolchain != "gcc12"
+
+        buildable = registry.get_buildable(
+            gpl_enabled=True,
+            platform="linux",
+            tools=self._tools(),
+            platform_info=mock_platform_info,
+            toolchain_checker=_reject_gcc12,
+        )
+        assert {c.name for c in buildable} == {"plain"}
+
+    def test_get_buildable_toolchain_gate_keeps_rav1e(self, mock_platform_info, tmp_path):
+        """rav1e survives even a rejecting toolchain gate (it errors at build time)."""
+        data = [
+            {
+                "name": "rav1e",
+                "version": "0.8.1",
+                "url": "https://example.org/rav1e-{version}.tar.gz",
+                "category": "video_codec",
+                "build_system": "cargo",
+                "toolchain": "rust",
+            }
+        ]
+        path = tmp_path / "components.yaml"
+        path.write_text(yaml.safe_dump(data), encoding="utf-8")
+        registry = ComponentRegistry(yaml_path=path)
+
+        buildable = registry.get_buildable(
+            gpl_enabled=True,
+            platform="linux",
+            tools=self._tools(cargo=False, rustc=False),
+            platform_info=mock_platform_info,
+            toolchain_checker=lambda component: False,
+        )
+        assert {c.name for c in buildable} == {"rav1e"}
 
     def test_tool_provided_by_system_component(self):
         reg = ComponentRegistry()
@@ -558,9 +619,9 @@ class TestNvCodecVersionSelection:
         component = self.registry.get_nv_codec_component(self._platform_info("13.5"))
         assert component.version == "13.0.19.1"
 
-    def test_driver_older_than_all_declared_versions_uses_oldest(self):
+    def test_driver_major_not_in_map_keeps_declared_default(self):
         component = self.registry.get_nv_codec_component(self._platform_info("11.1"))
-        assert component.version == "12.2.72.0"
+        assert component.version == "13.0.19.1"
 
     def test_malformed_detected_version_keeps_declared_default(self):
         component = self.registry.get_nv_codec_component(self._platform_info("not-a-version"))
@@ -623,3 +684,66 @@ class TestLv2StackConfigureFlags:
         comp = self.registry.get_by_name(comp_name)
         assert comp is not None
         assert expected_flag in comp.configure_args
+
+
+class TestToolchainFields:
+    """Phase 0 toolchain-registry foundation: Component.toolchain + nv-codec map."""
+
+    def test_component_defaults_to_na_toolchain(self):
+        component = Component(
+            name="test",
+            version="1.0.0",
+            url="https://example.org/test-{version}.tar.gz",
+            category=ComponentCategory.OTHER_LIB,
+            build_system=BuildSystem.AUTOTOOLS,
+        )
+        assert component.toolchain == "n/a"
+        assert component.driver_nvenc_api_map == {}
+
+    def test_registry_defaults_components_to_na_toolchain(self):
+        registry = ComponentRegistry()
+        ffmpeg = registry.get_ffmpeg_component("8.1")
+        assert ffmpeg.toolchain == "n/a"
+
+    def test_nv_codec_driver_map_targets_declared_versions(self):
+        registry = ComponentRegistry()
+        component = registry.get_by_name("nv-codec")
+        assert component is not None
+        assert component.driver_nvenc_api_map
+        for api, version in component.driver_nvenc_api_map.items():
+            assert version in component.versions, (api, version)
+
+    def test_driver_map_referencing_undeclared_version_rejected(self, tmp_path):
+        data = [
+            {
+                "name": "nv-codec",
+                "version": "1.0.0",
+                "url": "https://example.org/nv-{version}.tar.gz",
+                "category": "hw_accel",
+                "build_system": "make_only",
+                "versions": {"1.0.0": {"sha256": "a" * 64}},
+                "driver_nvenc_api_map": {"13": "9.9.9"},
+            }
+        ]
+        path = tmp_path / "components.yaml"
+        path.write_text(yaml.safe_dump(data), encoding="utf-8")
+        with pytest.raises(ValueError, match="undeclared version"):
+            ComponentRegistry(yaml_path=path)
+
+    def test_toolchain_field_parsed_from_yaml(self, tmp_path):
+        data = [
+            {
+                "name": "widget",
+                "version": "1.0.0",
+                "url": "https://example.org/widget-{version}.tar.gz",
+                "category": "other_lib",
+                "build_system": "autotools",
+                "toolchain": "gcc12",
+            }
+        ]
+        path = tmp_path / "components.yaml"
+        path.write_text(yaml.safe_dump(data), encoding="utf-8")
+        registry = ComponentRegistry(yaml_path=path)
+        component = registry.get_by_name("widget")
+        assert component is not None
+        assert component.toolchain == "gcc12"

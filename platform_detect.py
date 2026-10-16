@@ -75,6 +75,7 @@ class PlatformInfo:
     macports_clang: Optional[ToolInfo] = None
     cuda_available: bool = False
     cuda_path: Optional[str] = None
+    cuda_version: Optional[str] = None
     cuda_compute_capability: Optional[str] = None
     nvenc_api_version: Optional[str] = None
     nvenc_reason: str = ""
@@ -136,6 +137,7 @@ class PlatformInfo:
             "macports_clang": self.macports_clang.to_dict() if self.macports_clang else None,
             "cuda_available": self.cuda_available,
             "cuda_path": self.cuda_path,
+            "cuda_version": self.cuda_version,
             "cuda_compute_capability": self.cuda_compute_capability,
             "nvenc_api_version": self.nvenc_api_version,
             "nvenc_reason": self.nvenc_reason,
@@ -677,6 +679,7 @@ class PlatformDetector:
         if nvcc_path:
             self.platform_info.cuda_available = True
             self.platform_info.cuda_path = nvcc_path
+            self._detect_cuda_version(nvcc_path)
             self._detect_cuda_compute_capability()
             self._detect_cuda_nvcc_support(nvcc_path)
             return
@@ -702,9 +705,35 @@ class PlatformDetector:
             if nvcc.exists():
                 self.platform_info.cuda_available = True
                 self.platform_info.cuda_path = str(nvcc)
+                self._detect_cuda_version(str(nvcc))
                 self._detect_cuda_compute_capability()
                 self._detect_cuda_nvcc_support(str(nvcc))
                 return
+
+    def _detect_cuda_version(self, nvcc_path: str) -> None:
+        """Detect the CUDA Toolkit version from ``nvcc --version`` output.
+
+        ``nvcc --version`` prints a line like
+        ``Cuda compilation tools, release 12.2, V12.2.140``. The release
+        version is stored (``"major.minor"``) in ``PlatformInfo.cuda_version``
+        so ``ToolchainRegistry.toolchain_for_cuda()`` can select the mapped
+        host-compiler profile. Failures leave the version unset.
+        """
+        self.platform_info.cuda_version = None
+        try:
+            result = subprocess.run(
+                [nvcc_path, "--version"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except Exception:
+            return
+        if result.returncode != 0:
+            return
+        match = re.search(r"release\s+(\d+)\.(\d+)", result.stdout or "")
+        if match:
+            self.platform_info.cuda_version = f"{match.group(1)}.{match.group(2)}"
 
     def _detect_cuda_compute_capability(self) -> None:
         """Detect CUDA compute capability using nvidia-smi.
@@ -756,7 +785,7 @@ class PlatformDetector:
 
             lib: ctypes.CDLL
             if self.platform_info.is_windows:
-                lib = ctypes.WinDLL("nvEncodeAPI64.dll")
+                lib = ctypes.WinDLL("nvEncodeAPI64.dll")  # type: ignore[attr-defined]
             else:
                 lib = ctypes.CDLL("libnvidia-encode.so.1")
 
@@ -810,14 +839,16 @@ class PlatformDetector:
         """Detect whether nvcc can build CUDA sources on this host.
 
         CUDA toolkits pin a maximum-supported host-compiler major version
-        (e.g. CUDA 12.2 supports gcc up to 12), which rolling-release
-        distros like Fedora routinely exceed. This probes the system
-        default compiler first, then falls back to an explicit
-        ``CUDA_NVCC_CCBIN`` override, then to any nvcc-compatible gcc found
-        in a conda/mamba/micromamba environment (e.g. ``conda-forge``'s
-        ``gcc_linux-64=12``/``gxx_linux-64=12`` packages), storing the
-        winning ``-ccbin`` path in ``nvcc_ccbin`` for callers to forward to
-        nvcc invocations.
+        (e.g. CUDA 12.2 supports gcc up to 12), which rolling-release distros
+        like Fedora routinely exceed. The system default compiler is probed
+        first, then an explicit ``CUDA_NVCC_CCBIN`` override is honoured. When
+        nvcc rejects the system compiler, the registry's ``cuda`` table is
+        consulted for the mapped host-compiler profile given the detected CUDA
+        Toolkit version (this requires the detector to know the
+        toolchain-store root; without a store the table cannot be applied).
+        The winning ``-ccbin`` path is stored in ``nvcc_ccbin`` for callers to
+        forward to nvcc invocations. There is no automatic discovery of
+        alternative host compilers.
         """
         self.platform_info.nvcc_ccbin = None
         self.platform_info.nvcc_ccbin_reason = ""
@@ -844,57 +875,54 @@ class PlatformDetector:
             self.platform_info.cuda_nvcc_reason = "System default host compiler is nvcc-compatible"
             return
 
-        for candidate in self._iter_conda_gcc_candidates():
-            if self._probe_nvcc_compile(nvcc_path, ccbin=candidate):
-                self.platform_info.nvcc_ccbin = candidate
-                self.platform_info.cuda_nvcc_supported = True
-                self.platform_info.cuda_nvcc_reason = (
-                    f"Auto-detected nvcc-compatible host compiler: {candidate}"
-                )
-                self.platform_info.nvcc_ccbin_reason = self.platform_info.cuda_nvcc_reason
-                return
+        store_ccbin = self._store_cuda_host_compiler()
+        if store_ccbin and self._probe_nvcc_compile(nvcc_path, ccbin=store_ccbin):
+            self.platform_info.nvcc_ccbin = store_ccbin
+            self.platform_info.nvcc_ccbin_reason = (
+                f"Resolved from toolchain store for CUDA {self.platform_info.cuda_version}"
+            )
+            self.platform_info.cuda_nvcc_supported = True
+            self.platform_info.cuda_nvcc_reason = self.platform_info.nvcc_ccbin_reason
+            return
 
         self.platform_info.cuda_nvcc_reason = (
             "nvcc rejected the system host compiler (likely too new for this CUDA "
-            "toolkit) and no compatible compiler was found via CUDA_NVCC_CCBIN or a "
-            "conda/mamba/micromamba gcc environment"
+            "toolkit); set CUDA_NVCC_CCBIN to a compatible compiler (for example a "
+            "toolchain deployed into the toolchain store)"
         )
 
-    def _iter_conda_gcc_candidates(self) -> List[str]:
-        """List candidate gcc/g++ binaries from conda/mamba/micromamba envs.
+    def _store_cuda_host_compiler(self) -> Optional[str]:
+        """Resolve the CUDA host compiler via the registry ``cuda`` table.
 
-        Looks under common install roots (micromamba, miniforge, miniconda,
-        mambaforge, system-wide /opt/conda) for ``conda-forge``-style
-        ``gcc_linux-64``/``gxx_linux-64`` compiler packages, e.g. the
-        ``x86_64-conda-linux-gnu-gcc`` binary installed by
-        ``micromamba create -n cuda-gcc12 -c conda-forge gcc_linux-64=12
-        gxx_linux-64=12``. Order is not version-aware; each candidate is
-        probed by the caller and the first that satisfies nvcc wins.
+        Returns the store-installed ``CC`` for the profile mapped to the
+        detected CUDA Toolkit version, or ``None`` when no store root is
+        configured, the version is unmapped, or the profile is not installed.
         """
-        roots = [
-            Path.home() / ".local" / "share" / "mamba" / "envs",
-            Path.home() / "micromamba" / "envs",
-            Path.home() / "miniforge3" / "envs",
-            Path.home() / "miniconda3" / "envs",
-            Path.home() / "mambaforge" / "envs",
-            Path("/opt/conda/envs"),
-        ]
-        patterns = ("*-gcc-12", "*-gcc", "gcc-12", "gcc")
-        candidates: List[str] = []
-        for root in roots:
-            if not root.is_dir():
-                continue
-            for env_dir in sorted(root.iterdir()):
-                bin_dir = env_dir / "bin"
-                if not bin_dir.is_dir():
-                    continue
-                for pattern in patterns:
-                    for match in sorted(bin_dir.glob(pattern)):
-                        if match.is_file() and os.access(match, os.X_OK):
-                            candidates.append(str(match))
-        # Preserve discovery order while removing duplicates (e.g. a plain
-        # "gcc" symlink pointing at the same binary as the versioned name).
-        return list(dict.fromkeys(candidates))
+        from .toolchain_registry import ToolchainRegistry
+        from .toolchain_store import ToolchainStore
+
+        store_root = self._toolchain_store_root()
+        cuda_version = self.platform_info.cuda_version
+        if store_root is None or not cuda_version:
+            return None
+        try:
+            registry = ToolchainRegistry()
+        except (OSError, ValueError):
+            return None
+        return ToolchainStore(store_root).cuda_host_compiler(registry, cuda_version)
+
+    def _toolchain_store_root(self) -> Optional[Path]:
+        """Locate the persistent toolchain store, if configured.
+
+        The default layout is ``toolchains/`` next to the package root (flat
+        layout); ``FFMPEG_BUILDER_TOOLCHAINS`` overrides the location.
+        """
+        override = os.environ.get("FFMPEG_BUILDER_TOOLCHAINS")
+        if override:
+            candidate = Path(override)
+            return candidate if candidate.is_dir() else None
+        candidate = Path(__file__).resolve().parent / "toolchains"
+        return candidate if candidate.is_dir() else None
 
     def _probe_nvcc_compile(self, nvcc_path: str, ccbin: Optional[str] = None) -> bool:
         """Check whether nvcc can compile a minimal CUDA source file.

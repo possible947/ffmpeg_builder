@@ -12,7 +12,7 @@ from types import TracebackType
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Type
 
 from ..build_steps import BuildStepContext, run_install, run_make, run_step
-from ..build_types import SkipComponent
+from ..build_types import BuildError
 from ..executor import CommandExecutor
 from ..state import ComponentStatus, StateManager
 
@@ -354,15 +354,13 @@ def build_cargo(context: ComponentBuildContext, component: "Component", source_d
 
     rustc_version = get_rustc_version(context)
     if rustc_version is None:
-        raise SkipComponent(
-            component.name, "rustc is not available or version cannot be determined"
-        )
+        raise BuildError(component.name, "rustc is not available or version cannot be determined")
 
     if rustc_version < (1, 95, 0):
-        raise SkipComponent(
+        raise BuildError(
             component.name,
             f"rustc {'.'.join(map(str, rustc_version))} is too old. "
-            f"cargo-c requires rustc 1.95 or newer",
+            "cargo-c requires rustc 1.95 or newer",
         )
 
     cargo_c_path = shutil.which("cargo-c", path=env.get("PATH"))
