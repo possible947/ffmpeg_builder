@@ -148,7 +148,11 @@ Portability:
       `built with gcc 12.5.0`, 18/18 expected encoders, `-march=native
       -mtune=native -fopenmp`, smoke encode passed, release pulls nothing from
       the toolchain store (static workspace libs, host libgomp/libgcc_s).
-      Remaining: FFmpeg 9.0 with the system GCC.
+      **FFmpeg 9.0 end-to-end with the system GCC is done (58/58, 2026-10-16)**:
+      stale `workspace_90` removed, `built with gcc 16`, same 58-component
+      composition (all `system` except `rav1e` on store rust), 18/18 encoders,
+      same flags, smoke encode passed, same static release shape. Both
+      converter halves are built: `workspace_81` + `workspace_90`.
 - [ ] CI: a long-running, manually triggered toolchain job (nightly or
       `workflow_dispatch`); the unit suite keeps using recording runners.
       (Provisioning workflow created: `.github/workflows/toolchains.yml`.)
