@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, List, Optional, Set, Tuple
@@ -14,6 +15,9 @@ from .build_types import BuildError
 
 if TYPE_CHECKING:
     from .builder import FFmpegBuilder
+
+
+OPTIONAL_TOOLS = ("x265", "SvtAv1EncApp")
 
 
 def make_release_bundle(builder: "FFmpegBuilder") -> Path:
@@ -49,6 +53,23 @@ def make_release_bundle(builder: "FFmpegBuilder") -> Path:
     if not source_binaries:
         raise BuildError("release", f"No FFmpeg binaries found in {source_bin}")
 
+    # Standalone encoder CLIs consumed by downstream packaging. They are
+    # optional (not every profile builds them) and go through the same
+    # dependency collection / relocation as ffmpeg.
+    copied_tools: List[str] = []
+    for name in OPTIONAL_TOOLS:
+        candidates = [source_bin / name]
+        if builder.platform == "windows":
+            candidates.insert(0, source_bin / f"{name}.exe")
+        source = next((candidate for candidate in candidates if candidate.exists()), None)
+        if source is None:
+            continue
+        destination = release_dir / source.name
+        shutil.copy2(source, destination)
+        source_binaries.append(source)
+        copied_binaries.append(str(destination))
+        copied_tools.append(source.name)
+
     dependencies, missing_dependencies = _collect_runtime_dependencies(builder, source_binaries)
     copied_dependencies: List[str] = []
 
@@ -65,6 +86,12 @@ def make_release_bundle(builder: "FFmpegBuilder") -> Path:
             builder, release_dir, source_binaries, dependencies
         )
 
+    rpath_rewrites: List[str] = []
+    if builder.platform == "linux" and dependencies:
+        rpath_rewrites = _make_linux_bundle_relocatable(
+            builder, release_dir, [Path(p) for p in copied_binaries + copied_dependencies]
+        )
+
     manifest = {
         "generated_at": datetime.now().isoformat(),
         "platform": builder.platform,
@@ -72,9 +99,11 @@ def make_release_bundle(builder: "FFmpegBuilder") -> Path:
         "ffmpeg_version": builder.config.ffmpeg_version,
         "binaries": copied_binaries,
         "missing_binaries": sorted(missing_binaries),
+        "tools": copied_tools,
         "dependencies": copied_dependencies,
         "missing_dependencies": sorted(missing_dependencies),
         "install_name_rewrites": install_name_rewrites,
+        "rpath_rewrites": rpath_rewrites,
     }
     (release_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
@@ -332,6 +361,78 @@ def _make_macos_bundle_relocatable(
         _ad_hoc_sign(builder, macho)
 
     return rewrites
+
+
+def _make_linux_bundle_relocatable(
+    builder: "FFmpegBuilder", release_dir: Path, elf_files: List[Path]
+) -> List[str]:
+    """Make the bundle self-contained: every ELF file gets RUNPATH=$ORIGIN.
+
+    Bundled libraries are collected through ``ldd`` under the build
+    environment, which may expose toolchain runtimes (e.g. Intel oneAPI
+    libiomp5/libsvml/libirc/libintlc) only via LD_LIBRARY_PATH. Setting the
+    RUNPATH on *each* file (not just the executables) is required because
+    RUNPATH is not inherited by a dependency's own NEEDED lookups
+    (libsvml.so -> libintlc.so.5). The result is then verified with a
+    scrubbed loader environment so nothing resolves outside the bundle.
+    """
+    patchelf = shutil.which("patchelf") or shutil.which(
+        "patchelf", path=str(Path(sys.executable).parent)
+    )
+    if patchelf is None:
+        raise BuildError(
+            "release",
+            "patchelf is required to make the release bundle relocatable "
+            "(pip install patchelf, or install the distro package)",
+        )
+
+    rewrites: List[str] = []
+    for elf in elf_files:
+        result = builder.executor.execute([patchelf, "--set-rpath", "$ORIGIN", str(elf)])
+        if not result.success:
+            raise BuildError(
+                "release",
+                f"patchelf failed for {elf.name}: {result.stderr.strip()}",
+            )
+        rewrites.append(f"{elf.name}: RUNPATH=$ORIGIN")
+
+    _verify_linux_bundle_closure(builder, release_dir, elf_files)
+    return rewrites
+
+
+def _verify_linux_bundle_closure(
+    builder: "FFmpegBuilder", release_dir: Path, elf_files: List[Path]
+) -> None:
+    """Fail if any bundled ELF resolves a bundled-toolchain library outside
+    the release directory, or has an absolute RPATH/RUNPATH entry."""
+    clean_env = {"LD_LIBRARY_PATH": "", "LD_PRELOAD": ""}
+    bundled = {p.name for p in release_dir.iterdir() if p.is_file()}
+    problems: List[str] = []
+
+    for elf in elf_files:
+        dyn = builder.executor.execute(["readelf", "-d", str(elf)], env=clean_env)
+        for line in dyn.stdout.splitlines():
+            if "(RPATH)" in line or "(RUNPATH)" in line:
+                value = line.split("[", 1)[-1].rstrip("]").strip()
+                if any(part.startswith("/") for part in value.split(":") if part):
+                    problems.append(f"{elf.name}: absolute search path {value}")
+
+        result = builder.executor.execute(["ldd", str(elf)], env=clean_env)
+        for raw_line in result.stdout.splitlines():
+            line = raw_line.strip()
+            if "=>" not in line:
+                continue
+            name, target = (part.strip() for part in line.split("=>", 1))
+            if target.startswith("not found"):
+                problems.append(f"{elf.name}: {name} not found")
+            elif name in bundled and not target.startswith(str(release_dir.resolve())):
+                problems.append(f"{elf.name}: {name} resolved outside bundle ({target})")
+
+    if problems:
+        raise BuildError(
+            "release",
+            "Release bundle is not self-contained:\n  " + "\n  ".join(problems),
+        )
 
 
 def _prefer_real_library_path(path: Path) -> Path:

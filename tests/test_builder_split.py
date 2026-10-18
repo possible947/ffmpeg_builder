@@ -952,3 +952,99 @@ def test_build_libvmaf_disables_tests_and_docs_in_meson(
     configure_cmd = next(cmd for step, cmd in executed_commands if step == "configure")
     assert "-Denable_tests=false" in configure_cmd
     assert "-Denable_docs=false" in configure_cmd
+
+
+def _linux_bundle_builder(tmp_path: Path, ldd_target: Path, resolved_dir: str):
+    """Builder whose ldd resolves libsvml.so from the toolchain dir first
+    (collection, build env) and from `resolved_dir` once LD_LIBRARY_PATH is
+    scrubbed (verification)."""
+
+    class _Result:
+        def __init__(self, stdout: str = "", success: bool = True):
+            self.stdout = stdout
+            self.stderr = ""
+            self.success = success
+
+    calls: list = []
+
+    class _Executor:
+        def execute(self, command, env=None):
+            calls.append(list(command))
+            if command[0] == "ldd":
+                scrubbed = env is not None and env.get("LD_LIBRARY_PATH") == ""
+                where = resolved_dir if scrubbed else str(ldd_target)
+                return _Result(stdout=f"\tlibsvml.so => {where}/libsvml.so (0x1)\n")
+            if command[0] == "readelf":
+                return _Result(stdout="")
+            return _Result()
+
+    class _Config:
+        ffmpeg_version = "9.0"
+
+        class windows:
+            msys2_root = ""
+
+    class _Detector:
+        def get_build_backend_name(self):
+            return "linux-native"
+
+    class _Builder:
+        platform = "linux"
+        workspace = tmp_path
+        config = _Config()
+        platform_detector = _Detector()
+        executor = _Executor()
+
+        @staticmethod
+        def _rmtree(path: Path) -> None:
+            import shutil
+
+            shutil.rmtree(path)
+
+        def get_build_env(self):
+            return {}
+
+    return _Builder(), calls
+
+
+def test_release_bundle_linux_sets_origin_runpath_on_all_files(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("shutil.which", lambda *a, **k: "/usr/bin/patchelf")
+    toolchain = tmp_path / "toolchain"
+    toolchain.mkdir()
+    (toolchain / "libsvml.so").write_text("lib", encoding="utf-8")
+    (tmp_path / "bin").mkdir()
+    for name in ("ffmpeg", "ffprobe", "ffplay", "x265", "SvtAv1EncApp"):
+        (tmp_path / "bin" / name).write_text("binary", encoding="utf-8")
+
+    builder, calls = _linux_bundle_builder(tmp_path, toolchain, str(tmp_path / "release"))
+    release_dir = make_release_bundle(builder)
+
+    patched = [c[-1] for c in calls if c[0] == "/usr/bin/patchelf" and c[1] == "--set-rpath"]
+    assert sorted(Path(p).name for p in patched) == [
+        "SvtAv1EncApp",
+        "ffmpeg",
+        "ffplay",
+        "ffprobe",
+        "libsvml.so",
+        "x265",
+    ]
+    assert all(c[2] == "$ORIGIN" for c in calls if c[0] == "/usr/bin/patchelf")
+    manifest = json.loads((release_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert "libsvml.so: RUNPATH=$ORIGIN" in manifest["rpath_rewrites"]
+    assert manifest["tools"] == ["x265", "SvtAv1EncApp"]
+    assert (release_dir / "x265").exists()
+
+
+def test_release_bundle_linux_fails_when_runtime_resolves_outside_bundle(
+    tmp_path: Path, monkeypatch
+):
+    monkeypatch.setattr("shutil.which", lambda *a, **k: "/usr/bin/patchelf")
+    toolchain = tmp_path / "toolchain"
+    toolchain.mkdir()
+    (toolchain / "libsvml.so").write_text("lib", encoding="utf-8")
+    (tmp_path / "bin").mkdir()
+    (tmp_path / "bin" / "ffmpeg").write_text("binary", encoding="utf-8")
+
+    builder, _ = _linux_bundle_builder(tmp_path, toolchain, str(toolchain))
+    with pytest.raises(BuildError, match="resolved outside bundle"):
+        make_release_bundle(builder)

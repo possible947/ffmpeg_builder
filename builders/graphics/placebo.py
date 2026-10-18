@@ -26,14 +26,24 @@ def patch_libplacebo_glslang_search(source_dir: Path) -> None:
         "cxx.find_library('glslang', required: required, static: static, dirs: vulkan_lib_dirs)"
     )
     text = glsl_meson.read_text(encoding="utf-8")
-    if patched in text:
-        return
-    if original not in text:
+    if original in text:
+        text = text.replace(original, patched, 1)
+    elif patched not in text:
         raise BuildError(
             "libplacebo",
             f"Expected glslang lookup pattern not found in {glsl_meson}",
         )
-    glsl_meson.write_text(text.replace(original, patched, 1), encoding="utf-8")
+    # glslang's CMake install uses GNUInstallDirs, which selects lib64 on
+    # Fedora/RHEL and lib elsewhere. libplacebo derives its search dirs from
+    # `vulkan_sdk / 'lib'` only; GCC's find_library still locates the archive
+    # via LIBRARY_PATH, but clang/icx's static search (`--print-search-dirs`)
+    # does not consult LIBRARY_PATH, so add lib64 explicitly when the pattern
+    # is present (older/newer libplacebo revisions may differ).
+    dirs_original = "vulkan_lib_dirs += [vulkan_sdk / 'lib']"
+    dirs_patched = "vulkan_lib_dirs += [vulkan_sdk / 'lib', vulkan_sdk / 'lib64']"
+    if dirs_original in text:
+        text = text.replace(dirs_original, dirs_patched, 1)
+    glsl_meson.write_text(text, encoding="utf-8")
 
 
 def patch_libplacebo_pc(builder: FFmpegBuilder) -> None:

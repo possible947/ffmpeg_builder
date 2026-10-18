@@ -687,6 +687,47 @@ scripts/
     check_python_env.sh      Environment and dependency checker
 ```
 
+## Intel oneAPI ICX build (experimental, Linux)
+
+Optional proof-of-concept: build the whole FFmpeg stack with Intel
+`icx`/`icpx` instead of GCC. **Not available in the configurator** and not a
+supported profile; see [`intel-icx-build.md`](intel-icx-build.md) for the full
+history and [`DeveloperReadme.md`](DeveloperReadme.md#intel-oneapi-icx-toolchain-experimental-linux-poc)
+for where the code lives.
+
+**Prerequisites:** Intel oneAPI (default `/opt/intel/oneapi`, tested with
+2026.1.1; `compiler/latest/bin/icx|icpx`), a normal builder environment
+(`pip install -e .`, `git lfs pull`), ~10 GB disk, 20-60 min.
+
+**Build:**
+
+```bash
+source .venv/bin/activate
+python scripts/icx_poc.py --ffmpeg-version 9.0 --dry-run   # show the plan
+python scripts/icx_poc.py --ffmpeg-version 9.0             # full build + release
+python scripts/icx_poc.py --ffmpeg-version 9.0 --resume    # continue after interruption
+python scripts/icx_poc.py --ffmpeg-version 9.0 --components ffmpeg   # one component
+# options: --oneapi-root PATH  --no-release
+```
+
+Output goes to the project workspace (`workspace_90/`); the relocatable bundle
+is `workspace_90/release/` (ffmpeg, ffprobe, ffplay, x265, SvtAv1EncApp and the
+four Intel runtime libraries `libiomp5.so`, `libirc.so`, `libsvml.so`,
+`libintlc.so.5`, all with `RUNPATH=$ORIGIN`).
+
+**Check that the release is independent of oneAPI:**
+
+```bash
+cp -r workspace_90/release /tmp/rel && cd /tmp/rel
+env -i ldd ./ffmpeg | grep -E "intel|not found"   # expect no output
+readelf -d ffmpeg | grep RUNPATH                  # expect [$ORIGIN]
+env -i ./ffmpeg -hide_banner -version
+```
+
+Known: `ffmpeg` links the *system* `libxvidcore.so.4` (xvidcore installs a `.so`
+despite `--disable-shared`), so that distro package is needed at runtime.
+Windows: not built; native ICX is MSVC-ABI (see the developer guide).
+
 ## Troubleshooting
 
 ### Build fails at a specific component

@@ -26,6 +26,7 @@ from .c23_fixes import (
 from .cxx_headers import X265_JSON11_PATCH
 from .darwin_patches import LIBJXL_REALPATH_PATCH, LIBVORBIS_CPUSUBTYPE_PATCH
 from .ffmpeg_patches import FFMPEG_9_VULKAN_PATCH
+from .icx_compat import X264_ICX_STACK_ALIGNMENT_PATCH
 
 
 class PatchRegistry:
@@ -50,6 +51,7 @@ class PatchRegistry:
             GETTEXT_LIBGREP_STDLIB_PATCH,
             LIBTEXTSTYLE_STDLIB_PATCH,
             X265_JSON11_PATCH,
+            X264_ICX_STACK_ALIGNMENT_PATCH,
             LIBJXL_REALPATH_PATCH,
             LIBVORBIS_CPUSUBTYPE_PATCH,
             FFMPEG_9_VULKAN_PATCH,

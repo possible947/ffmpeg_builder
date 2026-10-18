@@ -853,6 +853,50 @@ carried by the Nix shell notes (e.g. `-std=gnu11` for cargo C dependencies)
 now live as registry data (`configure_args`) and automatic platform handling
 in `builders/base.py`.
 
+### Intel oneAPI ICX toolchain (experimental, Linux PoC)
+
+Status: **evaluation only**. ICX is not a configurator/toolchain-registry
+option; it is driven by the throw-away harness `scripts/icx_poc.py`. FFmpeg 9.0
+(GPL, native, OpenMP) builds end-to-end with `icx`/`icpx` (58 components) and
+produced results identical to the gcc 8.1 baseline on the HQ_converter
+segmentator/QP validation, but it offers no advantage over FFmpeg 8.1 + gcc 12,
+so it is not promoted. Full history, all problems and fixes:
+[`intel-icx-build.md`](intel-icx-build.md).
+
+**Where the code lives**
+
+| What | Where |
+|------|-------|
+| Harness (oneAPI resolve, per-component `toolchain_env`, ICX baseline flags) | `scripts/icx_poc.py` |
+| x264 stack-alignment fix (gated on `CC=icx/icpx`) | `patches/icx_compat.py`, `patches/registry.py` |
+| x265 `IntelLLVM` compiler-ID fix (`-DINTEL_CXX=1`) | `builders/codecs/x265.py` |
+| libplacebo glslang `lib64` lookup | `builders/graphics/placebo.py` |
+| FFmpeg uses component-scoped `--extra-cflags` | `builders/ffmpeg/ffmpeg.py` |
+| Relocatable release (generic, all toolchains) | `release_bundle.py` |
+
+**Harness baseline flags** (in-memory per-component overrides, not committed
+as defaults): `-D_GNU_SOURCE -ffp-model=precise -Wno-recommended-option`,
+plus `-Wno-register` for C++; `MAKEFLAGS=LD=<icx>` for libvpx.
+
+**Relocatable release.** The release step (Linux) copies `ffmpeg`, `ffprobe`,
+`ffplay`, the optional `x265`/`SvtAv1EncApp`, and every non-system shared
+library they need (for ICX: `libiomp5.so`, `libirc.so`, `libsvml.so`,
+`libintlc.so.5`) into `<workspace>/release/`. It then runs
+`patchelf --set-rpath '$ORIGIN'` on **every** bundled ELF (RUNPATH is not
+inherited by a dependency's own NEEDED lookups, e.g. `libsvml -> libintlc`) and
+verifies with `LD_LIBRARY_PATH` scrubbed that nothing resolves outside the
+release or via an absolute RPATH. `patchelf` is a Linux dependency in
+`pyproject.toml`. Intel oneAPI is then only a build toolchain; the release
+runs without it. The OpenMP runtime is Intel `libiomp5` (no `libgomp`).
+
+**Windows (future).** ICX has no Linux-to-Windows cross-compilation. Native
+Windows ICX uses the MSVC ABI (Visual Studio, Windows SDK, `lib.exe`, FFmpeg
+`--toolchain=msvc`), not MinGW; MinGW-built static libraries cannot be mixed in.
+Moving the Windows backend off MSYS2-UCRT64 GCC therefore means moving the whole
+dependency stack to MSVC-ABI, which is a separate project. The release
+relocation logic above is ELF/Linux only; Windows needs DLL bundling next to the
+executables (already handled generically by `release_bundle.py` for MSYS2).
+
 ## Data Flow
 
 ### Build Process

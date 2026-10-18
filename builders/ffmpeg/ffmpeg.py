@@ -90,7 +90,11 @@ def build_ffmpeg(builder: FFmpegBuilder, component: Component, source_dir: Path)
         "--disable-shared",
         "--enable-static",
         "--enable-version3",
-        f"--extra-cflags={builder.cflags}",
+        # Use the component-scoped CFLAGS (includes any per-component or
+        # per-toolchain platform overrides), not the global builder flags, so
+        # toolchain compatibility flags (e.g. an ICX -ffp-model baseline)
+        # reach FFmpeg's own TU compilation as well.
+        f"--extra-cflags={env.get('CFLAGS', builder.cflags)}",
         f"--extra-ldexeflags={builder.ldexeflags}",
         f"--extra-ldflags={extra_ldflags}",
         f"--extra-libs={extra_libs}",

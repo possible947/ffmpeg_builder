@@ -28,6 +28,19 @@ def build_x265(builder: FFmpegBuilder, component: Component, source_dir: Path) -
     if not build_linux.exists():
         raise BuildError(component.name, "Build directory not found")
 
+    # x265 only recognizes GNU/Clang/Intel-classic compiler IDs; CMake reports
+    # the oneAPI icx/icpx compiler as "IntelLLVM", so x265 takes neither its
+    # GCC nor its Clang branch and never compiles the SSE3/SSSE3/SSE4.1
+    # intrinsic objects (undefined setupIntrinsicDCT_* references at link
+    # time). Forcing INTEL_CXX makes x265 take its GCC-like path, which does
+    # enable those objects; icx accepts the resulting -msse3/-mssse3/-msse4.1.
+    compiler_names = {Path(env.get("CC", "")).name, Path(env.get("CXX", "")).name}
+    intel_llvm_flags = (
+        ["-DINTEL_CXX=1"]
+        if any(name.startswith(("icx", "icpx")) for name in compiler_names)
+        else []
+    )
+
     for bitdepth in ["12bit", "10bit", "8bit"]:
         bitdepth_dir = build_linux / bitdepth
         bitdepth_dir.mkdir(parents=True, exist_ok=True)
@@ -36,6 +49,7 @@ def build_x265(builder: FFmpegBuilder, component: Component, source_dir: Path) -
             f"-DCMAKE_INSTALL_PREFIX={builder._ws_str()}",
             "-DENABLE_SHARED=OFF",
             "-DBUILD_SHARED_LIBS=OFF",
+            *intel_llvm_flags,
         ]
 
         if bitdepth == "12bit":
