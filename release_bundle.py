@@ -85,6 +85,7 @@ def make_release_bundle(builder: "FFmpegBuilder") -> Path:
         install_name_rewrites = _make_macos_bundle_relocatable(
             builder, release_dir, source_binaries, dependencies
         )
+        _verify_macos_signatures(builder, release_dir)
 
     rpath_rewrites: List[str] = []
     if builder.platform == "linux" and dependencies:
@@ -293,6 +294,21 @@ def _ad_hoc_sign(builder: "FFmpegBuilder", macho: Path) -> None:
             "release",
             f"codesign failed for {macho.name}: {result.stderr.strip()}",
         )
+
+
+def _verify_macos_signatures(builder: "FFmpegBuilder", release_dir: Path) -> None:
+    """Fail the release if any bundled Mach-O has a missing or invalid signature."""
+    for path in sorted(release_dir.iterdir()):
+        if not path.is_file() or path.name == "manifest.json":
+            continue
+        result = builder.executor.execute(
+            ["codesign", "--verify", "--strict", str(path)], env=builder.get_build_env()
+        )
+        if not result.success:
+            raise BuildError(
+                "release",
+                f"signature verification failed for {path.name}: {result.stderr.strip()}",
+            )
 
 
 def _make_macos_bundle_relocatable(
