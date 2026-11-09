@@ -395,9 +395,21 @@ def test_release_bundle_macos_rewrites_install_names_and_rpaths(tmp_path: Path):
     for call in rpaths:
         assert call[2] == "@loader_path"
 
-    assert len(executor.codesign_calls) == 4
-    for call in executor.codesign_calls:
-        assert call[1:4] == ["--force", "-s", "-"]
+    bundled_machos = {
+        str(release_dir / name) for name in ("ffmpeg", "ffprobe", "ffplay", "libfoo.1.2.3.dylib")
+    }
+    sign_calls = [c for c in executor.codesign_calls if c[1:4] == ["--force", "-s", "-"]]
+    verify_calls = [c for c in executor.codesign_calls if c[1:3] == ["--verify", "--strict"]]
+    assert len(sign_calls) + len(verify_calls) == len(executor.codesign_calls)
+    # Every rewritten Mach-O is re-signed exactly once ...
+    assert sorted(c[4] for c in sign_calls) == sorted(bundled_machos)
+    assert all(len(c) == 5 for c in sign_calls)
+    # ... and every bundled file is verified exactly once, after all signing.
+    assert sorted(c[3] for c in verify_calls) == sorted(bundled_machos)
+    assert all(len(c) == 4 for c in verify_calls)
+    last_sign = max(executor.codesign_calls.index(c) for c in sign_calls)
+    first_verify = min(executor.codesign_calls.index(c) for c in verify_calls)
+    assert last_sign < first_verify
 
 
 class _PlatformInfo:
@@ -520,7 +532,13 @@ def test_build_cargo_installs_pinned_cargo_c(tmp_path: Path, monkeypatch: pytest
     component = _make_libplacebo_component()
     source_dir = tmp_path / "src"
 
-    monkeypatch.setattr(FFmpegBuilder, "_get_rustc_version", lambda self: (1, 95, 0))
+    probed_components = []
+
+    def _fake_rustc_version(context, component=None):
+        probed_components.append(component)
+        return (1, 95, 0)
+
+    monkeypatch.setattr("ffmpeg_builder.builders.base.get_rustc_version", _fake_rustc_version)
     monkeypatch.setattr(shutil, "which", lambda name, path=None: None)
 
     commands = []
@@ -536,6 +554,8 @@ def test_build_cargo_installs_pinned_cargo_c(tmp_path: Path, monkeypatch: pytest
 
     builder._build_cargo(component, source_dir)
 
+    # rustc is probed with the component so its toolchain-store PATH applies.
+    assert probed_components == [component]
     assert commands[0] == ["cargo", "install", "cargo-c", "--version", CARGO_C_VERSION]
     assert commands[1][:2] == ["cargo", "cinstall"]
 
@@ -549,7 +569,9 @@ def test_build_cargo_rewrites_strict_c11_for_linux_gcc15(
     builder.env["CFLAGS"] = "-O2 -std=c11"
     component = _make_libplacebo_component()
 
-    monkeypatch.setattr(FFmpegBuilder, "_get_rustc_version", lambda self: (1, 95, 0))
+    monkeypatch.setattr(
+        "ffmpeg_builder.builders.base.get_rustc_version", lambda context, component=None: (1, 95, 0)
+    )
     monkeypatch.setattr(shutil, "which", lambda name, path=None: "/usr/bin/cargo-c")
 
     captured_envs = []
