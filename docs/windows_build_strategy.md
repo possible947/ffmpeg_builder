@@ -1,560 +1,595 @@
-# Windows FFmpeg build strategy: analysis and implementation plan (Variant 1: WSL + mingw-w64)
-
-> Audience: an implementing agent/engineer working on a real system (Windows 11 + WSL2 Ubuntu).
-> Status: design/plan document. The WSL-to-Windows cross backend and its gates are not implemented;
-> the existing native backends and some reusable infrastructure already exist.
-> Provenance: produced from a repository analysis plus a design discussion with the maintainer
-> (@possible947). **[REQUIREMENT]** identifies a project invariant; **[REPO]** identifies a fact
-> checked in the current repository or its bundled sources; **[UNVERIFIED]** identifies a technical
-> hypothesis that requires a PoC. Maintainer-reported Linux results are identified separately and do
-> not establish cross-build results.
-> Repo conventions (see `AGENTS.md`) apply: declarative registry, `ComponentStatus` values unchanged,
-> `detail=` on every status transition, failures as `BuildError`, offline-first sources, `pytest tests/`,
-> `black --check .`, `python scripts/check_mypy_baseline.py`, add a `docs/CHANGELOG.md` entry.
-
----
-
-## 1. Task
-
-Find and implement the best way to produce **Windows** FFmpeg builds from this build system.
-
-Why: the current Windows path (`windows-msys2-ucrt64`, MSYS2 GCC) is considered not viable long term:
-the full toolset and the full component set failed to build, and MSYS2 gives no control over compiler and
-system-package versions. Using MSYS2 alone is therefore rejected as the primary route.
-
-Hard requirements for the resulting `ffmpeg.exe`:
-
-1. A **complete hwaccel set**: hardware decoders, hardware encoders (NVENC, QSV, AMF), and
-   Vulkan, OpenCL and CUDA filters. Registry/configuration policy declares the required build
-   capabilities; the absence of a particular GPU must not silently remove them.
-2. Support for **neural-network filters in the future** (backend choice still open, see 8).
-3. Nvidia and Vulkan support at full scope. These were the original reason Windows builds were developed.
-4. **[REQUIREMENT] Build on host for host:** the physical Windows machine running WSL is the actual
-   target. WSL is its controlled build environment. Optimize and specialize for this host; producing
-   a generic binary for other machines or materially different host configurations is not a goal.
-   Performance and efficiency take precedence over cross-host portability.
-5. **[REQUIREMENT] Build identity includes relevant host and build state**, not just the FFmpeg
-   version or target triple. A material hardware, driver, runtime, component, toolchain or
-   configuration change can require a new build and rebuilding the dependency stack. Artifacts and
-   completed/resume state from an incompatible identity must never be silently reused.
-
-## 2. Variants (in priority order)
-
-| # | Variant | Verdict | Priority |
-|---|---------|---------|----------|
-| 1 | Build in Linux **WSL** using a **mingw-w64 cross toolchain** (target `x86_64-w64-mingw32`, UCRT) | Closest to current architecture; **try first**, with early ABI/GPU PoCs. End-to-end feasibility remains unverified. | 1 |
-| 2 | Native Windows build with the **MSVC** compiler. MSYS2 is used only as a Unix shell. | A possible new backend with a reduced component set **[UNVERIFIED]**; consider for a required MSVC-only feature only if reasonable interfaces/adapters cannot make Variant 1 work. | 2 (separate project, after 1) |
-| 3 | Native Windows build with **Intel oneAPI** (`icx`) | Not standalone: Windows `icx` is MSVC-ABI and needs Visual Studio Build Tools + Windows SDK, so it is Variant 2 plus an extra layer. No Linux->Windows ICX cross-compile exists (see `docs/intel-icx-build.md`, "Windows note"). | 3 (only if a measurable speed gain over mingw is shown) |
-
-MSYS2-UCRT64 stays as a **deprecated** backend: do not extend it, do not delete it until Variant 1
-reaches component parity.
-
-### Variant summaries
-
-**Variant 1 (WSL + mingw-w64).**
-- Strengths: pinned toolchain versions are fully controllable (via a pinned `llvm-mingw` binary or a
-  mingw-w64 chain with the necessary store/recipe extensions); build tools (nasm, cmake, meson, ninja,
-  pkg-config, perl, cargo) run natively in Linux, removing MSYS2 sh.exe/path pain. Inputs can be pinned
-  for repeatable builds of the recorded host state; the resulting `ffmpeg.exe` runs on that Windows
-  host through interop. Host-specific optimization is intentional.
-- Risks **[UNVERIFIED]**: the build/host/target axis and each component's cross-build need validation;
-  toolchain, C++ and Rust runtime ABIs must agree; MSVC-only C++ APIs may need another interface or
-  backend; CUDA filters need a working PTX path that does not use Windows `nvcc` (section 4.3).
-  Missing registry entries or build adapters are implementation work, not architectural failures.
-
-**Variant 2 (MSVC) [UNVERIFIED in this repository].**
-- Strengths: MSVC ABI (`.lib`/`.pdb`), native debugging, Windows `nvcc` works, libtorch linkable.
-- Risks: many autotools components do not build with MSVC (gmp, nettle, gnutls, fdk-aac, opencore,
-  xvidcore, lame, libsdl, ...) and need replacements (e.g. schannel instead of gnutls); needs
-  `lib.exe`/`link.exe`, hand-made `.pc` files, `c99wrap`; MSYS2 shell quirks remain; OpenMP is `vcomp`
-  (OpenMP 2.0) or `clang-cl` + `libomp`. Start with a cut-down set: ffmpeg + x264/x265/dav1d/svtav1/
-  opus/vpx/libwebp.
-
-**Variant 3 (oneAPI).**
-- Adds: Intel OpenMP (`libiomp5md`), experience from the Linux PoC (`scripts/icx_poc.py`,
-  `patches/icx_compat.py`, x265 `-DINTEL_CXX=1`, `-ffp-model=precise`).
-- Costs: everything from Variant 2, plus oneAPI release compatibility and redistribution of Intel runtime
-  DLLs (`libiomp5md`, `libmmd`, `svml`).
-
-## 3. Summary of the discussion and decisions
-
-1. Keep **auto-detection in WSL** for build-environment properties (tools, jobs, RAM). Preserve native
-   Linux behavior except for any explicitly tested identity-safety change required by the project rule.
-2. Hardware capabilities of the **Windows target** must **not** come from the WSL view of the system:
-   - WSL hides or changes things: VAAPI/QSV disabled, OpenCL often absent, Vulkan usually only via Mesa
-     `dzn`, CUDA libs live in `/usr/lib/wsl/lib`. For a Windows binary these are irrelevant or misleading.
-   - Target APIs depend on the appropriate Windows headers, libraries/import libraries and runtime
-     drivers/loaders (`nvcuda.dll`, `nvEncodeAPI64.dll`, `vulkan-1.dll`, `OpenCL.dll`, ...).
-     Whether each dependency is linked or loaded dynamically must be verified; they are not all
-     interchangeable.
-3. **[REQUIREMENT] Separate capability policy from specialization:** the declarative registry and
-   configuration define which capabilities/components the build provides. The real Windows host
-   determines how the current build is specialized and validated: CPU optimization, GPU compute
-   capability, compatible SDK/header selection, explicit feature choices and runtime checks.
-   Do not silently drop a required component because its GPU is absent; report an incompatible
-   selected combination explicitly instead.
-4. Hardware probing for the Windows target is done **in real time from WSL through interop**
-   (`powershell.exe -NoProfile`, `nvidia-smi.exe`) at build/resume time. The same physical host is
-   intentional: preserve host-specific optimization. **[UNVERIFIED]** Check that the selected compiler's
-   native flags accurately reflect instructions usable by Windows; derive equivalent host-specific
-   flags if needed, rather than weakening optimization for portability.
-5. CUDA filters: a Linux toolkit-only CUDA installation and `nvcc -ptx` with a compatible Linux host
-   compiler are the initial candidate; CUDA 12.4 with gcc12/gcc13 is one candidate combination, not
-   an architectural requirement. The Windows driver executes the generated PTX. Existing
-   `nvcc_ccbin`/registry logic can be extended; `--enable-cuda-llvm` is a possible fallback.
-   **[UNVERIFIED in the WSL-to-Windows configuration]**
-6. CUDA/gcc12/gcc13 combinations and Linux behavior were reported as verified by the maintainer on
-   Linux. That does not verify the Windows cross-build or a different selected version combination.
-7. Neural-network filters remain a structural risk where only an MSVC C++ ABI is available.
-   C-API backends may be viable through appropriate import libraries; evaluate the chosen backend,
-   FFmpeg version and available interface before escalating. **[REPO]** Bundled FFmpeg 8.1 supports
-   OpenVINO, TensorFlow and Torch DNN backends; 9.0 also has ONNX Runtime. The actual Windows
-   cross-link and execution remain **[UNVERIFIED]**. libplacebo/Vulkan shader upscaling needs no ML
-   runtime.
-8. Note: the maintainer said CUDA 12.x compile patches for gcc 12/13 exist in the build system. A search of
-   `patches/` found no CUDA-specific patch (only `c23_fixes`, `cxx_headers`, `icx_compat`, `darwin_patches`,
-   `ffmpeg_patches`); the relevant mechanism found is `PlatformDetector._detect_cuda_nvcc_support` +
-   `nvcc_ccbin` + `toolchains.yaml` `cuda:` table. **Action: confirm where the patches live before reusing.**
-9. **[REQUIREMENT]** Tool/component registries and the store are extensible infrastructure that
-   declaratively provide the inputs needed by a supported build. Add a required tool, version,
-   mapping, SDK, component or adapter when absent. Only a limitation that remains after reasonable
-   support is added, such as an unavoidable ABI/platform incompatibility, is an architectural
-   feasibility blocker.
-
-## 4. Target architecture (Variant 1)
-
-### 4.1 Build / host / target model
-
-- The physical build host and actual target are the same Windows 11 machine; WSL2 Ubuntu (26.04 LTS
-  base) is its controlled build environment. In cross-compilation terminology, the tools execute on
-  WSL (`build`) and the produced programs execute on Windows (`host`/target).
-- Build-time tools (nasm/yasm, cmake, meson, ninja, pkg-config, perl, cargo, nvcc) are **Linux-native**.
-- Libraries and FFmpeg are produced for `x86_64-w64-mingw32` into a **target sysroot/prefix** that is
-  separate from native Linux prefixes and from incompatible build identities. Never mix Linux and
-  target `PKG_CONFIG_PATH`; use a target-only `PKG_CONFIG_LIBDIR` and a sysroot setting where
-  appropriate, checking that staged absolute paths are not prefixed twice.
-- New backend name: **`linux-cross-mingw`** (keep `linux-wsl2` and `windows-msys2-ucrt64` distinct; do not
-  generalize their rules onto it). Suggested config: `target: windows`, `windows.backend: wsl-mingw`.
-- The host's relevant hardware, Windows/driver/runtime state and all effective selected build inputs
-  form the build identity. A materially different identity gets isolated state and artifacts and may
-  require a full dependency rebuild (section 4.7).
-
-### 4.2 Code touch points (existing, verified by reading)
-
-| Area | File / symbol | Change |
-|------|---------------|--------|
-| Backend id | `platform_detect.py` (backend name logic near `_check_wsl2`, lines ~272, ~660-671) | Add target selection; keep host detection untouched |
-| Strategy | `platforms/windows_ucrt64.py`, `platforms/resolver.py` | Add `platforms/linux_cross_mingw.py`; resolver picks it for the new backend |
-| Windows gating | `builder.py` `_is_windows_ucrt64_backend()` (many uses), `builders/base.py` (~189, ~245), `builders/ffmpeg/ffmpeg.py` (~55, ~114, ~125, ~175-188) | Replace with capability predicates (`targets_windows()`, `uses_msys_paths()`, `uses_posix_toolchain()`) so UCRT64-only behavior (MSYS path munging, `;` pkg-config, `sh.exe`) is not applied to cross builds |
-| HW component set | `components.py` `WINDOWS_UCRT64_HW_ACCEL_COMPONENTS`, `_is_eligible()`; `app.py` toolchain gate | Extend declarative target policy; do not silently omit required components for missing host GPUs or unprovisioned tools. Enable the existing AMF component for the target and add any actually required loader/import-library support. |
-| Toolchains | `toolchains.yaml`, `toolchain_store.py`, `toolchain_builders.py`, `toolchain_registry.py` | Add the selected cross profile(s), host `nvcc` compiler mappings, SDKs and Rust target support; missing entries are implementation work. |
-| FFmpeg configure | `builders/ffmpeg/ffmpeg.py` | Cross and version-specific hwaccel flags (4.4); select C++ runtime by toolchain; make NVCC/nonfree policy explicit. |
-| CUDA detect | `platform_detect.py` `_detect_cuda_nvcc_support`, `nvcc_ccbin` | Separate Linux NVCC usability from Windows GPU/driver capabilities and requested build features. |
-| Workspace/state | `config.py`, `app.py`, `state.py`, `builder.py` | Compare recorded/current build identity and isolate state, installed artifacts and mutable build trees before any reuse (4.7). |
-| Packaging | `release_bundle.py` | Windows bundle for this host; collect required toolchain runtime DLLs and record external Windows/GPU runtime dependencies. |
-| Config | `config.py` (`windows:` section) | `target`, `windows.backend`, feature choices and explicit overrides for host-specific parameters when needed. |
-| New | `windows_probe.py` (name suggested) | Interop probe, section 4.5 |
-
-### 4.3 CUDA/NVIDIA coherent configuration
-
-- Select and record a compatible combination of FFmpeg, nv-codec headers, Windows driver/NVENC API,
-  GPU compute capabilities, Linux CUDA toolkit and its host compiler, and the MinGW toolchain. These
-  inputs participate in build identity; a relevant change may require a new probe/build/acceptance
-  cycle. Do not select versions to keep an old binary working after an arbitrary host change.
-- **[REPO]** `toolchains.yaml` currently maps CUDA 12.2/12.3 to gcc12 and 13.1 to gcc13; lookup is
-  exact and there is no 12.4 mapping. Add the selected toolkit/compiler mapping and provisioning
-  support when needed. Its absence is not evidence against Variant 1.
-- **[REPO]** The bundled nv-codec 13.0.19.1 headers specify Windows driver 570+; the bundled
-  12.2.72.0 headers specify Windows driver 551.76+. These are requirements of those specific
-  header releases, not a universal driver threshold. The registry has an NVENC API-to-header map,
-  but its current fallback uses the default when detection/mapping is missing. Probe the actual
-  Windows NVENC API or use a verified explicit selection; extend the declared versions/mappings
-  as needed and report incompatible combinations rather than silently assuming compatibility.
-- **[UNVERIFIED]** CUDA 12.4 with a store-provided gcc12/gcc13 and toolkit-only installation is an
-  initial PTX candidate; Ubuntu 26.04 host headers/glibc and the selected toolkit/compiler may be
-  incompatible. Use a supported coherent host environment or test `--enable-cuda-llvm` if needed.
-  `-allow-unsupported-compiler` only bypasses a compiler check; it is not a fix for incompatible
-  headers or proof of correctness. Install no Linux GPU driver into WSL.
-- Extend the existing `--enable-cuda-nvcc`/`--nvccflags` and `nvcc_ccbin` logic. Derive architecture
-  flags from the actual selected Windows GPU(s), or an explicit configuration override; verify
-  toolkit/PTX/driver compatibility and multi-GPU behavior. If no NVIDIA GPU is present but CUDA
-  filters remain required, use an explicitly configured architecture/profile or report the missing
-  build input; do not silently omit the component or claim runtime validation.
-- **[REPO]** FFmpeg's `--enable-cuda-nvcc` requires an explicit `--enable-nonfree`; it does not turn
-  that option on automatically. Make the choice explicit and document that FFmpeg labels such a
-  build unredistributable. Evaluate other selected libraries separately; an LLVM fallback is not a
-  blanket license conclusion.
-
-### 4.4 FFmpeg configure (target)
-
-Expected flags **[verify each in PoC]**:
-
-```
---enable-cross-compile --target-os=mingw32 --arch=x86_64 --cross-prefix=<triplet>-
---pkg-config=<wrapper using PKG_CONFIG_LIBDIR of the target prefix> --enable-w32threads
---enable-ffnvcodec --enable-nvenc --enable-nvdec --enable-cuvid
---enable-cuda-nvcc --enable-nonfree --nvccflags=...  (NVCC route)
---enable-libvpl --enable-amf
---enable-vulkan --enable-libplacebo
---enable-opencl
---enable-d3d11va --enable-dxva2 --enable-d3d12va   (check availability in pinned FFmpeg + mingw-w64 headers)
-```
-
-**[REPO]** The bundled FFmpeg 8.1 accepts `--enable-libglslang` or `--enable-libshaderc`; the bundled
-9.0 configure script does not. Both have a `--glslc` path; select and validate the version-specific
-shader compiler and libplacebo dependencies instead of applying 8.1 flags to 9.0.
-`--enable-cuda-llvm` is the alternative CUDA-filter route; evaluate nonfree requirements for the
-complete selected dependency set separately.
-`d3d11va`/`dxva2`/`d3d12va` are not set anywhere in `builders/ffmpeg/ffmpeg.py` today; they are important
-native-Windows decoders and need mingw-w64 headers new enough (D3D12 video).
-
-### 4.5 Windows hardware probe (real time, via interop)
-
-- A module (e.g. `windows_probe.py`) obtains fresh Windows host state at each build or resume. It must
-  not use a previous state file as its current probe; the fresh relevant values are compared with the
-  saved build identity and persisted with the build (4.7).
-- Resolve explicit interop executable paths, e.g.
-  `/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -Command ...` and the
-  actual `nvidia-smi.exe` path; do not rely on `appendWindowsPath`. Emit/parse structured JSON for
-  PowerShell and parse the documented NVIDIA query format.
-- Collect: Windows version/build; CPU model + ISA; GPUs (vendor, model, driver version) via
-  `Get-CimInstance Win32_VideoController`; NVIDIA `compute_cap` and driver version via
-  `nvidia-smi.exe --query-gpu=name,compute_cap,driver_version --format=csv`; obtain any required
-  driver CUDA/PTX and NVENC API support separately; Vulkan ICD registry keys and
-  API version; OpenCL ICD registry keys; Intel `libvpl`/runtime presence; `amfrt64.dll`; D3D12 feature level.
-  Much of this already exists in `platform_detect.py` (`_detect_gpu_info_windows`, OpenCL/Vulkan paths,
-  CUDA detection) and should be reused/ported rather than rewritten. **[REPO]** The existing NVENC
-  API probe loads a native DLL in a Windows Python process; Linux Python in WSL cannot directly use
-  that Windows DLL, so a Windows interop helper or another verified method is needed.
-- Role: host-specific build parameters, compatible selected versions, identity, diagnostics and
-  validation. The probe may affect *how* a required capability is built, but must not silently remove
-  it from the registry/configuration-defined set when a GPU is absent.
-- Failure handling: if interop is disabled (`/etc/wsl.conf` `[interop] enabled=false`) or the probe fails,
-  fail with a clear message or accept explicit, sufficient manual overrides. Never silently fall back
-  to WSL/Linux detection for target capabilities or treat unknown identity as a match. Log diagnostic
-  results to `workspace/logs/`; the relevant identity is also persisted in build state.
-- Tests: mock `subprocess` with recorded output, like the existing WMIC/CIM tests.
-
-### 4.6 Per-component cross-build notes **[UNVERIFIED, expected approach]**
-
-| Build system | Approach |
-|--------------|----------|
-| autotools | `--host=x86_64-w64-mingw32`, `CC/CXX/AR/RANLIB/STRIP/WINDRES` from the cross toolchain |
-| cmake | toolchain file: `CMAKE_SYSTEM_NAME=Windows`, the selected triplet-prefixed GCC or Clang compiler, `CMAKE_FIND_ROOT_PATH`, `CMAKE_FIND_ROOT_PATH_MODE_*`; host tools still run natively |
-| meson | `--cross-file` (c/cpp/ar/strip/windres/pkg-config, `system=windows`, `cpu_family=x86_64`); keep the existing `-Denable_tests=false`/`-Denable_docs=false` rules (libvmaf, LV2 stack) |
-| openssl | target `mingw64`, `--cross-compile-prefix=<triplet>-`; needs perl + nasm on host |
-| libvpx | `--target=x86_64-win64-gcc` |
-| x264 | `--host=x86_64-w64-mingw32 --cross-prefix=<triplet>-` |
-| x265 | cmake toolchain file; keep existing assembler options |
-| rav1e / cargo-c | For LLVM-MinGW/UCRT, evaluate `x86_64-pc-windows-gnullvm`, its target std and LLVM linker; `x86_64-pc-windows-gnu` defaults to MSVCRT. Prove the selected Rust/C/C++ runtime and static-library combination in the early PoC. See the Rust [gnullvm](https://doc.rust-lang.org/rustc/platform-support/windows-gnullvm.html) and [gnu](https://doc.rust-lang.org/rustc/platform-support/windows-gnu.html) target documentation. |
-| glslang, libplacebo, dav1d, svtav1 | cmake/meson cross files |
-| Vulkan Loader | **[REPO]** Bundled FFmpeg 8.1/9.0 dynamically load `vulkan-1.dll` by default. Check libplacebo's target import-library needs separately; add SDK/import-library or loader build support if actually needed, not as a presumed prerequisite. |
-| nv-codec, amf, vulkan-headers, opencl-headers, fast-float | headers only; gate via registry for the new backend (amf is Linux-only today) |
-| opencl-icd-loader, onevpl (libvpl) | cmake cross builds; verify mingw support |
-| gmp/nettle/gnutls, fdk_aac, etc. | autotools cross; expected to work but verify; consider `schannel`/openssl as TLS |
-
-Prefer **static** codec libraries into `ffmpeg.exe` (as the current Windows build does) so the bundle
-needs few runtime DLLs. OpenMP: libgomp (from the cross GCC) or `libomp` (llvm-mingw); verify the choice
-works with the pinned toolchain and host. **[REPO]** `builders/ffmpeg/ffmpeg.py` currently adds
-`-lstdc++` for some non-macOS C++ dependencies. LLVM-MinGW documents its different CRT and C++
-standard library in its [known issues](https://github.com/mstorsjo/llvm-mingw#known-issues); select
-the runtime by the actual toolchain, not just the operating system. **[REPO]** The current Cargo builder
-installs `cargo-c` on demand if absent; stage it, the target Rust std and required crates for an
-offline build instead of assuming they are already available.
-
-### 4.7 Build identity, workspace and resume
-
-**Current behavior [REPO]:**
-
-- `config.py` chooses the default workspace by FFmpeg version (`workspace_81`, `workspace_90`); an
-  app caller can instead supply a custom workspace. `app.py` puts `packages/` and
-  `build_state.json` under that workspace.
-- `BuildState` persists a generated `build_id`, start time, the config dictionary, component states
-  (status, version, build time, error and log), and progress. In-progress statuses become `pending`
-  on load. The UUID is not a comparison of the host or inputs.
-- Resume starts at the first nonterminal status; `skipped` is terminal. `builder.py` skips a
-  `completed` or `system` component when its name and version match. FFmpeg also derives built
-  components from those statuses. The saved config is not compared with the current one before
-  `app.py` overwrites it.
-- A new build resets the state file but does not thereby isolate/remove the existing installed
-  prefix and other workspace artifacts. Neither version-only workspaces nor a state reset prove
-  that target artifacts belong to the current build identity.
-
-**Smallest robust design [REQUIREMENT]:**
-
-1. Capture the effective relevant state for the actual host and selected build: hardware/ISA and
-   GPU capabilities, Windows/runtime/driver state, FFmpeg and component/SDK/header versions,
-   compiler/toolchain and CUDA versions, target/ABI, build configuration, selected features and
-   other inputs that affect the artifacts. Include relevant recipes/patches and resolved versions;
-   distinguish material inputs from incidental diagnostics. Persist this identity alongside the
-   existing state. Decide its representation and comparison details during implementation; no
-   fingerprint format or hash algorithm is prescribed here.
-2. Before overwriting saved config, selecting a resume point, trusting `completed`/`system` status
-   or reusing installed artifacts, compare the freshly determined identity with the saved one.
-   Matching identity may resume normally. A material mismatch starts a new identity and an isolated
-   workspace/prefix and mutable build trees, or stops with a clear explanation until that is done.
-   This also applies when a custom workspace is supplied and to a non-resume build; resetting a
-   state file alone is insufficient. Recheck relevant host/runtime state before acceptance; if a
-   material change is detected during a build or before validation, report it and do not attribute
-   mixed-state artifacts or results to the same identity.
-3. Missing, legacy, corrupt or unverifiable identity is not proof of compatibility. Do not silently
-   reuse it: preserve existing data, explain the issue, and require a new isolated build or a
-   migration that actually establishes compatibility. Apply the shared safety invariant to existing
-   backends too; preserve their other behavior and test this intentional resume-safety change.
-4. Share only appropriately verified immutable source/toolchain inputs across identities. Do not
-   share target prefixes, mutable extracted/build trees, cached component completion or `system`
-   decisions across incompatible identities. A materially changed host or dependency may require
-   rebuilding the entire stack; this is expected behavior, not a portability defect.
-5. Test same-identity resume and interruptions; changed CPU/GPU/driver, component/toolchain version,
-   target and feature selection; state drift before acceptance; missing identity/probe data; legacy
-   and custom workspaces; and stale installed files after a state reset. Verify incompatible
-   artifacts are not reused.
-
-## 5. Implementation recommendations
-
-1. Run the high-risk ABI, NVIDIA and Vulkan PoC early, against one coherent configuration on the
-   actual Windows host, before building the full component stack or refactoring all builders.
-   Missing repository support can be added or staged for the PoC; it is not an architectural failure.
-2. Make the target explicit in data: registry fields and config, not scattered `if backend == ...`.
-   Introduce predicates on the builder/platform strategy and migrate `_is_windows_ucrt64_backend()` users
-   incrementally while keeping the UCRT64 tests green.
-3. Implement build-identity comparison and artifact isolation before enabling reusable cross-build
-   state. Preserve native backends except for the explicit, tested resume-safety behavior in 4.7.
-4. Start with **pinned `llvm-mingw` (UCRT) as a `binary` source**, provisioned offline-first via
-   `third_party/sources` + Git LFS and verified by sha256. Add the necessary registry/store support,
-   CUDA host compiler mappings, SDKs and Rust target artifacts. Add a from-source GNU mingw-w64
-   chain if required; the current native `gcc` recipe alone is not yet a cross toolchain.
-5. Keep the fresh Windows probe mockable. Use it for identity, specialization and validation, not
-   silent exclusion of configured required capabilities.
-6. Preserve offline-first behavior by staging the actual dependency closure, including host tools,
-   target std, `cargo-c` and required crates. Test with networking disabled and empty external caches;
-   a missing staged input is implementation/provisioning work.
-7. Add/extend unit tests with every implementation slice; run `pytest tests/` (never bare `pytest`),
-   `black --check .`, and `python scripts/check_mypy_baseline.py`.
-8. Update `docs/DeveloperReadme.md`, `README.md` and add a `docs/CHANGELOG.md` entry; mark the
-   MSYS2-UCRT64 backend as deprecated in docs.
-
-## 6. Preparation checklist (real system)
-
-1. WSL2 Ubuntu 26.04; enable interop and verify PowerShell from WSL. Record the actual Windows version,
-   CPU/ISA, GPUs and relevant driver/runtime versions. Verify `nvidia-smi.exe` when NVIDIA hardware is
-   present; validate the selected driver/header/toolkit combination rather than a universal minimum.
-2. `git lfs pull`; verify archives under `third_party/sources` are real tarballs (not LFS pointers).
-3. Stage the selected Linux CUDA toolkit-only package and compatible `-ccbin` (12.4 plus gcc13 is
-   an initial candidate). Check `nvcc --version` and a small `nvcc -ptx -ccbin <compiler> test.cu`
-   compile. Do not install a Linux GPU driver.
-4. Obtain and pin the MinGW toolchain (initially LLVM-MinGW UCRT, with version and sha256). Stage
-   missing profiles or binaries for the PoC; add registry/store support as implementation work.
-5. Stage host tools (nasm/yasm, cmake, meson, ninja, pkg-config, perl), the selected Rust target std,
-   `cargo-c` and required crates. Verify the selected C/C++/Rust runtimes and linker together.
-6. Use Windows interop for actual-host runtime checks. Wine may assist software smoke tests but does
-   not establish Windows GPU acceptance.
-7. Baseline: `pip install -e .`; `pytest tests/` green before starting.
-
-## 7. Test and implementation plan
-
-Each phase ends with a **gate** and records the selected host/build identity, inputs, logs and
-results. A PoC asks whether WSL + MinGW can produce the required capability for this host and
-coherent configuration. A missing registry entry, builder, toolchain, SDK or adapter is a
-**blocked implementation/provisioning task**: add reasonable support and retry, not an
-architectural failure.
-
-Record build support separately from runtime results. For each capability, runtime status is
-`passed`, `failed`, or `not runtime-validated` with a reason (for example no matching GPU or the
-present GPU lacks that feature). This is an acceptance report, not a change to `ComponentStatus`.
-Absent hardware is not a runtime pass or an architectural failure. If applicable hardware is
-present, failure to run an expected selected feature is a failure to investigate. A later material
-host change legitimately starts a new probe/build/acceptance cycle.
-
-### Phase 0 - Baseline and toolchain smoke (Gate G0)
-
-- `pytest tests/`, `black --check .`, mypy baseline green.
-- Record the current host state and an explicit, coherent initial FFmpeg/driver/SDK/toolchain
-  combination. A manual or provisional probe is acceptable here; do not assume the eventual
-  registry and backend are already implemented.
-- Manual smoke with the chosen mingw toolchain: compile a hello-world C and C++ to `.exe`, run it from WSL
-  via interop; link a small program using `-fopenmp`; check `file`/`objdump -p` for UCRT imports.
-- G0 pass: the executable runs on the actual Windows host, OpenMP works, and the inputs/toolchain
-  and relevant host state are recorded.
-
-### Phase 0A - Early GPU and ABI feasibility (Gate G0A)
-
-- In an isolated PoC prefix, link/run a representative C++ static library and a Rust static library
-  with the chosen MinGW/UCRT toolchain and runtime. Exercise the selected OpenMP runtime. Validate
-  host-specific CPU flags on the Windows host without weakening them for cross-host portability.
-- Cross-build a minimal FFmpeg for the selected version with NVIDIA encode/decode, CUDA filters,
-  Vulkan filters and OpenCL enabled as required. Exercise NVCC-generated PTX or the LLVM alternative,
-  the target Windows loader/import path, and version-specific shader compilation. Add or stage
-  missing prerequisites and adapters as needed; do not build the full codec stack first.
-- Run the applicable NVIDIA, CUDA, Vulkan and OpenCL paths on the actual host; record unavailable
-  hardware as not runtime-validated. Check version-specific configure differences for both supported
-  FFmpeg versions, then extend the actual build matrix in later gates.
-- G0A pass: the selected combination produces the required early-PoC build features, the C++/Rust
-  ABI smoke tests pass, and all applicable real-host runtime tests pass. Missing hardware is reported
-  separately, not counted as a pass. Keep PoC artifacts isolated from later build identities.
-
-### Phase 1 - Windows probe and identity isolation (Gate G1)
-
-- Implement the fresh Windows probe and explicit overrides (4.5); integrate the relevant values
-  and resolved build inputs with build identity and workspace/resume isolation (4.7).
-- Tests: NVIDIA, Intel, AMD, no GPU and multi-GPU fixtures; interop disabled/timeout/invalid JSON;
-  same-identity resume, changed hardware/driver/toolchain/component/configuration, drift before
-  acceptance, legacy or unknown identity, stale artifacts, `system` statuses and custom workspaces.
-- G1 pass: the actual host is probed or supplied explicit sufficient overrides; compatible resume
-  works and an incompatible or unknown identity cannot reuse prior completion state or artifacts.
-
-### Phase 2 - Toolchain registry and store (Gate G2)
-
-- Add the selected MinGW profile(s), target tools, FFmpeg/platform profiles, CUDA host-compiler
-  mappings, SDK/header/import-library inputs and Rust target support to the registries/store.
-- Test parsing, materialization, checksums and offline provisioning, including `cargo-c`, target std
-  and the required crate sources. Extend existing recipes/store behavior where needed.
-- G2 pass: the selected coherent toolchain and dependency inputs can be provisioned offline from
-  staged sources in a clean environment; missing inputs produce explicit actionable failures.
-
-### Phase 3 - Backend and platform strategy (Gate G3)
-
-- Add `linux-cross-mingw` backend (detect + config selection), `platforms/linux_cross_mingw.py`
-  (cross `CC/CXX/AR/...`, identity-specific target prefix, target pkg-config, no MSYS path munging),
-  resolver wiring, cmake toolchain file + meson cross file generators.
-- Replace `_is_windows_ucrt64_backend()` uses with capability predicates; separate host tools from
-  target libraries and avoid silently skipping required components for missing host hardware/tools.
-- Tests: resolver selection, env/flag generation, generated cross files, target/host isolation,
-  explicit missing-support failures and native-backend regression/identity safety.
-- G3 pass: dry-run lines and environments are correct for core components; existing behavior remains
-  intact apart from the tested identity-safety change.
-
-### Phase 4 - Core stack cross-build PoC (Gate G4)
-
-Build order (stop at first failure and fix before continuing): zlib -> x264 -> x265 -> dav1d -> svtav1 ->
-opus/ogg/vorbis/lame -> libvpx -> libwebp/png/tiff -> freetype/zimg/soxr -> openssl (and/or gnutls) ->
-rav1e/cargo-c -> libvmaf -> srt/zmq -> `ffmpeg` (software only first).
-
-- Verify executables/DLLs are Windows PE and static libraries contain Windows COFF objects; `.pc`
-  files must point to the target prefix and no host (Linux) libraries may leak into the link.
-- G4 pass: `ffmpeg.exe` software build runs on Windows: `ffmpeg.exe -version`, `-encoders`, an x264/x265/
-  SVT-AV1/dav1d round-trip, `ffprobe.exe`; outputs remain isolated to the selected identity.
-
-### Phase 5 - Hardware acceleration matrix (Gate G5)
-
-Complete the required build features in small slices, extending the early PoC and provisioning
-missing registry/build support as necessary:
-
-1. `nv-codec` headers: `--enable-ffnvcodec/nvenc/nvdec/cuvid`.
-2. `opencl-headers` + `opencl-icd-loader`: `--enable-opencl`.
-3. `onevpl`/`libvpl`: `--enable-libvpl`; `amf` headers: `--enable-amf` (registry change: amf is Linux-only today).
-4. `d3d11va`, `dxva2`, `d3d12va` (check header/FFmpeg support).
-5. `vulkan-headers` and the selected version's shader tooling: `--enable-vulkan`; then `libplacebo`.
-   Add a target import library or loader component only if the selected combination needs it.
-6. CUDA filters: nvcc path per 4.3 (`--enable-cuda-nvcc`), fallback `--enable-cuda-llvm`.
-
-Resolve an explicit expected feature matrix from registry/configuration for the selected FFmpeg
-version, including the required encoders, decoders, accelerators, filters and relevant
-codecs/profiles. Define it independently of which GPUs are currently present. Assert each required
-item's build presence **individually**; an OR-pattern match for one item does not establish the
-others. Examples on the built binary (run from WSL via interop):
-
-```
-ffmpeg.exe -hide_banner -hwaccels
-ffmpeg.exe -hide_banner -encoders | grep -w h264_nvenc
-ffmpeg.exe -hide_banner -encoders | grep -w h264_qsv
-ffmpeg.exe -hide_banner -encoders | grep -w h264_amf
-ffmpeg.exe -hide_banner -decoders | grep -w h264_cuvid
-ffmpeg.exe -hide_banner -decoders | grep -w h264_qsv
-ffmpeg.exe -hide_banner -filters  | grep -w scale_cuda
-ffmpeg.exe -hide_banner -filters  | grep -w scale_vulkan
-ffmpeg.exe -hide_banner -filters  | grep -w unsharp_opencl
-ffmpeg.exe -hide_banner -filters  | grep -w libplacebo
-```
-
-Check each expected `-hwaccels` entry individually as well. Expand the assertions to the complete
-registry/configuration-defined set and selected FFmpeg version; these examples alone are not the
-full matrix.
-
-Runtime acceptance is **host-specific**: for each actual GPU and feature it supports, select the
-device explicitly, use a suitable generated/provided input and verify the resulting output and logs
-show hardware execution rather than a software fallback. Illustrative commands, to adapt and verify
-on the real host, include:
-
-```
-ffmpeg.exe -init_hw_device cuda=cu    -f lavfi -i testsrc2 -frames:v 60 -c:v h264_nvenc  out_nvenc.mp4
-ffmpeg.exe -init_hw_device vulkan=vk  -f lavfi -i testsrc2 -frames:v 60 -vf "hwupload,scale_vulkan=w=1280:h=720,hwdownload,format=nv12" -f null -
-ffmpeg.exe -init_hw_device opencl=ocl -f lavfi -i testsrc2 -frames:v 60 -vf "hwupload,unsharp_opencl,hwdownload,format=yuv420p" -f null -
-ffmpeg.exe -hwaccel cuda -hwaccel_output_format cuda -i sample.mp4 -vf scale_cuda=1280:720 -c:v hevc_nvenc out_cuda.mp4
-ffmpeg.exe -init_hw_device qsv=hw -f lavfi -i testsrc2 -frames:v 60 -c:v h264_qsv out_qsv.mp4     # if Intel GPU present
-ffmpeg.exe -f lavfi -i testsrc2 -frames:v 60 -c:v h264_amf out_amf.mp4                            # if supported AMD GPU present
-ffmpeg.exe -init_hw_device d3d11va -hwaccel d3d11va -i sample.mp4 -f null -
-ffmpeg.exe -hwaccel d3d12va -i sample.mp4 -f null -                                               # if host supports D3D12VA
-ffmpeg.exe -init_hw_device vulkan -i sample.mp4 -vf "libplacebo=w=1920:h=1080" -f null -
-```
-
-- Report build support and runtime status separately for NVENC/NVDEC/CUVID, QSV, AMF, D3D11VA,
-  DXVA2, D3D12VA, Vulkan, OpenCL, CUDA and libplacebo as applicable, including selected
-  codecs/profiles, GPU and driver. No matching GPU or hardware feature means **not
-  runtime-validated**, never passed. Do not require hardware absent from this host merely to pass
-  the host-applicable runtime gate.
-- G5 pass: every required configured capability is present in the build, and all runtime tests
-  applicable to this host pass. The report retains explicit unvalidated entries for absent or
-  unsupported hardware; no claim is made about a materially changed host.
-- If an applicable feature fails, add reasonable support and test alternatives such as the LLVM CUDA
-  path or an appropriate Vulkan import library. Escalate only if an actual architectural limitation
-  remains after that work, not merely because a loader/tool/profile is currently missing.
-
-### Phase 6 - Packaging (Gate G6)
-
-- Windows bundle in `release_bundle.py`: prefer static codec libraries where appropriate; collect
-  required toolchain runtime DLLs and record the actual host's required Windows/GPU drivers and
-  loaders. Verify on this Windows host with a controlled PATH that does not depend on MSYS2/WSL.
-  Inspect imports with `objdump -p`/`llvm-objdump` and run the applicable features: libraries loaded
-  dynamically may not appear in the import table.
-- Optional: generate MSVC-compatible import libs (`gendef` + `llvm-dlltool`) for shared builds.
-- G6 pass: the bundle runs from its intended location on the same host with its recorded runtime
-  dependencies. No clean-machine or cross-host portability requirement is implied.
-
-### Phase 7 - Full set, regression, docs (Gate G7)
-
-- Full component set cross-build in the identity-specific workspace; resume after interruption
-  (`build_state.json`); log files under that workspace's `logs/<component>_<step>.log`.
-- Regression: Linux native, WSL2 native Linux, macOS and UCRT64 paths preserve intended behavior;
-  test the explicit identity-safety change, full unit suite, black and mypy baseline.
-- Docs: `DeveloperReadme.md`, `README.md`, `CHANGELOG.md`; deprecation note for MSYS2-UCRT64.
-- G7 pass: full stack builds from an isolated workspace for the recorded real-host identity;
-  configured build features and applicable host acceptance pass, with unavailable hardware recorded
-  as not runtime-validated. A material state change starts a new build/acceptance cycle.
-
-### Unit test inventory (to add)
-
-- Registry/toolchain: mingw profile parsing, CUDA/version mappings, checksum verification and
-  complete offline provisioning including Rust target std, `cargo-c` and crates.
-- Platform: resolver chooses `linux-cross-mingw`; env, cross-file and toolchain-file generation; no MSYS
-  path munging in cross mode; Linux/UCRT64/macOS regressions.
-- Identity/workspace: same identity resumes; changed relevant state, unknown/legacy identity and
-  custom workspace cannot reuse stale completion, system decisions, prefixes or build trees.
-- Components: required hwaccel components remain selected without their hardware; missing tools
-  produce an explicit provisioning failure; version-specific FFmpeg flags and independent
-  capability assertions.
-- Probe: parsing, fresh state, explicit overrides and failure modes (see Phase 1).
-- CUDA: selected coherent header/driver/toolkit/compiler/GPU combinations, NVCC/LLVM path and
-  explicit nonfree choice; mock probes without assuming absent mappings are architectural failures.
-
-## 8. Open questions and risks
-
-| # | Item | Impact | Action |
-|---|------|--------|--------|
-| 1 | Neural-network backend not chosen | An MSVC-only C++ API may have no directly compatible MinGW ABI | Select the actual FFmpeg/backend combination; investigate supported C APIs or reasonable wrappers before considering Variant 2. |
-| 2 | LLVM-MinGW/UCRT, C++ and Rust runtime compatibility | Cross-linked static dependencies may fail or use incompatible runtimes | Test `windows-gnullvm`, toolchain-selected C++ runtime, OpenMP and representative libraries in G0A. |
-| 3 | CUDA toolkit, host compiler, Windows driver, headers and GPU combination | NVCC/PTX or NVENC may not work for the selected host | Probe/select a coherent combination and test in G0A; add missing mappings/versions and rebuild after relevant changes. |
-| 4 | Vulkan loading and shader compilation | FFmpeg/libplacebo may have different link and compiler needs | Test actual host loader, import libraries and version-specific shader paths in G0A; add required support rather than assuming a loader build is mandatory. |
-| 5 | D3D12VA headers and runtime | Missing configured decoder or unvalidated host support | Add a suitable SDK/toolchain profile; test build support and runtime only where hardware supports it. |
-| 6 | Where are the "CUDA 12.x gcc 12/13 patches"? | Reuse assumption | Maintainer to point to location; missing patches/mappings alone are implementation work. |
-| 7 | Host CPU optimization from WSL | Selected compiler's native flags may not reflect Windows-usable ISA | Verify actual-host execution; derive host-specific flags if needed, without optimizing for portability. |
-| 8 | Identity and legacy workspaces | Stale state or installed files could cross build identities | Implement the guard/isolation in G1; block unsafe reuse with an explicit explanation. |
-| 9 | Offline Rust/tool/SDK inputs | On-demand Cargo downloads or missing target std block offline builds | Stage the selected dependency closure and add store support; verify G2 with networking disabled. |
-| 10 | NVCC nonfree policy | NVCC requires explicit nonfree enablement and FFmpeg labels the result unredistributable | Make it a deliberate configuration choice; evaluate the complete selected dependency set. |
-| 11 | Interop disabled/unavailable | Target state is unknown | Fail clearly or accept explicit sufficient overrides; do not silently reuse unknown identity. |
-
-Escalation rule: investigate and add reasonable registry/store, toolchain, SDK, builder, probe and
-adapter support first. Escalate an affected feature to Variant 2 only when a fundamental ABI/platform
-limitation remains for the selected host/configuration. Missing hardware is reported as not
-runtime-validated; it is not proof of architectural failure or a requirement to support a future
-hardware change without rebuilding.
+# Windows FFmpeg cross-build strategy
+
+**Status:** implementation plan for G1-G7. G0/G0A feasibility is complete for
+the scoped host and early-PoC feature set. This consolidation does not start G1
+or any later implementation gate. The production `linux-cross-mingw` backend
+and full component stack are not implemented.
+
+This plan distinguishes **verified results**, **project requirements**,
+**repository facts**, **unverified items**, and **implementation work**.
+Verification is scoped to the exact host/configuration recorded below; it is
+not a portability claim. Status labels are `[VERIFIED <gate>]`,
+`[REQUIREMENT]`, `[REPO]`, `[UNVERIFIED]`, and `[IMPLEMENTATION]`.
+
+## 1. Decision register
+
+| Decision | Status and evidence | Implementation consequence | Caveat |
+|---|---|---|---|
+| Variant 1, WSL Linux to Windows with LLVM-MinGW/UCRT, is selected for implementation. | [VERIFIED G0-G0A.5] Each early-PoC gate completed on the host below; FFmpeg 9.0 integrated the required early NVIDIA/CUDA/Vulkan/OpenCL paths. | Implement `linux-cross-mingw`; do not rerun feasibility per component. | Full dependency stack, hardware matrix, and package are not complete. |
+| The physical Windows machine running WSL is the target; WSL is the controlled build environment. | [REQUIREMENT] Maintainer decision; [VERIFIED G0] Windows interop executed the PoCs. | Probe Windows target state separately from Linux build-host tools. Optimize for this host, not arbitrary Windows machines. | A material host change can require rebuild and new acceptance. |
+| LLVM-MinGW UCRT is the initial cross toolchain. | [VERIFIED G0-G0A.5] LLVM-MinGW 20261104, Clang/LLD 23.1.5, Windows PE execution and actual UCRT loading. | Pin and validate toolchain identity, target triple, and runtime. | Does not establish compatibility with every library or toolchain revision. |
+| C++ and Rust communicate through a C ABI. | [VERIFIED G0A.1] The mixed C/C++/Rust tests passed in both linking directions and in one executable. | Use fixed-layout C interfaces and caller-owned buffers; contain exceptions and panics. | No arbitrary C++/Rust ABI or cross-boundary unwinding is supported. |
+| Rust uses `x86_64-pc-windows-gnullvm` with the matching target standard library. | [VERIFIED G0A.1] Rust 1.99.0 target-std was installed to an isolated PoC sysroot and linked with LLVM-MinGW. | Provision and version the target std alongside its compiler. | PoC provisioning is not the production store implementation. |
+| CPU specialization comes from effective Windows-host capability. | [VERIFIED G0A.2/G0A.5] Windows CPUID/OS-state data and compiler resolution were compared; specialized executables ran on this host. | Derive or validate target flags from fresh Windows capabilities and selected compiler. | Do not hard-code the observed CPU flag string or assume a model name determines effective ISA. |
+| CUDA uses Linux NVCC to emit PTX for the Windows NVIDIA driver. | [VERIFIED G0A.3/G0A.5] CUDA 12.4.99 generated compute_70 PTX; Windows driver JIT/kernel and FFmpeg CUDA-filter execution passed. | Select NVCC, host compiler (`-ccbin`), and target architecture explicitly. | Tested on TITAN V (CC 7.0), one driver/toolkit combination. |
+| CUDA host compiler selection is explicit. | [VERIFIED G0A.3/G0A.5] Project/store GCC 12.5.0 was passed as `-ccbin`; ambient GCC 15 was not used. | Version, validate, configure, and include effective `-ccbin` in identity. | Do not switch system GCC or use global alternatives. |
+| CUDA and Vulkan SDKs are prepared WSL prerequisites under `/opt`. | [MAINTAINER DECISION; current paths/version checked] CUDA `/opt/cuda-12.4`; Vulkan root `/opt/vulkan-sdk/1.4.363.1`, effective Linux root `/opt/vulkan-sdk/1.4.363.1/x86_64`. | Resolve configured paths, validate versions/tools, and fail clearly if invalid. | These are not target-prefix contents or automatically project-managed components. |
+| The Windows Vulkan runtime uses the system loader and vendor ICD. | [VERIFIED G0A.4/G0A.5] Windows `vulkan-1.dll` discovered the NVIDIA ICD/device and ran compute and FFmpeg filter work. | Do not build or bundle a Vulkan loader by default; isolate target discovery. | Future dependencies may require an import interface. |
+| The Windows OpenCL runtime uses the system dispatcher and vendor platforms. | [VERIFIED G0A.4/G0A.5] Windows `OpenCL.dll` exposed two platforms; the NVIDIA TITAN V program and FFmpeg filter dispatched successfully. | Do not treat the dispatcher as an implementation or bundle a separate ICD loader by default. | Probe/select a platform and device explicitly; platform inventory is host-specific. |
+| Static C++ dependencies must carry their runtime requirements through metadata. | [VERIFIED G0A.5 Phase B] Static libplacebo objects needed libc++/libunwind flags at FFmpeg's final C-link invocation; the PoC repaired isolated pkg-config metadata. | Production dependency metadata/link composition must express those requirements transitively. | Do not copy the PoC metadata edit as a production recipe. |
+| Target-scoped discovery is mandatory. | [REQUIREMENT; verified in PoC isolation] Target pkg-config/CMake/Meson lookup must not consume Linux SDK/library paths. | Build isolated cross files and environment; keep host tools explicit. | PoC paths and temporary metadata are not production inputs. |
+| Build identity protects artifacts and resume state. | [REQUIREMENT; repository behavior is insufficient today] `build_id` is a UUID, not a host/input comparison; see §6. | G1 must compare identity before resume or artifact reuse. | Decide representation during G1; this plan does not prescribe a hash format. |
+| Capability policy is separate from present hardware. | [REQUIREMENT] Config/registry define required build capabilities; host inventory specializes and validates. | Missing host hardware cannot silently remove required build features. | Runtime acceptance is only required for host-present/supported hardware. |
+| PoC outputs are evidence only. | [REQUIREMENT] G0/G0A/E0 outputs are outside production workspace/store. | Production tests must reproduce behavior independently. | Never silently import PoC binaries, `.pc` files, import libraries, or DLL copies. |
+
+## 2. Scope, host, and verified outcome
+
+### 2.1 Tested configuration
+
+The results below apply to this one configuration, not to other Windows PCs:
+
+- Physical target: Windows 11 Pro for Workstations 25H2, build 10.0.26200.9711.
+- WSL build host: Ubuntu 26.04.1 LTS, WSL 3.0.3.0, WSL2 kernel 6.18.54.1-1.
+- CPU: Intel Core i9-7980XE. Windows reported AVX2 and AVX-512 feature/state
+  support; G0A.2 separately compared actual Windows effective features with
+  LLVM-MinGW compiler target resolution.
+- GPU: NVIDIA TITAN V, compute capability 7.0, NVIDIA Windows driver 581.57.
+- LLVM-MinGW: 20261104 UCRT archive, SHA-256
+  `919380403de87dca3c581c2053230cd298af5e891286628ba0613b7fed370926`;
+  Clang/Clang++ and LLD 23.1.5, target `x86_64-w64-windows-gnu`.
+- C++ runtime: LLVM libc++ and libunwind. The test processes loaded the
+  selected DLLs from their isolated PoC directories. Windows loaded
+  `C:\WINDOWS\System32\ucrtbase.dll`.
+- Rust: 1.99.0 with `x86_64-pc-windows-gnullvm` target std provisioned into an
+  isolated PoC sysroot.
+- FFmpeg: source 9.0, archive SHA-256
+  `d97647ace36a307f17ba2bca052d68937487bed8682e1eb9b6737076a9c442b7`.
+- CUDA: Linux NVCC 12.4.99 and project/store GCC 12.5.0 as `-ccbin`;
+  compute_70 PTX. No Linux NVIDIA driver was installed or used.
+- Vulkan/OpenCL: tested through the installed Windows runtime and NVIDIA
+  driver; separate WSL SDK provisioning is specified in §4.
+
+The CPU, GPU, OS build, loader versions, and exact tool versions above are
+observations, not defaults for other hosts. See §5 for what belongs in build
+identity versus diagnostics.
+
+### 2.2 Gate results
+
+| Gate | Result actually established | Evidence |
+|---|---|---|
+| G0 | LLVM-MinGW built Windows PE C and C++ programs, OpenMP program, and all ran through Windows interop. The processes loaded UCRT; libc++/libunwind and libomp DLL paths were observed. OpenMP reported four workers. | `files/g0/G0-report.md`, final G0 addendum and logs. |
+| G0A.1 | C-compatible boundary passed with C, LLVM-MinGW C++ static library, and Rust static library. Both mixed link directions and combined program ran on Windows. C++ exceptions and Rust panic were caught inside their respective exported functions and returned as status; no unwind crossed the C ABI. | `files/g0a1/G0A1-report.md`, `files/g0a1/ABI.md`, logs. |
+| G0A.2 | On this host/toolchain, `-march=native` resolution and tested explicit specialization resolved to usable host features; Windows CPUID and OS-enabled vector state were inspected. Generic/model-only and explicit/native cases were compared. | `files/g0a2/logs/compiler-native-resolution.txt`, `explicit-host-resolution.txt`, `windows-cpuid-runtime.txt`, build/disassembly logs. |
+| G0A.3 | Linux NVCC generated compute_70 PTX with selected GCC 12.5 `-ccbin`; a Windows PE harness loaded the Windows CUDA Driver API, JIT-compiled PTX, dispatched a kernel, validated output, and exited successfully on TITAN V. A separate Windows codec probe exercised NVIDIA runtime APIs. | `files/g0a3/logs/nvcc-ptx-build-no-gnu-source.txt`, `cuda-driver-harness-runtime.txt`, `nvidia-codec-probe-runtime.txt`, PTX hash. The companion `nvcc-ptx-build.txt` captures the declaration-conflict failure without `-U_GNU_SOURCE`. |
+| G0A.4 | Windows PE Vulkan and OpenCL programs ran compute work on the NVIDIA TITAN V through installed Windows loaders/dispatcher and vendor driver. Shader compile/SPIR-V validation and Windows runtime discovery were recorded. | `files/g0a4/logs/vulkan-runtime.txt`, `opencl-runtime.txt`, imports and Windows inventory. |
+| G0A.5 core | Actual FFmpeg 9.0 Windows binaries configured and built with NVENC, NVDEC/CUVID, CUDA NVCC filters, Vulkan filters, and OpenCL filters. On the physical host, NVENC encoded, CUVID/NVDEC decoded, and CUDA, Vulkan, and OpenCL filters ran. `ffmpeg.exe`/`ffprobe.exe` executed via interop. Inspected final executables are PE32+ and their imports contain Windows DLLs (including UCRT API sets and `OpenCL.dll`), with no Linux `.so` import. | `files/g0a5/logs/configured-feature-summary.txt`, `final-host-feature-lists.txt`, `nvenc-encode-final.log`, `nvdec-decode-nv12.log`, `cuda-filter-yuv420p.log`, `vulkan-filter.log`, `opencl-filter.log`; final PoC binaries inspected read-only. |
+| G0A.5 Phase B | A static libplacebo/glslang FFmpeg 9.0 variant was linked and run; `libplacebo` initialized the TITAN V Vulkan device and processed frames. Its static C++ runtime link requirements were identified. | `files/g0a5/logs/libplacebo-phase-b-build-retry.log`, `libplacebo-filter-vulkan.log`, host-run-libplacebo artifacts and configure/build logs. |
+
+### 2.3 What these results do not prove
+
+- They do not prove arbitrary C++/Rust ABI compatibility, cross-boundary
+  exception/panic unwinding, all compiler/runtime combinations, or portable
+  CPU targeting.
+- They do not prove the full configured software component stack, every
+  hardware backend, clean-machine package behavior, or offline provisioning
+  closure.
+- They do not establish QSV, AMF, D3D11VA, DXVA2, D3D12VA, neural-network
+  backends, or AV1 hardware decode on this host. For these, record build
+  presence, runtime acceptance, and unavailable/unsupported hardware
+  separately; do not infer success from the early PoCs.
+- G0A.5 is an early feature-slice build, not a production or full-feature
+  FFmpeg distribution. Some tests used deliberately small generated media.
+- The final PoC PE import inspection did not show Linux `.so` dependencies;
+  this is not a full-prefix scan or proof that dynamically loaded runtime
+  modules are discoverable from the import table.
+- A loader/runtime route proven for these FFmpeg dependencies does not prove
+  that every future dependency has the same import or dynamic-loading needs.
+- No result implies that success on this host transfers to a different
+  Windows host or a materially changed driver/runtime.
+
+## 3. Variants and project requirements
+
+### 3.1 Variant decision
+
+**Variant 1 (selected):** WSL Linux build tools + LLVM-MinGW cross toolchain,
+Windows UCRT target, physical Windows host as runtime target. Its early
+feasibility is established for §2.1. The remaining work is production
+implementation, full-stack integration, hardware-matrix validation, identity
+safety, and packaging—not a repeat of the early ABI/GPU feasibility exercise.
+
+**Variant 2 (retained):** native Windows/MSVC. It is not selected. Revisit only
+if a real required dependency exposes an unavoidable MSVC-only ABI/platform
+surface that cannot be handled through a supported C ABI, import interface, or
+reasonable adapter. Do not switch because a registry entry, toolchain recipe,
+or component adapter has not yet been implemented.
+
+**Variant 3 (retained):** native Windows oneAPI/ICX. It adds the MSVC ABI and
+Visual Studio/Windows SDK dependency. Revisit only for a measured requirement,
+not as a presumed way to complete Variant 1.
+
+### 3.2 Requirements
+
+- Registry/configuration declares the required feature set. Missing hardware
+  must not silently remove configured capabilities.
+- Probe actual Windows state for target specialization and runtime acceptance;
+  do not infer it from WSL's Linux view.
+- A changed material host or effective build input must not reuse incompatible
+  completion state, mutable build trees, target prefixes, or installed
+  artifacts.
+- Keep project-managed source/toolchain provisioning offline-first. SDK
+  prerequisites owned by the WSL environment are validated, not implicitly
+  installed or modified.
+- Keep `windows-msys2-ucrt64` and `linux-wsl2` distinct from the new backend.
+  Preserve current backend behavior except for intentional, tested identity
+  safety changes.
+- Keep MSYS2-UCRT64 deprecated: do not extend it or remove it before Variant 1
+  reaches component parity; keep its documentation status consistent.
+- Preserve `ComponentStatus` values, pass `detail=` for transitions, and
+  report failures using repository `BuildError` conventions.
+
+### 3.3 Repository facts to account for [REPO]
+
+The repository currently has native Linux/WSL and MSYS2-UCRT64 strategies, not
+`linux-cross-mingw`. `builder.py` has UCRT64-specific branches; do not reuse
+MSYS path rewriting in the Linux cross backend. `state.py` persists a UUID
+`build_id`, configuration, and component statuses; it does not compare a fresh
+Windows/build identity before reuse. Workspaces are version-oriented, and a
+state reset alone does not isolate an existing prefix.
+
+The existing CUDA detector/store contains `nvcc_ccbin` and version mappings,
+but the selected CUDA 12.4 / GCC 12.5 combination and Windows target behavior
+need explicit backend support. Existing FFmpeg configuration is not the
+production cross-build implementation. Extend declarative component and
+toolchain metadata rather than scattering component-specific policy.
+
+## 4. Build-host and target ownership
+
+### Layer A — prepared WSL build-host environment
+
+Linux-native tools and prerequisites: Ubuntu 26.04.1 WSL; CMake, Meson, Ninja,
+pkg-config, NASM/Yasm, Perl/Python and other explicitly selected host tools;
+CUDA SDK `/opt/cuda-12.4`; Vulkan SDK root
+`/opt/vulkan-sdk/1.4.363.1`, effective Linux SDK root
+`/opt/vulkan-sdk/1.4.363.1/x86_64`. The selected environment currently reports
+NVCC 12.4.99, GCC 12.5.0 from the project store, glslang 16.6.0 and
+SPIRV-Tools 2026.4. The ambient Ubuntu compiler is GCC 15; it is not the
+CUDA 12.4 host compiler.
+
+CUDA/Vulkan SDKs are versioned **WSL prerequisites**, not Windows target-prefix
+contents, and not automatically provisioned project-store components. The
+backend must resolve an explicit configured path (with documented overrides),
+validate the selected version and required tools/capabilities, record effective
+path/version when material, and fail with an actionable diagnostic if missing
+or incompatible. Do not install system SDKs, mutate `/opt`, install a Linux
+NVIDIA driver, or select the first matching `nvcc`/Vulkan tool on ambient PATH.
+
+It is acceptable for the WSL environment to define `CUDA_HOME`, `CUDA_PATH`,
+`VULKAN_SDK`, and PATH additions to explicitly selected SDK binaries. LunarG
+`setup-env.sh` changes `LD_LIBRARY_PATH`, `VK_ADD_LAYER_PATH`,
+`PKG_CONFIG_PATH`, and `CMAKE_PREFIX_PATH`; activate those full changes only
+for intentional native WSL Vulkan work. They must not implicitly enter
+Windows-target dependency discovery. The installed Vulkan SDK supplies the
+shader/SPIR-V tools used in the tested environment; do not require duplicate
+Ubuntu shader packages for that same SDK. Revalidate this for future SDK
+versions.
+
+CUDA 12.4's reconstructed runfile payload was reported as an environment
+provisioning artifact, not a target component. The retained evidence has the
+original NVIDIA runfile hash and G0A.3 component/PTX logs, but does **not**
+contain the E0.1 reconstructed archive's manifest and archive hash. Therefore
+the reconstruction hash, full deterministic-rebuild comparison, and
+manifest/file-hash/symlink/pkg-config checks are not independently verified
+from the retained files in this consolidation. Recover and retain the E0.1
+manifest before claiming those properties. The maintainer's reported cause
+was the legacy installer's unavailable legacy libxml2 ABI on Ubuntu 26.04;
+this is not evidence that CUDA 12.4 is vendor-supported on Ubuntu 26.04.
+
+The tested CUDA 12.4.99 PTX compile failed on a glibc declaration conflict
+without a workaround and passed with
+`-Xcompiler=-U_GNU_SOURCE`. Production must reproduce/classify the condition
+and apply a narrowly scoped validated workaround only to an affected
+configuration, or select another coherent supported environment/toolchain.
+Keep an effective workaround in build identity. Preserve original diagnostics.
+`--allow-unsupported-compiler` is not a compatibility test or a substitute.
+The exact E0.1 reconstruction artifact is `[UNVERIFIED]` from retained
+evidence: do not claim its archive hash, deterministic reconstruction,
+manifest/file-hash validation, symlink validation, or relocatable pkg-config
+validation until the E0.1 manifest/report is recovered. The original NVIDIA
+runfile SHA-256 `e6a842f4eca9490575cdb68b6b1bb78d47b95a897de48dee292c431892e57d17`
+and Vulkan SDK tarball SHA-256
+`b7867d8ca658563813af666f34b93db87f1b1c7d9d69d97e924c210c7ba33eb8` in the
+G0A.5 inventory are source-archive hashes, not the reconstructed CUDA archive
+hash.
+
+### Layer B — project-managed/versioned tools and inputs
+
+Project store/registries own the items the project selects and provisions:
+LLVM-MinGW; explicit GCC 12.5 `-ccbin` where project-managed; Rust compiler,
+matching target std and required Cargo/cargo-c inputs; component sources and
+patches; target headers; nv-codec headers; project-pinned OpenCL/Vulkan target
+headers/interfaces where needed; import-library generation recipes and
+outputs; shader/component sources; and target dependency metadata. Keep
+network access opt-in for these artifacts and give missing-source failures
+different diagnostics from missing prepared WSL SDK prerequisites.
+
+### Layer C — Windows target prefix and build graph
+
+Contains only Windows-target headers, objects, libraries, metadata, generated
+import libraries and artifacts for one build identity. Validate PE/COFF
+objects and archives. Target pkg-config/CMake/Meson lookup must be isolated
+from Linux SDK/library paths; use a target-only `PKG_CONFIG_LIBDIR`/wrapper and
+explicit cross files/toolchain file. Never let `/usr/lib`, WSL CUDA libraries,
+or Vulkan SDK native libraries satisfy a Windows target link.
+
+### Layer D — physical Windows runtime
+
+Examples: system UCRT and Windows DLLs; required packaged LLVM-MinGW runtime
+DLLs (including libc++/libunwind as required); NVIDIA Windows driver,
+`nvcuda.dll`, `nvEncodeAPI64.dll`, `nvcuvid.dll`; system `vulkan-1.dll` plus
+vendor ICD; system `OpenCL.dll` plus vendor ICD/platform. These are runtime
+dependencies, not WSL target libraries. Do not blindly copy system/driver
+graphics DLLs into a package.
+
+## 5. Runtime and build-input findings
+
+### 5.1 ABI and runtime contract
+
+Expose C-compatible fixed-width values and caller-owned buffers across
+language boundaries. C++ exceptions and Rust panics must be caught inside
+their language-specific implementation and returned as an error status; neither
+may unwind across the C ABI. The G0A.1 test also showed Rust static panic
+support and LLVM-MinGW shared libunwind coexisting for this contained-error
+contract.
+
+The actual UCRT path was observed despite Rust target/link diagnostics
+containing `-lmsvcrt`: tested PE imports used UCRT API sets and Windows loaded
+`ucrtbase.dll`. Do not generalize from the target spec or a link flag; inspect
+the actual effective runtime in production acceptance.
+
+### 5.2 CPU specialization
+
+G0A.2 used Windows CPU/OS state and compared compiler-native resolution,
+explicit flags, generic target and a model-only case. On this exact host and
+toolchain, compiler-native selection was validated by execution; a bare CPU
+model did not fully describe effective features. Windows-host capability is
+authoritative for target specialization. Cross-host portability is not the
+objective. The exact observed `skylake-avx512`/feature-flag string is evidence
+for that PoC only, not a backend policy. Production must validate every
+effective ISA feature against Windows-reported CPU and OS state.
+
+### 5.3 CUDA/NVIDIA
+
+G0A.3 proved Linux NVCC PTX generation for TITAN V / compute capability 7.0,
+Windows Driver API PTX JIT, and kernel output validation. G0A.5 then proved
+integrated FFmpeg 9.0 NVENC encode, NVDEC/CUVID H.264 decode, and CUDA filter
+execution on that same Windows host. NVIDIA API probing and the Windows driver
+are target-runtime concerns; Linux WSL CUDA libraries are not target inputs.
+
+The observed host/device/API support does not establish AV1 decode or any
+other untested codec on this GPU. Record each codec/profile capability
+independently. The driver/header combination tested is not a universal minimum.
+Keep FFmpeg's explicit `--enable-nonfree` decision visible when selecting
+NVCC; assess redistribution of the complete configured build separately.
+
+### 5.4 Vulkan
+
+Verified Windows runtime path:
+
+`Windows executable -> installed Windows vulkan-1.dll -> installed NVIDIA ICD -> selected physical TITAN V -> compute dispatch`
+
+The standalone G0A.4 PE dynamically resolved the system loader, and G0A.5's
+FFmpeg Vulkan filter ran on the selected TITAN V. A separately cross-built
+Vulkan Loader is not a default runtime prerequisite for this tested path.
+Still provide whatever target import interface a particular dependency
+actually requires; do not turn this result into a claim about all future
+dependencies.
+
+### 5.5 OpenCL
+
+Verified Windows runtime path:
+
+`Windows executable -> installed Windows OpenCL.dll -> vendor ICD/platform -> selected NVIDIA TITAN V -> program build and kernel dispatch`
+
+G0A.4 enumerated two platforms on this host (NVIDIA CUDA and Intel OpenCL);
+G0A.5 explicitly ran the FFmpeg OpenCL filter. Its target link used an
+OpenCL import interface for the system dispatcher; that is not a separately
+distributed ICD Loader or vendor implementation. A second ICD Loader is not
+a default runtime prerequisite for the tested path. Production probing must
+preserve platform/device identity and explicit selection.
+
+### 5.6 FFmpeg 9.0 and libplacebo
+
+G0A.5 used an actual Windows-target FFmpeg 9.0 configure/build, not standalone
+API probes alone. The core feature-slice binary reported `cuda`, `opencl`,
+`vulkan`, `h264_nvenc`, `h264_cuvid`, `scale_cuda`, `scale_vulkan`, and
+`unsharp_opencl`; Windows interop ran encode, decode, and filters. The
+configuration was intentionally minimal and is not the full project feature
+set.
+
+Phase B built and ran a separate FFmpeg 9.0 variant with static libplacebo
+and glslang; `libplacebo` initialized the Vulkan device and processed frames.
+Static libplacebo C++ objects required libc++/libunwind link flags to reach
+the final FFmpeg C linker invocation. The PoC solved this through isolated
+pkg-config metadata. Production must make target dependency metadata/link
+composition transitively express static C++ runtime requirements; do not
+prescribe or reuse that temporary `.pc` edit. The runtime test used copied
+`libc++.dll` and `libunwind.dll`, so package/runtime policy must include those
+DLLs when the production dependency graph remains dynamically dependent on
+them.
+
+## 6. Build identity and reuse policy
+
+Do not choose a final serialization or hash format here. G1 must define
+material inputs and comparison semantics.
+
+| Category | Examples | Why |
+|---|---|---|
+| Raw diagnostics | Full PowerShell/CIM dumps, all enumerated devices, compiler logs, unused tool versions, probe timestamps. | Useful for audit/troubleshooting; do not invalidate artifacts merely because incidental formatting/order changed. |
+| Effective build inputs | Target triple/ABI; LLVM-MinGW identity/hash; C/C++ runtime; Rust compiler and target std; FFmpeg/component source/version/hash and patches; configure features/options; CPU feature policy and effective flags; CUDA SDK/NVCC, explicit `-ccbin`, architecture and validated workaround state; nv-codec headers/API selection; Vulkan SDK/shader compiler/target environment; OpenCL/Vulkan target interfaces; generated import libraries and metadata; static C++ runtime requirements. | Material changes can change PE/COFF output or link behavior; do not reuse target artifacts across them. |
+| Runtime acceptance inputs | Windows build/UCRT where material; CPU/OS-enabled ISA; selected GPU and capabilities; NVIDIA driver/API; selected Vulkan ICD/device; OpenCL dispatcher/platform/device/driver. | A change may invalidate previous runtime acceptance or require a compatible rebuild even when source objects remain unchanged. |
+
+CPU-specialized binaries bind to the effective CPU/OS capability set. CUDA
+PTX, driver JIT, NVENC/NVDEC, Vulkan, and OpenCL acceptance bind to selected
+device/runtime state. Do not include an incidental value just because a PoC
+printed it; document why any field is build-material or acceptance-material.
+
+Before overwriting saved config, selecting resume point, trusting `completed`
+or `system`, or reusing an installed prefix/build tree, compare a fresh identity
+with the saved one. Unknown, corrupt, legacy, missing-probe, or incompatible
+identity must never be treated as a match. Preserve old data; start in an
+isolated identity-specific workspace/prefix or stop with an explicit
+diagnostic. Recheck runtime identity before acceptance. A state-file reset
+alone is insufficient.
+
+## 7. Production gates
+
+Every gate records inputs, configuration, commands, outputs, and pass/fail or
+not-validated runtime status. Existing PoC results establish architecture and
+acceptance techniques; PoC-built files are not reusable production artifacts.
+
+### G1 — Windows probe and identity isolation
+
+- **Scope / code:** Add a fresh Windows interop probe (module name may be
+  `windows_probe.py`), explicit overrides, identity model and guard before
+  resume/reuse. Integrate with `platform_detect.py`, `config.py`, `app.py`,
+  `state.py`, `builder.py` and workspace selection.
+- **Status:** [IMPLEMENTATION] No production probe or identity enforcement is
+  implemented by this consolidation.
+- **Probe contract:** Windows version/build; CPU model/signature plus effective
+  ISA and OS-enabled state; GPU inventory; NVIDIA model, compute capability,
+  driver, and NVENC/NVDEC/API information needed for selection/acceptance;
+  Vulkan loader, ICD and device; OpenCL dispatcher, platforms and devices;
+  later configured D3D/QSV/AMF data. Keep detailed dumps diagnostic-only
+  unless a field is material. Support explicit sufficient overrides.
+- **Failure behavior:** Interop disabled, failed, malformed, timed out, or
+  incomplete must not fall back to WSL target detection or silently reuse
+  unknown identity. Fail clearly unless an explicit sufficient override
+  satisfies the contract. Separate target capabilities from build-host tools.
+- **Tests:** Mock PowerShell/NVIDIA/loader inventories; no-GPU, multi-GPU and
+  multiple-OpenCL-platform cases; failures/overrides; changed OS/CPU/GPU/driver
+  and relevant runtime identity; same-identity resume; incompatible/legacy
+  state, stale files, custom workspace, status `system`, and state drift before
+  acceptance.
+- **Inputs/artifacts:** Interop enabled on the physical host, fixtures, old
+  and new state/prefixes; probe evidence and identity persisted with state.
+- **Pass:** fresh target identity is established or explicitly overridden;
+  same identity may resume; incompatible/unknown identity cannot reuse state
+  or mutable artifacts; diagnostics explain rejection.
+- **Non-goals:** No CUDA/Vulkan installation, build backend, full GPU matrix,
+  or final hash format.
+- **Reuse:** Reproduce Windows CPU, NVIDIA, Vulkan and OpenCL queries from
+  G0A.2-G0A.4; do not copy PoC probe output as production state.
+
+### G2 — registries, store, and prerequisite validation
+
+- **Scope / code:** Extend `toolchains.yaml`, `toolchain_registry.py`,
+  `toolchain_store.py`, `toolchain_builders.py`, component/source registries
+  and configuration for selected LLVM-MinGW, Rust target std, project-managed
+  GCC `-ccbin` if applicable, headers/interfaces, import-library recipes,
+  shader/component inputs and dependency metadata.
+- **Status:** [IMPLEMENTATION] G2 validates WSL SDK prerequisites; it does not
+  own or install those SDKs.
+- **SDK ownership:** Validate configured installed `/opt/cuda-12.4` and
+  `/opt/vulkan-sdk/1.4.363.1/x86_64`; do not install them or imply G2
+  provisioned them. Check tools, versions, paths and required capabilities.
+  Fail actionably on absent/mismatched SDK. Keep explicit overrides. Distinguish
+  a missing environment prerequisite from an absent offline project source.
+- **Tests:** Registry parsing, version resolution, checksums, target std
+  compatibility, `-ccbin` version check, SDK path/version/tool checks,
+  actionable missing-prerequisite/source errors, offline provisioning with
+  empty external caches and no unexpected PATH selection.
+- **Inputs/artifacts:** Maintainer-selected WSL SDK installations; pinned
+  project artifacts and licenses/checksums; project store archives, manifests,
+  installed tools and provenance.
+- **Pass:** selected project-managed closure provisions offline from staged
+  sources; prerequisite SDK checks use only explicit selected paths and fail
+  clearly when invalid.
+- **Non-goals:** SDK system installation, `/opt` mutation, Linux driver,
+  complete component stack.
+- **Reuse:** G0's toolchain archive identity; G0A.1's target-std requirement;
+  G0A.3/G0A.5's versioned GCC/NVCC pairing; G0A.4's shader tools. Do not
+  import isolated PoC archives or metadata as production without registry
+  verification. Recover E0.1 reconstruction manifest/hash before asserting
+  reproducible archive provenance.
+
+### G3 — `linux-cross-mingw` backend and platform strategy
+
+- **Scope / code:** Add backend selection and platform strategy, e.g.
+  `platforms/linux_cross_mingw.py`; resolver/config integration; explicit
+  host-native build tools; Windows target compilers; target prefix; target-only
+  pkg-config; CMake toolchain and Meson cross files; target runtime settings;
+  NVCC and explicit `-ccbin`; SDK host-tool paths; Windows-host-derived CPU
+  specialization; import-library/dynamic-loader strategy.
+- **Status:** [IMPLEMENTATION] The production backend is not implemented.
+- **Isolation:** No MSYS path rewriting. Do not reuse `windows-ucrt64` path
+  separators, shell wrapping, or package discovery. Keep host and target
+  compilers/tools distinct. Prevent Linux SDK/library paths from target
+  pkg-config, CMake and Meson.
+- **Link requirements:** Model libc++/libunwind and other static C++ runtime
+  needs transitively in target metadata/link composition. Handle Vulkan and
+  OpenCL target interfaces only where the actual dependency requires them.
+- **Tests:** Resolver and config; generated compiler/environment/target
+  prefix; pkg-config contamination rejection; generated CMake/Meson files;
+  explicit SDK/NVCC/`-ccbin`; native Linux, WSL Linux, and MSYS2 regressions.
+- **Inputs/artifacts:** G2-resolved compilers, tool metadata, target headers
+  and import interfaces; generated cross files and dry-run commands.
+- **Pass:** dry-run core commands use intended host tools and Windows target
+  tools; target lookups cannot resolve WSL libraries; unrelated backends
+  remain unchanged except tested identity safety.
+- **Non-goals:** Full dependency builds, G5 hardware matrix, package.
+- **Reuse:** G0A.5 configure/link behavior and libplacebo metadata lesson;
+  reimplement independently, with no PoC paths.
+
+### G4 — complete software dependency-stack cross-build
+
+- **Scope / code:** Add target support/adapters in existing component builders
+  and declarative registries for the complete configured software stack,
+  dependency order, static/shared choices and Rust/C++ runtime consistency.
+  Use the G3 architecture instead of treating every component as a new
+  feasibility gate.
+- **Tests:** Component-level build/configure tests, graph/order, metadata and
+  archive/object inspection; target pkg-config correctness; no Linux `.so` or
+  ELF leakage; PE/COFF checks; target executable smoke on physical Windows;
+  same-identity incremental/resume behavior.
+- **Inputs/artifacts:** Complete configured source/patch closure, toolchain,
+  host tools, target prefix and isolated mutable build trees.
+- **Pass:** Every configured software component builds for Windows, target
+  outputs contain no Linux libraries, and software FFmpeg/ffprobe execute on
+  Windows with representative software encode/decode tests.
+- **Non-goals:** Do not require unavailable hardware; no packaging or claim of
+  arbitrary-host support.
+- **Reuse:** G0A.1 ABI/runtime and G0A.5 target build techniques as test
+  designs, not build artifacts.
+
+### G5 — required hardware-feature matrix
+
+- **Scope / code:** Implement required CUDA/NVIDIA, Vulkan/libplacebo,
+  OpenCL, D3D11VA/DXVA2/D3D12VA, QSV/oneVPL, AMF and configured neural
+  backend support in component registry/builders and FFmpeg configuration.
+  Maintain separate assertions for each encoder, decoder, hwaccel, filter,
+  codec/profile and configured capability.
+- **Tests:** Build-presence assertions independent of hardware; per-device
+  runtime tests only for hardware present and feature-supported; verify
+  selected device and actual hardware execution, not software fallback.
+  Report `passed`, `failed`, `not runtime-validated (absent)`, and
+  `not runtime-validated (unsupported)` distinctly. Do not count unavailable
+  hardware as a pass and do not require absent hardware to validate.
+- **Inputs/artifacts:** G1 device/runtime probe, G2 headers/SDK prerequisites,
+  feature config, explicit expected matrix and suitable test media; acceptance
+  report tied to runtime identity.
+- **Pass:** All configured build features are independently present; all
+  host-applicable runtime tests pass; absent/unsupported hardware remains
+  explicitly unvalidated.
+- **Non-goals:** Do not silently drop configured capabilities or report an
+  unsupported capability as a successful runtime test.
+- **Reuse:** G0A.3 CUDA/PTX/JIT, G0A.4 Vulkan/OpenCL loaders, G0A.5 FFmpeg
+  NVIDIA/CUDA/Vulkan/OpenCL/libplacebo execution techniques. Rebuild and run
+  production acceptance tests; never reuse PoC binaries.
+
+### G6 — Windows packaging and runtime policy
+
+- **Scope / code:** Extend `release_bundle.py` and package metadata for the
+  produced Windows binaries. Inspect PE imports and dynamically loaded
+  dependencies; classify UCRT/system Windows DLLs, LLVM-MinGW runtime DLLs,
+  libc++/libunwind where required, and Windows graphics/GPU driver runtimes.
+- **Tests:** Controlled PATH launch independent of MSYS2/WSL; dependency
+  inspection; package relocation; start `ffmpeg.exe`/`ffprobe.exe`; applicable
+  host hardware smoke. Do not assume dynamically loaded APIs appear in the
+  PE import table.
+- **Inputs/artifacts:** Identity-specific G4/G5 binaries, dependency graph,
+  runtime DLL closure and documented external system/driver prerequisites.
+- **Pass:** Bundle starts from intended location on the physical target,
+  contains required distributable toolchain DLLs, and does not copy system or
+  driver-owned GPU runtimes blindly.
+- **Non-goals:** Clean-machine or cross-host portability; repackaging Windows
+  system DLLs.
+- **Reuse:** G0/G0A observed UCRT, libc++, libunwind, libomp, Windows loader
+  and driver paths as dependency classifications only.
+
+### G7 — regression, documentation, and full acceptance
+
+- **Scope / code/docs:** Run the complete configured build and acceptance
+  flow; native Linux, WSL Linux, macOS and existing MSYS2 regressions as
+  applicable; same-identity resume and incompatible-identity rejection;
+  verify the complete Windows bundle and host-applicable hardware matrix.
+  Update `README.md`, `docs/DeveloperReadme.md`, and
+  `docs/CHANGELOG.md`. State MSYS2-UCRT64 deprecation consistently with the
+  project decision and actual parity.
+- **Tests:** Full `pytest tests/`, `black --check .`,
+  `python scripts/check_mypy_baseline.py`; full configured component set;
+  resume/interruption; identity drift; package checks; all configured
+  capabilities and host-applicable runtime tests.
+- **Inputs/artifacts:** Clean identity-specific workspace, offline project
+  inputs, prepared validated SDKs, Windows runtime probe and bundle.
+  Preserve per-capability acceptance statuses for unavailable hardware.
+- **Pass:** Full configured stack builds and runs on the recorded host,
+  regressions pass, incompatible state cannot be reused, package/runtime
+  checks pass, and docs accurately record unvalidated capabilities.
+- **Non-goals:** Claiming arbitrary Windows-host portability or forcing
+  acceptance of absent devices.
+- **Reuse:** Early evidence is an acceptance-test blueprint only; G7 must
+  exercise production-built artifacts and current host identity.
+
+## 8. Open issues, grouped by resolving gate
+
+| Gate | Open issue | Required resolution |
+|---|---|---|
+| G1 | Exact identity schema, normalization, mismatch UX, and treatment of runtime-only drift. | Choose and test semantic identity and isolation; no hash scheme is preselected. |
+| G2 | E0.1 reconstructed CUDA archive hash/manifest is absent from retained evidence; exact determinism and symlink/pkg-config checks cannot be independently confirmed here. | Recover the report/manifest if archive provenance is needed; validate the installed prerequisite independently. |
+| G2 | Future CUDA toolkit coexistence and explicit version selection. | Resolve configured SDK path/version; reject ambiguous ambient tools. |
+| G2/G3 | Exact generated Vulkan/OpenCL target import-interface strategy where dependencies require one. | Pin or generate appropriate target interfaces; do not build a loader without a demonstrated link need. |
+| G3 | Production implementation of CPU flag derivation and compatibility-workaround classification. | Derive from effective Windows capabilities and validate selected compiler; scope `_GNU_SOURCE` workaround narrowly. |
+| G4 | Remaining full software component cross-build issues and complete offline provisioning closure. | Resolve builder/registry/provisioning gaps component-by-component with target-isolation tests. |
+| G5 | Neural-network backend/API and complete D3D/QSV/AMF feature support. | Select required backend/API and prove target build/runtime; only an unavoidable MSVC-only ABI limitation can reopen Variant 2. |
+| G5 | Hardware capabilities absent or unsupported on the tested TITAN V host, including untested codec/profile combinations. | Retain build-presence assertions; record runtime acceptance as not validated where appropriate. |
+| G6 | Final runtime DLL closure and redistribution policy for all production dependencies. | Inspect built package; include LLVM-MinGW/C++ runtime DLLs where required and document external Windows/driver prerequisites. |
+
+No separate feasibility risk remains for LLVM-MinGW/UCRT smoke execution,
+contained C ABI mixed Rust/C++ use, host-specific CPU specialization on the
+tested configuration, CUDA PTX/JIT, tested NVENC/NVDEC, Vulkan/OpenCL runtime,
+or the early FFmpeg 9.0 feature slice. These are verified within their stated
+scope, not universally.
+
+## 9. Evidence provenance and limits
+
+Retained PoC evidence was found under
+`/home/viktor/.copilot/session-state/008992f9-d4d6-4f56-9631-29d787c28745/files/`.
+The phase-specific summaries/logs cited in §2 are the sources actually used.
+G0A.2-G0A.5 did not have a single retained final report; conclusions above
+come from their retained commands, status files, runtime logs, feature lists,
+and artifacts. G0A.5's `input-hashes-and-versions.txt` records the source
+archives and original CUDA runfile/Vulkan SDK archive hashes, but is not the
+missing E0.1 reconstructed CUDA archive manifest.
+
+G0A.1/G0A.5 PoC artifacts and temporary metadata are retained for evidence
+only. Production code and tests must independently resolve inputs, build,
+link, inspect and execute the relevant behavior. The E0.1 reconstructed CUDA
+archive, if recovered, is an environment-provisioning artifact and never a
+Windows target component.
+
+## 10. Ordered implementation checklist
+
+1. **G1:** Implement fresh Windows interop probe and identity guard; test fresh,
+   changed, failed, overridden, legacy and same-identity cases.
+2. **G2:** Register/provision project-managed inputs offline; validate explicit
+   installed CUDA/Vulkan SDK prerequisites and selected host compiler.
+3. **G3:** Add `linux-cross-mingw`, isolated target environment and cross files;
+   verify dry-run commands and host/target isolation.
+4. **G4:** Cross-build the full configured software dependency stack; verify
+   PE/COFF, no Linux leakage, runtime and resume.
+5. **G5:** Build-assert every configured hardware feature and run only
+   host-applicable runtime tests, retaining unsupported/absent statuses.
+6. **G6:** Build and validate the Windows bundle with explicit DLL and external
+   system/driver runtime policy.
+7. **G7:** Run full regressions and acceptance; update user/developer docs and
+   changelog; finalize MSYS2-UCRT64 deprecation status.
