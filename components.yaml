@@ -314,6 +314,9 @@
   - --enable-static
   gpl_only: true
   workdir: build/generic
+  # xvidcore's hand-written configure ignores --disable-shared and installs a
+  # .so as well; drop it so FFmpeg links libxvidcore.a statically.
+  post_install: rm -f {workspace}/lib/libxvidcore.so*
   platform_overrides:
     windows:
       extra_env: {}

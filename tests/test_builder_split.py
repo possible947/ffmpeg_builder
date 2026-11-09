@@ -1,6 +1,7 @@
 """Tests for builder module split compatibility."""
 
 import json
+import os
 import shutil
 from pathlib import Path
 
@@ -499,7 +500,9 @@ def test_build_cargo_missing_rustc_is_build_error(tmp_path: Path, monkeypatch: p
     )
 
     monkeypatch.setattr(FFmpegBuilder, "_get_rustc_version", lambda self: None)
-    monkeypatch.setattr("ffmpeg_builder.builders.base.get_rustc_version", lambda context: None)
+    monkeypatch.setattr(
+        "ffmpeg_builder.builders.base.get_rustc_version", lambda context, component=None: None
+    )
 
     try:
         builder._build_cargo(component, tmp_path / "src")
@@ -1048,3 +1051,78 @@ def test_release_bundle_linux_fails_when_runtime_resolves_outside_bundle(
     builder, _ = _linux_bundle_builder(tmp_path, toolchain, str(toolchain))
     with pytest.raises(BuildError, match="resolved outside bundle"):
         make_release_bundle(builder)
+
+
+def test_release_bundle_linux_adds_soname_alias_for_versioned_library(tmp_path: Path, monkeypatch):
+    """libxvidcore.so.4 -> libxvidcore.so.4.3 is copied under its real name;
+    the soname the binaries request must exist in the bundle as well."""
+    monkeypatch.setattr("shutil.which", lambda *a, **k: "/usr/bin/patchelf")
+    lib_dir = tmp_path / "lib"
+    lib_dir.mkdir()
+    (lib_dir / "libxvidcore.so.4.3").write_text("lib", encoding="utf-8")
+    (lib_dir / "libxvidcore.so.4").symlink_to("libxvidcore.so.4.3")
+    (tmp_path / "bin").mkdir()
+    (tmp_path / "bin" / "ffmpeg").write_text("binary", encoding="utf-8")
+    release_dir = tmp_path / "release"
+
+    class _Result:
+        def __init__(self, stdout: str = ""):
+            self.stdout = stdout
+            self.stderr = ""
+            self.success = True
+
+    class _Executor:
+        def execute(self, command, env=None):
+            if command[0] == "ldd":
+                scrubbed = env is not None and env.get("LD_LIBRARY_PATH") == ""
+                if scrubbed:
+                    found = release_dir / "libxvidcore.so.4"
+                    target = str(found) if found.exists() else "not found"
+                else:
+                    target = str(lib_dir / "libxvidcore.so.4")
+                return _Result(stdout=f"\tlibxvidcore.so.4 => {target} (0x1)\n")
+            return _Result()
+
+    class _Config:
+        ffmpeg_version = "9.0"
+
+        class windows:
+            msys2_root = ""
+
+    class _Detector:
+        def get_build_backend_name(self):
+            return "linux-native"
+
+    class _Builder:
+        platform = "linux"
+        workspace = tmp_path
+        config = _Config()
+        platform_detector = _Detector()
+        executor = _Executor()
+
+        @staticmethod
+        def _rmtree(path: Path) -> None:
+            import shutil
+
+            shutil.rmtree(path)
+
+        def get_build_env(self):
+            return {}
+
+    result_dir = make_release_bundle(_Builder())
+
+    assert (result_dir / "libxvidcore.so.4.3").is_file()
+    assert (result_dir / "libxvidcore.so.4").exists()
+    manifest = json.loads((result_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["dependency_aliases"] == ["libxvidcore.so.4 -> libxvidcore.so.4.3"]
+
+
+def test_build_env_path_includes_workspace_bin_before_it_exists(tmp_path: Path):
+    """Tools built mid-run into <workspace>/bin (libtool, autoconf, ...) must be
+    on PATH even when the directory did not exist at builder start."""
+    builder = _make_libplacebo_builder(tmp_path, platform="darwin")
+    assert not (builder.workspace / "bin").exists()
+
+    path_entries = builder.get_build_env()["PATH"].split(os.pathsep)
+
+    assert path_entries[0] == f"{builder._ws_str()}/bin"

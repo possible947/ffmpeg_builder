@@ -747,3 +747,9 @@ class TestToolchainFields:
         component = registry.get_by_name("widget")
         assert component is not None
         assert component.toolchain == "gcc12"
+
+
+def test_xvidcore_drops_shared_library_after_install():
+    """xvidcore ignores --disable-shared; post_install keeps FFmpeg static."""
+    xvid = ComponentRegistry().get_by_name("xvidcore")
+    assert xvid.post_install == "rm -f {workspace}/lib/libxvidcore.so*"

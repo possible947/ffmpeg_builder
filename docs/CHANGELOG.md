@@ -1,3 +1,24 @@
+### Fixed — zimg `autoreconf` could not find `libtoolize` (2026-11-08)
+
+- **Cause:** `_setup_environment` added `<workspace>/bin` to `PATH` only if the directory already
+  existed at builder start. On a fresh workspace it did not, so tools built mid-run (libtool,
+  autoconf, ...) were never on `PATH`; `zimg`'s explicit `libtoolize` step (absolute path)
+  passed but `./autogen.sh` -> `autoreconf` failed with `Can't exec "libtoolize"`.
+- **Fix:** `<workspace>/bin` is now always prepended to the build `PATH`.
+
+### Fixed — release bundle missing `libxvidcore.so.4` (2026-11-08)
+
+- **Cause:** `xvidcore` ignores `--disable-shared` and installs `libxvidcore.so.4 -> libxvidcore.so.4.3`.
+  The bundler copies dependencies under their symlink-resolved name, so only `libxvidcore.so.4.3`
+  reached `release/` and the closure check failed with `libxvidcore.so.4 not found`.
+- **Fix:** `release_bundle.py` now creates a soname alias (symlink, copy fallback) for every Linux
+  dependency whose requested name differs from the copied file name; aliases are listed in
+  `manifest.json` under `dependency_aliases`. `components.yaml` also gives `xvidcore` a
+  `post_install` that removes the shared library so FFmpeg links it statically (rebuild
+  `xvidcore` and `ffmpeg` to pick this up).
+- `get_rustc_version()` now takes the component so `build_cargo` probes the toolchain-store rustc
+  instead of the host one.
+
 ### Released — 3.0: host-built compilers replace nix shell (2026-10-16)
 
 - **Version bump 2.0.0 → 3.0.0** (`pyproject.toml`, `__init__.py`, root and

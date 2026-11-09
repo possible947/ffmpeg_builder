@@ -9,7 +9,7 @@ import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, Dict, List, Optional, Set, Tuple
 
 from .build_types import BuildError
 
@@ -70,7 +70,9 @@ def make_release_bundle(builder: "FFmpegBuilder") -> Path:
         copied_binaries.append(str(destination))
         copied_tools.append(source.name)
 
-    dependencies, missing_dependencies = _collect_runtime_dependencies(builder, source_binaries)
+    dependencies, missing_dependencies, aliases = _collect_runtime_dependencies(
+        builder, source_binaries
+    )
     copied_dependencies: List[str] = []
 
     for dep in sorted(dependencies, key=lambda item: item.name.lower()):
@@ -79,6 +81,10 @@ def make_release_bundle(builder: "FFmpegBuilder") -> Path:
             continue
         shutil.copy2(dep, destination)
         copied_dependencies.append(str(destination))
+
+    created_aliases: List[str] = []
+    if builder.platform == "linux":
+        created_aliases = _create_dependency_aliases(release_dir, aliases)
 
     install_name_rewrites: List[str] = []
     if builder.platform == "darwin":
@@ -105,6 +111,7 @@ def make_release_bundle(builder: "FFmpegBuilder") -> Path:
         "missing_dependencies": sorted(missing_dependencies),
         "install_name_rewrites": install_name_rewrites,
         "rpath_rewrites": rpath_rewrites,
+        "dependency_aliases": created_aliases,
     }
     (release_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
@@ -115,14 +122,38 @@ def _rmtree(builder: "FFmpegBuilder", path: Path) -> None:
     builder._rmtree(path)
 
 
+def _create_dependency_aliases(release_dir: Path, aliases: Dict[Path, Set[str]]) -> List[str]:
+    """Expose bundled libraries under the name the dynamic loader requests.
+
+    Dependencies are copied under their symlink-resolved name
+    (``libxvidcore.so.4.3``) while binaries reference the soname
+    (``libxvidcore.so.4``), so the soname must exist in the bundle too.
+    Falls back to a copy where symlinks are not permitted.
+    """
+    created: List[str] = []
+    for real in sorted(aliases, key=lambda item: item.name):
+        for alias in sorted(aliases[real]):
+            target = release_dir / real.name
+            link = release_dir / alias
+            if link.exists() or link.is_symlink() or not target.exists():
+                continue
+            try:
+                link.symlink_to(real.name)
+            except OSError:
+                shutil.copy2(target, link)
+            created.append(f"{alias} -> {real.name}")
+    return created
+
+
 def _collect_runtime_dependencies(
     builder: "FFmpegBuilder", binaries: List[Path]
-) -> Tuple[Set[Path], Set[str]]:
+) -> Tuple[Set[Path], Set[str], Dict[Path, Set[str]]]:
     queue = list(binaries)
     visited: Set[str] = set()
     collected: Set[Path] = set()
     collected_keys: Set[str] = set()
     missing: Set[str] = set()
+    aliases: Dict[Path, Set[str]] = {}
 
     while queue:
         current = queue.pop(0).resolve()
@@ -139,11 +170,15 @@ def _collect_runtime_dependencies(
                 missing.add(dep)
                 continue
 
+            requested_name = Path(dep).name
             resolved = resolved.resolve()
             resolved_key = _path_key(builder, resolved)
             if _is_system_runtime_library(builder, resolved):
                 visited.add(resolved_key)
                 continue
+
+            if requested_name and requested_name != resolved.name:
+                aliases.setdefault(resolved, set()).add(requested_name)
 
             if resolved_key in collected_keys:
                 continue
@@ -152,7 +187,7 @@ def _collect_runtime_dependencies(
             collected_keys.add(resolved_key)
             queue.append(resolved)
 
-    return collected, missing
+    return collected, missing, aliases
 
 
 def _read_runtime_dependencies(builder: "FFmpegBuilder", binary_path: Path) -> List[str]:

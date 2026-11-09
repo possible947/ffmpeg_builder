@@ -328,13 +328,18 @@ def build_make_only(
     )
 
 
-def get_rustc_version(context: ComponentBuildContext) -> Optional[Tuple[int, int, int]]:
+def get_rustc_version(
+    context: ComponentBuildContext, component: Optional["Component"] = None
+) -> Optional[Tuple[int, int, int]]:
     """Get installed rustc version.
+
+    Passing ``component`` applies its toolchain-store PATH so the store's
+    rustc is probed rather than the host one.
 
     Returns:
         Tuple of (major, minor, patch) or None if not available.
     """
-    env = context.builder.get_build_env()
+    env = context.builder.get_build_env(component)
     result = context.executor.execute(["rustc", "--version"], env=env)
     if not result.success:
         return None
@@ -352,7 +357,7 @@ def build_cargo(context: ComponentBuildContext, component: "Component", source_d
     if context.builder.platform == "linux" and "CFLAGS" in env:
         env["CFLAGS"] = env["CFLAGS"].replace("-std=c11", "-std=gnu11")
 
-    rustc_version = get_rustc_version(context)
+    rustc_version = get_rustc_version(context, component)
     if rustc_version is None:
         raise BuildError(component.name, "rustc is not available or version cannot be determined")
 

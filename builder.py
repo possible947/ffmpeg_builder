@@ -577,12 +577,12 @@ class FFmpegBuilder:
             )
             pkg_config_path = ":".join(pkg_config_paths)
 
+        # Always prepend: <workspace>/bin is created lazily during the build
+        # and tools installed there (libtool, autoconf, meson, ...) must be
+        # visible to later components even on a fresh workspace.
         ws_bin = f"{self._ws_str()}/bin"
         inherited_path = os.environ.get("PATH", "")
-        if os.path.isdir(ws_bin):
-            path_value = f"{ws_bin}{os.pathsep}{inherited_path}"
-        else:
-            path_value = inherited_path
+        path_value = f"{ws_bin}{os.pathsep}{inherited_path}"
 
         self.env = {
             "PATH": path_value,
