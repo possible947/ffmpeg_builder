@@ -159,6 +159,12 @@ def verify_installed(store: ToolchainStore, adopt_relocated: bool = False) -> in
         resolved = store.resolve_entry_path(entry)
         status = "FAILED" if entry.profile in failures else "ok    "
         print(f"{status} {entry.profile} ({entry.variant}) at {resolved}")
+        if entry.profile in failures or (
+            store.installed_status(registry, entry.profile)[0] != "compatible"
+        ):
+            state, reason = store.installed_status(registry, entry.profile)
+            if state != "compatible":
+                print(f"       {state}: {reason}")
     if failures:
         print(f"\n{len(failures)} profile(s) failed verification.")
         return 1
@@ -184,10 +190,19 @@ def main(argv: Optional[List[str]] = None) -> int:
         resolve_store_root(PROJECT_ROOT, args.store),
         source_archives_dir=args.sources or (PROJECT_ROOT / config.source_archives_dir),
         allow_network_downloads=args.allow_network or config.allow_network_downloads,
+        backend=args.backend,
     )
 
     installed_entries = store.list_installed()
-    installed = [item.profile for item in installed_entries]
+    registry_status = {
+        item.profile: store.installed_status(registry, item.profile)[0]
+        for item in installed_entries
+    }
+    installed = [
+        name
+        for name, status in registry_status.items()
+        if status == "compatible" or not args.backend
+    ]
 
     if args.verify_only:
         return verify_installed(store, args.adopt)

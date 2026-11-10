@@ -206,6 +206,42 @@ prerequisites, component-declared toolchains, the CUDA table), and both the TUI
 store and `scripts/prepare_toolchains.py` consume it — the TUI's `p` action and
 the script's default selection are the same computation.
 
+#### Rust target std as an additive artifact (G2.3)
+
+The project-managed Rust toolchain stays at **1.99.0** (no rustup, no system
+Rust). A profile may declare `extras:` — project-managed archives installed into
+the same staged prefix. The `rust` profile declares one:
+
+```yaml
+extras:
+  - kind: rust-std
+    target: x86_64-pc-windows-gnullvm
+    component: rust-std-x86_64-pc-windows-gnullvm
+    release: "1.99.0"
+    backends: [linux-cross-mingw]
+    archive_filename: rust-std-1.99.0-x86_64-pc-windows-gnullvm.tar.xz
+    sha256: dcf636d9…   # channel-rust-1.99.0.toml (xz_hash)
+```
+
+- `release` must equal the profile version; kind/target/duplicates/sha256/backends
+  are validated at registry load. Only `rust-std` is a supported kind.
+- `backends` limits when the extra is required; native stores
+  (`ToolchainStore(backend=None)`) never require it and accept composite installs.
+  Wire the backend via `ToolchainStore(..., backend=...)` / `--backend`.
+- `acquire` fetches and sha256-verifies base and extras first, stages the base,
+  installs each extra with its `install.sh --components=<component>` into the same
+  staged prefix, verifies the composite, writes provenance, then activates
+  atomically. Any failure keeps the previous active install.
+- Provenance (`.toolchain-install.json`) has an optional `extras` list (kind,
+  target, component, release, archive_filename, sha256), sorted so order is not
+  semantic. Schema stays 2; no `extras` key means none. Changing, adding or
+  removing an extra makes the install `stale`; a pre-G2.3 Rust install is stale
+  for `linux-cross-mingw` and is rebuilt as a complete candidate.
+- Verification and the errors `extra_install_failed`, `extra_release_mismatch`,
+  `extra_component_missing` are described in the CHANGELOG. `ToolchainStore.describe()`
+  exposes the resolved metadata. Cargo linker configuration and Windows linking
+  belong to G3 and are not implemented.
+
 #### LLVM-MinGW and the hardened store (G2.2)
 
 `llvm-mingw` (`kind: cross_compiler`, release `20261104`, UCRT,

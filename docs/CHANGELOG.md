@@ -1,3 +1,32 @@
+### Added — G2.3: Rust `x86_64-pc-windows-gnullvm` target std as an additive artifact
+
+- `toolchains.yaml`: the `rust` profile (1.99.0, unchanged) gains an `extras:`
+  entry — `rust-std` for `x86_64-pc-windows-gnullvm`, pinned by the official
+  `channel-rust-1.99.0.toml` sha256 (`dcf636d9…`) and shipped as an LFS archive
+  `rust-std-1.99.0-x86_64-pc-windows-gnullvm.tar.xz` in `third_party/sources`.
+  The extra is required only for `backends: [linux-cross-mingw]`; native profiles
+  keep their existing Rust requirement. `wsl-mingw-ffmpeg-*` now require
+  `[llvm-mingw, rust]` (native recommendations unchanged).
+- `ToolchainRegistry`: `ToolchainExtra` + load-time validation (kind, target
+  triple, duplicate kind/target, release must equal the profile version, archive
+  name, sha256, backends, base source present).
+- `ToolchainStore`: Rust is now installed through the staged/atomic path. Base and
+  every extra are fetched and sha256-verified first, the extra is installed with
+  the official `install.sh` into the same staged prefix, the complete candidate is
+  verified, and only then activated. Extra install or verifier failure leaves the
+  previous active install untouched. Provenance gains an optional `extras` list
+  (schema stays 2; a missing key means no extras, so existing installs stay valid).
+  Missing/changed/added/removed extras make an install `stale`; order is not
+  semantic. A pre-G2.3 (native) Rust install is stale for `linux-cross-mingw` and
+  is replaced by a complete candidate, never mutated in place. `describe()` exposes
+  profile/version/prefix/base sha/targets/extras/verified for G2.7/G3.
+- Rust verifier: candidate `rustc`/`cargo` inside the prefix, `rustc -vV` release
+  equals the extra's, `--print sysroot` equals the prefix (no ambient rustc),
+  `libcore`/`libstd` rlibs present, `--print target-libdir` matches, and a
+  link-free `--emit obj` probe must yield a COFF object. New error codes:
+  `extra_install_failed`, `extra_release_mismatch`, `extra_component_missing`.
+- Not done: G2.4/G2.5 prerequisites, G3 (Cargo linker config, linking, running).
+
 ### Added — G2.2: LLVM-MinGW managed toolchain and hardened ToolchainStore
 
 - `toolchains.yaml`: `llvm-mingw` (`cross_compiler`, x86_64-w64-mingw32, UCRT)

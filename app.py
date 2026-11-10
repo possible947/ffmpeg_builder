@@ -290,7 +290,7 @@ class FFmpegBuilderApp:
             toolchain_registry = ToolchainRegistry()
         except (OSError, ValueError):
             return lambda component: True
-        installed = self._installed_toolchains()
+        installed = self._installed_toolchains(config)
         versions = self._system_tool_versions()
         platform = self.platform_detector.get_platform_name()
 
@@ -314,11 +314,20 @@ class FFmpegBuilderApp:
 
         return _check
 
-    def _installed_toolchains(self) -> Dict[str, bool]:
+    @staticmethod
+    def _toolchain_backend(config: BuildConfig) -> Optional[str]:
+        return (
+            TARGET_BACKEND_CROSS_MINGW
+            if config.target_backend == TARGET_BACKEND_CROSS_MINGW
+            else None
+        )
+
+    def _installed_toolchains(self, config: BuildConfig) -> Dict[str, bool]:
         """Installed toolchain profiles mapped to their verification status."""
         store = ToolchainStore(
             resolve_store_root(PROJECT_ROOT),
             workspace=self.workspace,
+            backend=self._toolchain_backend(config),
         )
         try:
             registry = ToolchainRegistry()
@@ -344,7 +353,7 @@ class FFmpegBuilderApp:
             toolchain_registry = ToolchainRegistry()
         except (OSError, ValueError):
             return {}
-        installed = self._installed_toolchains()
+        installed = self._installed_toolchains(config)
         versions = self._system_tool_versions()
         platform = self.platform_detector.get_platform_name()
         reasons: Dict[str, str] = {}
@@ -410,6 +419,7 @@ class FFmpegBuilderApp:
             workspace=self.workspace,
             source_archives_dir=PROJECT_ROOT / config.source_archives_dir,
             allow_network_downloads=config.allow_network_downloads,
+            backend=self._toolchain_backend(config),
         )
         recommended = toolchain_registry.recommend_profiles(
             config.ffmpeg_version,
@@ -439,6 +449,7 @@ class FFmpegBuilderApp:
             workspace=self.workspace,
             source_archives_dir=PROJECT_ROOT / config.source_archives_dir,
             allow_network_downloads=config.allow_network_downloads,
+            backend=self._toolchain_backend(config),
         )
         versions = self._system_tool_versions()
         platform = self.platform_detector.get_platform_name()

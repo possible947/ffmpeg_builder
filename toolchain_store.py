@@ -19,18 +19,26 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import IO, Callable, Dict, Iterator, List, Optional, Tuple
+from typing import IO, Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple
 
 import yaml
 
 from . import toolchain_builders
 from .build_types import CATEGORY_PROJECT_SOURCE, CATEGORY_TOOLCHAIN_INSTALL, BuildError
-from .toolchain_registry import ToolchainProfile, ToolchainRegistry, ToolchainSource
+from .toolchain_registry import (
+    ToolchainExtra,
+    ToolchainProfile,
+    ToolchainRegistry,
+    ToolchainSource,
+)
 
 STORE_ROOT_ENV = "FFMPEG_BUILDER_TOOLCHAINS"
 # Installed-state schema: 2 adds registry/source provenance to each entry.
 STATE_SCHEMA_VERSION = 2
 PROVENANCE_FILE = ".toolchain-install.json"
+# Build recipes whose result is relocatable, so they are built in the staging
+# directory and activated atomically (others bake the prefix and build in place).
+STAGED_BUILD_RECIPES = frozenset({"rust_standalone"})
 
 # Installation compatibility statuses (see ToolchainStore.installed_status).
 STATUS_ABSENT = "absent"
@@ -127,6 +135,8 @@ class InstalledToolchain:
     source_sha256: str = ""
     archive_filename: str = ""
     runtime: str = ""
+    # Additive artifacts (e.g. rust-std targets) installed into this prefix.
+    extras: List[Dict[str, str]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -140,6 +150,7 @@ class InstalledToolchain:
             "source_sha256": self.source_sha256,
             "archive_filename": self.archive_filename,
             "runtime": self.runtime,
+            "extras": [dict(item) for item in self.extras],
         }
 
     def provenance(self) -> Dict[str, object]:
@@ -152,6 +163,7 @@ class InstalledToolchain:
             "source_sha256": self.source_sha256,
             "runtime": self.runtime,
             "schema_version": self.schema_version,
+            "extras": sorted(self.extras, key=lambda item: (item["kind"], item["target"])),
         }
 
     @classmethod
@@ -168,7 +180,38 @@ class InstalledToolchain:
             source_sha256=str(data.get("source_sha256", "")),
             archive_filename=str(data.get("archive_filename", "")),
             runtime=str(data.get("runtime", "")),
+            extras=_load_extras(data.get("extras")),
         )
+
+
+def _extra_record(extra: ToolchainExtra) -> Dict[str, str]:
+    """Provenance of one additive artifact (what the registry declared)."""
+    return {
+        "kind": extra.kind,
+        "target": extra.target,
+        "component": extra.component,
+        "release": extra.release,
+        "archive_filename": extra.archive_filename,
+        "sha256": extra.sha256.lower(),
+    }
+
+
+def _load_extras(raw: object) -> List[Dict[str, str]]:
+    if not isinstance(raw, list):
+        return []
+    return [
+        {str(key): str(value) for key, value in item.items()}
+        for item in raw
+        if isinstance(item, dict) and "kind" in item and "target" in item
+    ]
+
+
+def _extra_subject(profile: ToolchainProfile, extra: Optional[ToolchainExtra]) -> str:
+    """Human-readable subject for diagnostics about a base or additive archive."""
+    base = f"{profile.name} {profile.version or ''}".strip()
+    if extra is None:
+        return base
+    return f"{base} {extra.kind} ({extra.component}, target {extra.target})"
 
 
 @dataclass
@@ -203,6 +246,7 @@ class ToolchainStore:
         workspace: Optional[Path] = None,
         source_archives_dir: Optional[Path] = None,
         allow_network_downloads: bool = False,
+        backend: Optional[str] = None,
     ) -> None:
         self.root = Path(root)
         self.workspace = Path(workspace) if workspace is not None else None
@@ -210,6 +254,8 @@ class ToolchainStore:
             Path(source_archives_dir) if source_archives_dir is not None else None
         )
         self.allow_network_downloads = allow_network_downloads
+        # Target build backend; selects which additive artifacts are required.
+        self.backend = backend
         self._validate_root()
 
     def _validate_root(self) -> None:
@@ -318,7 +364,60 @@ class ToolchainStore:
         runtime = profile.target.runtime if profile.target is not None else ""
         if runtime != entry.runtime:
             return STATUS_STALE, f"runtime variant {runtime!r} != installed {entry.runtime!r}"
+        extras_problem = self._extras_problem(profile, entry)
+        if extras_problem:
+            return STATUS_STALE, extras_problem
         return STATUS_COMPATIBLE, "matches the registry"
+
+    def _extras_problem(
+        self, profile: ToolchainProfile, entry: InstalledToolchain
+    ) -> Optional[str]:
+        """Why the recorded additive artifacts do not satisfy the registry, if so.
+
+        Every artifact the current backend requires must be recorded with the
+        declared release/component/archive/hash; recorded artifacts must still
+        be declared and unchanged. Order is irrelevant (keyed by kind+target).
+        """
+        declared = {item.key: item for item in profile.extras}
+        recorded = {(item.get("kind", ""), item.get("target", "")): item for item in entry.extras}
+        for extra in profile.required_extras(self.backend):
+            if extra.key not in recorded:
+                return (
+                    f"required {extra.kind} for {extra.target} is not installed "
+                    "(reacquire to stage a complete toolchain)"
+                )
+        for key, record in recorded.items():
+            decl = declared.get(key)
+            if decl is None:
+                return f"installed {key[0]} for {key[1]} is no longer declared"
+            expected = _extra_record(decl)
+            if record != expected:
+                changed = sorted(
+                    name for name, value in expected.items() if record.get(name) != value
+                )
+                return f"{key[0]} for {key[1]} changed in the registry ({', '.join(changed)})"
+        return None
+
+    def describe(self, registry: ToolchainRegistry, profile_name: str) -> Optional[Dict[str, Any]]:
+        """Resolved metadata of a current installation (for later consumers).
+
+        Returns ``None`` unless the profile is installed and compatible. The
+        mapping carries the profile/version, the installed prefix, the base
+        source SHA-256 and every installed additive artifact (kind, target,
+        archive SHA-256), plus the verification state.
+        """
+        entry = self.installed(profile_name, registry)
+        if entry is None:
+            return None
+        return {
+            "profile": entry.profile,
+            "version": entry.version,
+            "prefix": str(self.resolve_entry_path(entry)),
+            "base_sha256": entry.source_sha256,
+            "targets": sorted(item["target"] for item in entry.extras),
+            "extras": [dict(item) for item in entry.extras],
+            "verified": entry.verified,
+        }
 
     def resolve_entry_path(self, entry: InstalledToolchain) -> Path:
         """Resolve an entry's install prefix against this store's root.
@@ -372,11 +471,15 @@ class ToolchainStore:
                 source = profile.sources.get(entry.variant)
                 if source is None and profile.default_source is not None:
                     source = profile.sources.get(profile.default_source)
-            if toolchain_builders.verify_installation(profile, source, prefix):
+            recorded = self._recorded_extras(profile, entry)
+            if toolchain_builders.verify_installation(profile, source, prefix, recorded):
                 entry.verified = False
                 changed = True
                 failures.append(name)
                 continue
+            if profile is not None and self._missing_required_extras(profile, entry):
+                # Healthy but incomplete for this backend: reported, not marked broken.
+                failures.append(name)
             if adopt_relocated and str(prefix) != entry.path and prefix.exists():
                 entry.path = str(prefix)
                 changed = True
@@ -387,6 +490,7 @@ class ToolchainStore:
                 and entry.version == (profile.version or "")
             ):
                 # Backfill provenance for a legacy entry that matches the registry.
+                # No additive artifact is claimed: it cannot be vouched for.
                 self._stamp_provenance(entry, profile, source)
                 changed = True
         if changed:
@@ -394,9 +498,29 @@ class ToolchainStore:
         return failures
 
     @staticmethod
+    def _recorded_extras(
+        profile: Optional[ToolchainProfile], entry: InstalledToolchain
+    ) -> List[ToolchainExtra]:
+        """Declared extras the installation claims to contain (verified functionally)."""
+        if profile is None:
+            return []
+        keys = {(item.get("kind", ""), item.get("target", "")) for item in entry.extras}
+        return [item for item in profile.extras if item.key in keys]
+
+    def _missing_required_extras(
+        self, profile: ToolchainProfile, entry: InstalledToolchain
+    ) -> List[ToolchainExtra]:
+        keys = {(item.get("kind", ""), item.get("target", "")) for item in entry.extras}
+        return [item for item in profile.required_extras(self.backend) if item.key not in keys]
+
+    @staticmethod
     def _stamp_provenance(
-        entry: InstalledToolchain, profile: ToolchainProfile, source: ToolchainSource
+        entry: InstalledToolchain,
+        profile: ToolchainProfile,
+        source: ToolchainSource,
+        extras: Sequence[ToolchainExtra] = (),
     ) -> None:
+        entry.extras = [_extra_record(item) for item in extras]
         entry.schema_version = STATE_SCHEMA_VERSION
         entry.version = profile.version or ""
         entry.source_sha256 = (source.sha256 or "").lower()
@@ -544,19 +668,6 @@ class ToolchainStore:
             if status == STATUS_COMPATIBLE and existing is not None and existing.variant == chosen:
                 return existing
 
-            def verify(prefix: Path) -> None:
-                failures = (
-                    verifier(source.recipe, prefix)
-                    if verifier is not None
-                    else toolchain_builders.verify_installation(profile, source, prefix)
-                )
-                if failures:
-                    raise _install_error(
-                        profile_name,
-                        f"Toolchain {profile_name!r} verification failed: " + "; ".join(failures),
-                        "verification_failed",
-                    )
-
             installed = InstalledToolchain(
                 profile=profile_name,
                 version=profile.version or "",
@@ -565,9 +676,24 @@ class ToolchainStore:
                 installed_at=_now(),
                 verified=True,
             )
-            self._stamp_provenance(installed, profile, source)
+            extras = profile.required_extras(self.backend)
+            self._stamp_provenance(installed, profile, source, extras)
 
-            if source.type == "build":
+            def verify(prefix: Path) -> None:
+                failures = (
+                    verifier(source.recipe, prefix)
+                    if verifier is not None
+                    else toolchain_builders.verify_installation(profile, source, prefix, extras)
+                )
+                if failures:
+                    raise _install_error(
+                        profile_name,
+                        f"Toolchain {profile_name!r} verification failed: " + "; ".join(failures),
+                        "verification_failed",
+                    )
+
+            staged_build = source.type == "build" and source.recipe in STAGED_BUILD_RECIPES
+            if source.type == "build" and not staged_build:
                 # Source builds bake the prefix into the result, so they build in
                 # place; the previous installation is parked and rolled back on failure.
                 archive = self._fetch_or_resolve(source, profile)
@@ -583,6 +709,31 @@ class ToolchainStore:
             else:
                 if source.type == "local":
                     materialize = lambda: self._install_local(source, stage, profile)  # noqa: E731
+                elif staged_build:
+                    # Resolve and integrity-check every input before touching staging.
+                    archive = self._fetch_or_resolve(source, profile)
+                    extra_archives = [
+                        (extra, self._fetch_or_resolve(extra.as_source(), profile, extra))
+                        for extra in extras
+                    ]
+                    for extra, extra_archive in extra_archives:
+                        self._check_extra_archive(profile, extra, extra_archive)
+
+                    def materialize() -> None:
+                        stage.mkdir(parents=True, exist_ok=True)
+                        self._build(
+                            registry,
+                            profile,
+                            source,
+                            stage,
+                            build_runner,
+                            build_jobs,
+                            verifier,
+                            archive,
+                        )
+                        for extra, extra_archive in extra_archives:
+                            self._install_extra(profile, extra, extra_archive, stage, build_runner)
+
                 else:
                     archive = self._fetch_or_resolve(source, profile)
                     materialize = lambda: self._extract(archive, stage, profile)  # noqa: E731
@@ -698,7 +849,12 @@ class ToolchainStore:
         else:
             self._extract(origin, dest, profile)
 
-    def _fetch_or_resolve(self, source: ToolchainSource, profile: ToolchainProfile) -> Path:
+    def _fetch_or_resolve(
+        self,
+        source: ToolchainSource,
+        profile: ToolchainProfile,
+        extra: Optional[ToolchainExtra] = None,
+    ) -> Path:
         """Resolve a source archive and verify its declared SHA-256 before use.
 
         The mirror is not trusted merely because it is local: the same checksum
@@ -711,51 +867,63 @@ class ToolchainStore:
                 profile.name, "source declares no archive filename or url", "source_unresolvable"
             )
 
+        subject = _extra_subject(profile, extra)
+
         if self.source_archives_dir is not None:
             candidate = self.source_archives_dir / filename
             if candidate.exists():
-                self._verify_archive(candidate, source, profile)
+                self._verify_archive(candidate, source, profile, subject)
                 return candidate
 
         version = profile.version or ""
         if not self.allow_network_downloads or not source.url:
             raise _source_error(
                 profile.name,
-                f"Archive {filename!r} not found in the local sources "
+                f"{subject}: archive {filename!r} not found in the local sources "
                 f"({self.source_archives_dir}); network downloads are disabled",
                 "source_missing",
             )
         dest = self.archives_dir / filename
-        self._download(source.url.replace("{version}", version), dest, source, profile)
+        self._download(source.url.replace("{version}", version), dest, source, profile, subject)
         return dest
 
     def _verify_archive(
-        self, path: Path, source: ToolchainSource, profile: ToolchainProfile
+        self,
+        path: Path,
+        source: ToolchainSource,
+        profile: ToolchainProfile,
+        subject: str = "",
     ) -> None:
         """Stream-hash ``path`` against the declared checksum (mirror and download)."""
+        prefix = f"{subject}: " if subject else ""
         expected = (source.sha256 or "").lower()
         if not expected:
             raise _source_error(
                 profile.name,
-                f"source for {path.name} declares no sha256; refusing to use it",
+                f"{prefix}source for {path.name} declares no sha256; refusing to use it",
                 "checksum_missing",
             )
         try:
             actual = _sha256(path)
         except OSError as exc:
             raise _source_error(
-                profile.name, f"cannot read archive {path}: {exc}", "source_unreadable", exc
+                profile.name, f"{prefix}cannot read archive {path}: {exc}", "source_unreadable", exc
             ) from exc
         if actual != expected:
             raise _source_error(
                 profile.name,
-                f"checksum mismatch for archive {path}: expected sha256 {expected}, "
+                f"{prefix}checksum mismatch for archive {path}: expected sha256 {expected}, "
                 f"got {actual} (the archive was not modified or extracted)",
                 "checksum_mismatch",
             )
 
     def _download(
-        self, url: str, dest: Path, source: ToolchainSource, profile: ToolchainProfile
+        self,
+        url: str,
+        dest: Path,
+        source: ToolchainSource,
+        profile: ToolchainProfile,
+        subject: str = "",
     ) -> None:
         dest.parent.mkdir(parents=True, exist_ok=True)
         partial = dest.with_suffix(dest.suffix + ".part")
@@ -768,11 +936,85 @@ class ToolchainStore:
                 profile.name, f"download of {url} failed: {exc}", "download_failed", exc
             ) from exc
         try:
-            self._verify_archive(partial, source, profile)
+            self._verify_archive(partial, source, profile, subject)
         except BuildError:
             partial.unlink(missing_ok=True)
             raise
         os.replace(partial, dest)
+
+    def _check_extra_archive(
+        self, profile: ToolchainProfile, extra: ToolchainExtra, archive: Path
+    ) -> None:
+        """Check the installer metadata inside an (already hashed) extra archive.
+
+        The distribution's top directory must be ``<kind>-<release>-<target>`` and
+        its ``components`` manifest must list the declared component; a different
+        release or target is rejected before anything is staged.
+        """
+        subject = _extra_subject(profile, extra)
+        top = f"{extra.kind}-{extra.release}-{extra.target}"
+        try:
+            with tarfile.open(archive, "r:*") as tar:
+                names = tar.getnames()
+                roots = {name.split("/", 1)[0] for name in names}
+                if roots != {top}:
+                    raise _install_error(
+                        profile.name,
+                        f"{subject}: archive {archive.name} contains {sorted(roots)}, "
+                        f"expected the single distribution {top!r} "
+                        "(release/target mismatch)",
+                        "extra_release_mismatch",
+                    )
+                member = tar.extractfile(f"{top}/components")
+                components = (member.read().decode("utf-8") if member else "").split()
+        except (tarfile.TarError, OSError, EOFError, KeyError) as exc:
+            raise _install_error(
+                profile.name,
+                f"{subject}: cannot read installer metadata of {archive}: {exc}",
+                "extract_failed",
+                exc,
+            ) from exc
+        if extra.component not in components:
+            raise _install_error(
+                profile.name,
+                f"{subject}: archive {archive.name} does not provide component "
+                f"{extra.component!r} (has {components})",
+                "extra_component_missing",
+            )
+
+    def _install_extra(
+        self,
+        profile: ToolchainProfile,
+        extra: ToolchainExtra,
+        archive: Path,
+        stage: Path,
+        runner: Runner,
+    ) -> None:
+        """Install an additive artifact into the staged prefix with its own installer."""
+        subject = _extra_subject(profile, extra)
+        safe = f"{_safe_name(profile.name)}-{profile.version or 'unversioned'}"
+        work = self.build_dir / f"{safe}-extra-{_safe_name(extra.kind)}-{_safe_name(extra.target)}"
+        shutil.rmtree(work, ignore_errors=True)
+        try:
+            self._extract(archive, work, profile)
+            toolchain_builders.install_rust_component(
+                _single_child_dir(work),
+                stage,
+                extra.component,
+                self.logs_dir / _safe_name(profile.name),
+                runner,
+            )
+        except BuildError:
+            raise
+        except Exception as exc:
+            raise _install_error(
+                profile.name,
+                f"{subject}: installing into the staged prefix failed: {exc}",
+                "extra_install_failed",
+                exc,
+            ) from exc
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
 
     def _extract(self, archive: Path, dest: Path, profile: ToolchainProfile) -> None:
         dest.mkdir(parents=True, exist_ok=True)

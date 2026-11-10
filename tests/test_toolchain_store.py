@@ -21,9 +21,9 @@ def _placeholder_sha_skips_archive_check(monkeypatch):
     """Fixtures that use the placeholder digest skip hashing; real digests are enforced."""
     real = ToolchainStore._verify_archive
 
-    def verify(self, path, source, profile):
+    def verify(self, path, source, profile, subject=""):
         if source.sha256 != _SHA:
-            real(self, path, source, profile)
+            real(self, path, source, profile, subject)
 
     monkeypatch.setattr(ToolchainStore, "_verify_archive", verify)
 
@@ -867,7 +867,7 @@ class TestLlvmMingwProfile:
         rec = registry.recommend_profiles(
             "8.1", "linux", {}, components=[], installed=[], backend="linux-cross-mingw"
         )
-        assert [n for n, _ in rec] == ["llvm-mingw"]
+        assert [n for n, _ in rec] == ["llvm-mingw", "rust"]
         native = registry.recommend_profiles("8.1", "linux", {}, components=[], installed=[])
         assert "llvm-mingw" not in [n for n, _ in native]
 

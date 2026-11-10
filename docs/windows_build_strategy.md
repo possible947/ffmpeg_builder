@@ -469,8 +469,11 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
 - **Status:** [IMPLEMENTATION — in progress] G1 PASS; G2.1 audit complete; G2.2
   complete (LLVM-MinGW managed toolchain + hardened `ToolchainStore`: checksum
   enforcement, staged/atomic install, provenance/stale detection, isolated
-  `--store`/`--sources` offline provisioning). G2.3–G2.8 (Rust target std,
-  CUDA `-ccbin`, external SDK prerequisites, target headers/interfaces, identity
+  `--store`/`--sources` offline provisioning). G2.3 complete (Rust 1.99.0
+  `x86_64-pc-windows-gnullvm` std as a project-managed additive `extras`
+  artifact of the same Rust prefix, required only for `linux-cross-mingw`;
+  Git LFS mirror, composite provenance, atomic activation, offline acceptance;
+  no rustup). G2.4–G2.8 (CUDA `-ccbin`, external SDK prerequisites, target headers/interfaces, identity
   integration, final offline acceptance) are not done; G3 is not started. Full G2
   offline closure is not claimed. G2 checks external WSL SDK prerequisites; it
   does not own or install those SDKs.

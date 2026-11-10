@@ -32,9 +32,14 @@ import re
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
-from .toolchain_registry import CompileProbe, ToolchainProfile, ToolchainSource
+from .toolchain_registry import (
+    CompileProbe,
+    ToolchainExtra,
+    ToolchainProfile,
+    ToolchainSource,
+)
 
 # (command, cwd, log_file)
 Runner = Callable[[List[str], Path, Path], None]
@@ -217,6 +222,29 @@ def build_rust_standalone(
     )
 
 
+def install_rust_component(
+    source_dir: Path,
+    prefix: Path,
+    component: str,
+    log_dir: Path,
+    runner: Runner,
+) -> None:
+    """Install one rust-installer component (e.g. a target ``rust-std``) into ``prefix``.
+
+    Uses the component archive's own ``install.sh`` (the official installer
+    mechanism, no rustup) so the files and the ``lib/rustlib/components``
+    manifest land in the same prefix as the base toolchain.
+    """
+    installer = source_dir / "install.sh"
+    if not installer.exists():
+        raise FileNotFoundError(f"No install.sh in {source_dir}")
+    runner(
+        ["sh", str(installer), f"--prefix={prefix}", f"--components={component}", "--verbose"],
+        source_dir,
+        log_dir / f"install-{component}.log",
+    )
+
+
 def run_build(
     recipe: Optional[str],
     source_dir: Path,
@@ -319,8 +347,18 @@ def _verify_compiler(prefix: Path) -> List[str]:
     return failures
 
 
-def _verify_rust(prefix: Path) -> List[str]:
-    """Verify rustc and cargo in a rust profile prefix."""
+def _verify_rust(
+    prefix: Path,
+    profile: Optional[ToolchainProfile] = None,
+    extras: Sequence[ToolchainExtra] = (),
+) -> List[str]:
+    """Verify rustc and cargo in a rust profile prefix.
+
+    With ``extras`` (target standard libraries) the candidate toolchain is also
+    checked as one coherent installation: the compiler release equals the
+    declared release, its sysroot is the candidate prefix, and every target std
+    is laid out and usable (see :func:`_verify_rust_target`).
+    """
     failures: List[str] = []
     for name in ("rustc", "cargo"):
         tool = _tool(prefix, name)
@@ -330,7 +368,124 @@ def _verify_rust(prefix: Path) -> List[str]:
         error = _run_probe([str(tool), "--version"])
         if error:
             failures.append(error)
+    if failures or not extras:
+        return failures
+
+    rustc = _tool(prefix, "rustc")
+    root = prefix.resolve()
+    for name in ("rustc", "cargo"):
+        real = _tool(prefix, name).resolve()
+        if not real.is_relative_to(root):
+            failures.append(f"{name} resolves outside the installation: {real}")
+    if failures:
+        return failures
+
+    env = _rust_probe_env(prefix)
+    with tempfile.TemporaryDirectory(prefix="toolchain-verify-") as temp_dir:
+        work = Path(temp_dir)
+        code, text = _run_capture([str(rustc), "-vV"], env, work)
+        release = next(
+            (ln.split(":", 1)[1].strip() for ln in text.splitlines() if ln.startswith("release:")),
+            "",
+        )
+        if code != 0 or not release:
+            return [f"rustc -vV failed: {_last_line(text)}"]
+        code, text = _run_capture([str(rustc), "--print", "sysroot"], env, work)
+        sysroot = Path(text.strip()) if code == 0 and text.strip() else None
+        if sysroot is None or sysroot.resolve() != root:
+            return [
+                f"rustc sysroot {str(sysroot)!r} is not the candidate prefix {root} "
+                "(ambient rustc/rustup must not be used)"
+            ]
+        for extra in extras:
+            if release != extra.release:
+                failures.append(
+                    f"{extra.kind} {extra.target}: rustc release {release} does not match "
+                    f"the declared {extra.kind} release {extra.release}"
+                )
+                continue
+            failures.extend(_verify_rust_target(rustc, root, extra, env, work))
     return failures
+
+
+def _rust_probe_env(prefix: Path) -> Dict[str, str]:
+    """Environment in which only the candidate rustc can be used (no rustup/ambient)."""
+    env = _probe_env(prefix)
+    for name in (
+        "RUSTUP_TOOLCHAIN",
+        "RUSTUP_HOME",
+        "RUSTC",
+        "RUSTC_WRAPPER",
+        "RUSTC_WORKSPACE_WRAPPER",
+        "CARGO_BUILD_TARGET",
+        "RUSTC_BOOTSTRAP",
+    ):
+        env.pop(name, None)
+    return env
+
+
+_COFF_MACHINES = {"x86_64": b"\x64\x86", "aarch64": b"\x64\xaa"}
+_RUST_PROBE = (
+    "pub fn probe() -> usize {\n"
+    "    let mut v: Vec<u32> = Vec::new();\n"
+    "    v.push(1);\n"
+    '    format!("{}", v.len()).len() + std::mem::size_of::<usize>()\n'
+    "}\n"
+)
+
+
+def _verify_rust_target(
+    rustc: Path, root: Path, extra: ToolchainExtra, env: Dict[str, str], work: Path
+) -> List[str]:
+    """Layout, target awareness and a link-free compile probe for one target std."""
+    label = f"{extra.kind} {extra.target}"
+    sysroot_lib = root / "lib" / "rustlib" / extra.target / "lib"
+    if not sysroot_lib.is_dir():
+        return [f"{label}: target library directory missing: {sysroot_lib}"]
+    if not any(item.is_file() for item in sysroot_lib.glob("libcore-*.rlib")):
+        return [f"{label}: no libcore-*.rlib under {sysroot_lib}"]
+    if not any(item.is_file() for item in sysroot_lib.glob("libstd-*.rlib")):
+        return [f"{label}: no libstd-*.rlib under {sysroot_lib}"]
+
+    code, text = _run_capture(
+        [str(rustc), "--target", extra.target, "--print", "target-libdir"], env, work
+    )
+    if code != 0:
+        return [f"{label}: rustc does not accept the target: {_last_line(text)}"]
+    if Path(text.strip()).resolve() != sysroot_lib.resolve():
+        return [f"{label}: rustc target-libdir {text.strip()!r} is not {sysroot_lib}"]
+
+    source = work / "probe.rs"
+    source.write_text(_RUST_PROBE, encoding="utf-8")
+    output = work / f"probe-{extra.target}.o"
+    code, text = _run_capture(
+        [
+            str(rustc),
+            "--edition",
+            "2021",
+            "--target",
+            extra.target,
+            "--crate-type",
+            "lib",
+            "--crate-name",
+            "probe",
+            "--emit",
+            "obj",
+            "-o",
+            str(output),
+            str(source),
+        ],
+        env,
+        work,
+    )
+    if code != 0 or not output.exists():
+        return [f"{label}: compile probe failed: {_last_line(text)}"]
+    arch = extra.target.split("-", 1)[0]
+    expected = _COFF_MACHINES.get(arch)
+    if "windows" in extra.target and expected is not None:
+        if output.read_bytes()[:2] != expected:
+            return [f"{label}: probe object is not COFF {arch}"]
+    return []
 
 
 def _verify_library(prefix: Path) -> List[str]:
@@ -534,8 +689,15 @@ def verify_installation(
     profile: Optional[ToolchainProfile],
     source: Optional[ToolchainSource],
     prefix: Path,
+    extras: Sequence[ToolchainExtra] = (),
 ) -> List[str]:
-    """Verify ``prefix`` with the profile's declared contract or its recipe."""
+    """Verify ``prefix`` with the profile's declared contract or its recipe.
+
+    ``extras`` are the additive artifacts that must be present and usable in
+    this installation (the base toolchain is always verified).
+    """
     if profile is not None and profile.verify is not None:
         return verify_declared(profile, prefix)
+    if source is not None and source.recipe == "rust_standalone":
+        return _verify_rust(prefix, profile, extras)
     return verify_profile(source.recipe if source is not None else None, prefix)

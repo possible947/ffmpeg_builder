@@ -139,6 +139,21 @@ toolchains:
         url: "https://static.rust-lang.org/dist/rust-{version}-x86_64-unknown-linux-gnu.tar.gz"
         archive_filename: "rust-{version}-x86_64-unknown-linux-gnu.tar.gz"
         sha256: de0581ca9d732295a6474cfbd02461db27d69acd5050a8206523a8d6fa1599db
+    # Additive project-managed artifacts installed into the SAME prefix as the
+    # base release (one coherent toolchain). The rust-std release must equal
+    # the profile version. Required only by the listed backends; native
+    # profiles keep installing the host toolchain alone. Source of the hash:
+    # https://static.rust-lang.org/dist/2026-10-01/channel-rust-1.99.0.toml
+    # (pkg.rust-std.target.x86_64-pc-windows-gnullvm.xz_hash).
+    extras:
+      - kind: rust-std
+        target: x86_64-pc-windows-gnullvm
+        component: rust-std-x86_64-pc-windows-gnullvm
+        release: "1.99.0"
+        backends: [linux-cross-mingw]
+        url: "https://static.rust-lang.org/dist/2026-10-01/rust-std-{version}-x86_64-pc-windows-gnullvm.tar.xz"
+        archive_filename: "rust-std-{version}-x86_64-pc-windows-gnullvm.tar.xz"
+        sha256: dcf636d91ef0639dd31a67169c7d7e27e1f013632490e1af97753b31728e85c0
   llvm-mingw:
     # Official prebuilt LLVM-MinGW (UCRT) cross toolchain for the WSL-Mingw
     # backend (linux-cross-mingw). `version` is the upstream release tag; the
@@ -240,12 +255,12 @@ platform_profiles:
     ffmpeg_version: "8.1"
     platform: linux
     backend: linux-cross-mingw
-    required_toolchains: [llvm-mingw]
+    required_toolchains: [llvm-mingw, rust]
   wsl-mingw-ffmpeg-9.0:
     ffmpeg_version: "9.0"
     platform: linux
     backend: linux-cross-mingw
-    required_toolchains: [llvm-mingw]
+    required_toolchains: [llvm-mingw, rust]
 
 cuda:
   "12.2": gcc12

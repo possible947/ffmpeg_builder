@@ -22,6 +22,8 @@ ALLOWED_KINDS = frozenset(
 ALLOWED_PLATFORMS = frozenset({"linux", "darwin", "windows"})
 ALLOWED_SOURCE_TYPES = frozenset({"build", "binary", "download", "local"})
 ALLOWED_RECIPES = frozenset({"gcc", "autotools", "rust_standalone"})
+# Additive project-managed artifacts a profile can carry (kind -> profile kind).
+ALLOWED_EXTRA_KINDS = {"rust-std": "rust"}
 # Target build backends a platform profile can be bound to (mirrors config.py).
 ALLOWED_BACKENDS = frozenset({"linux-cross-mingw"})
 # Cross-compiler target metadata accepted by the generic verifier.
@@ -55,6 +57,39 @@ class ToolchainSource:
     configure_args: List[str] = field(default_factory=list)
     build_args: List[str] = field(default_factory=list)
     install_args: List[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ToolchainExtra:
+    """An additive project-managed artifact installed into the profile's prefix.
+
+    ``rust-std`` extras are the target standard library of the same Rust
+    release; they participate in the profile's integrity, verification and
+    provenance. ``backends`` limits the requirement to those build backends
+    (empty means every backend, including native).
+    """
+
+    kind: str
+    target: str
+    component: str
+    release: str
+    archive_filename: str
+    sha256: str
+    url: Optional[str] = None
+    backends: Tuple[str, ...] = ()
+
+    @property
+    def key(self) -> Tuple[str, str]:
+        return (self.kind, self.target)
+
+    def as_source(self) -> "ToolchainSource":
+        """The extra's archive as a source (reuses the store's integrity path)."""
+        return ToolchainSource(
+            type="binary",
+            url=self.url,
+            archive_filename=self.archive_filename,
+            sha256=self.sha256,
+        )
 
 
 @dataclass(frozen=True)
@@ -109,6 +144,11 @@ class ToolchainProfile:
     note: str = ""
     target: Optional[TargetSpec] = None
     verify: Optional[VerifySpec] = None
+    extras: Tuple[ToolchainExtra, ...] = ()
+
+    def required_extras(self, backend: Optional[str]) -> List[ToolchainExtra]:
+        """Extras a given build backend requires (``None`` means native)."""
+        return [item for item in self.extras if not item.backends or backend in item.backends]
 
     @property
     def deployable(self) -> bool:
@@ -491,6 +531,7 @@ class ToolchainRegistry:
             verify = _parse_verify(name, entry.get("verify"), target)
             if kind == "cross_compiler":
                 _validate_cross_compiler(name, target, verify, materialize, sources)
+            extras = _parse_extras(name, kind, version, sources, entry.get("extras"))
             profiles[name] = ToolchainProfile(
                 name=name,
                 kind=kind,
@@ -504,6 +545,7 @@ class ToolchainRegistry:
                 note=note or "",
                 target=target,
                 verify=verify,
+                extras=extras,
             )
         return profiles
 
@@ -925,6 +967,94 @@ def _parse_verify(name: str, raw: Any, target: Optional[TargetSpec]) -> Optional
                 raise ValueError(f"{context} compile_probe {key} {tool!r} is not in required_tools")
         probe = CompileProbe(cc=tools["cc"], inspector=tools["inspector"], cxx=tools.get("cxx"))
     return VerifySpec(required_tools=required, version_checks=checks, compile_probe=probe)
+
+
+_TARGET_TRIPLE_RE = re.compile(r"\A[a-z0-9_]+(-[a-z0-9_.]+){2,3}\Z")
+
+
+def _parse_extras(
+    name: str,
+    profile_kind: str,
+    version: Optional[str],
+    sources: Dict[str, ToolchainSource],
+    raw: Any,
+) -> Tuple[ToolchainExtra, ...]:
+    """Parse and validate a profile's additive ``extras`` (fail fast at load)."""
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ValueError(f"Toolchain {name!r} extras must be a list")
+    result: List[ToolchainExtra] = []
+    seen: Set[Tuple[str, str]] = set()
+    for index, item in enumerate(raw):
+        context = f"toolchain {name!r} extras[{index}]"
+        if not isinstance(item, dict):
+            raise ValueError(f"{context} must be a mapping")
+        kind = _require_str(item, "kind", context)
+        if kind not in ALLOWED_EXTRA_KINDS:
+            raise ValueError(
+                f"{context} has unsupported kind {kind!r}; "
+                f"allowed: {', '.join(sorted(ALLOWED_EXTRA_KINDS))}"
+            )
+        if profile_kind != ALLOWED_EXTRA_KINDS[kind]:
+            raise ValueError(
+                f"{context} kind {kind!r} is only valid on {ALLOWED_EXTRA_KINDS[kind]!r} "
+                f"profiles, not {profile_kind!r}"
+            )
+        target = _require_str(item, "target", context)
+        if _TARGET_TRIPLE_RE.match(target) is None:
+            raise ValueError(f"{context} target {target!r} is not a valid target triple")
+        if (kind, target) in seen:
+            raise ValueError(f"{context} duplicates the {kind} extra for target {target!r}")
+        seen.add((kind, target))
+        release = _require_str(item, "release", context)
+        if release != (version or ""):
+            raise ValueError(
+                f"{context} release {release!r} does not match {name} version "
+                f"{version!r}; the {kind} must be the exact release of the base toolchain"
+            )
+        component = item.get("component") or f"{kind}-{target}"
+        if not isinstance(component, str) or not component:
+            raise ValueError(f"{context} component must be a non-empty string")
+        filename = _require_str(item, "archive_filename", context).replace("{version}", release)
+        if not filename.startswith(f"{kind}-{release}-{target}."):
+            raise ValueError(
+                f"{context} archive {filename!r} is inconsistent with "
+                f"{kind} {release} for target {target}"
+            )
+        sha256 = item.get("sha256")
+        if not isinstance(sha256, str) or not sha256:
+            raise ValueError(f"{context} requires a sha256")
+        if _SHA256_RE.match(sha256) is None:
+            raise ValueError(f"{context} sha256 {sha256!r} is not a 64-digit hex string")
+        url = item.get("url")
+        if url is not None and not isinstance(url, str):
+            raise ValueError(f"{context} url must be a string")
+        backends = tuple(_as_str_list(item.get("backends"), f"{context} backends"))
+        for backend in backends:
+            if backend not in ALLOWED_BACKENDS:
+                raise ValueError(
+                    f"{context} has invalid backend {backend!r}; "
+                    f"allowed: {', '.join(sorted(ALLOWED_BACKENDS))}"
+                )
+        result.append(
+            ToolchainExtra(
+                kind=kind,
+                target=target,
+                component=component,
+                release=release,
+                archive_filename=filename,
+                sha256=sha256.lower(),
+                url=url,
+                backends=backends,
+            )
+        )
+    if result and not any(source.recipe == "rust_standalone" for source in sources.values()):
+        raise ValueError(
+            f"Toolchain {name!r} declares extras but no 'rust_standalone' source to install "
+            "them into"
+        )
+    return tuple(result)
 
 
 def _validate_cross_compiler(
