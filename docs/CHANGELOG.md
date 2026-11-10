@@ -1,3 +1,28 @@
+### Accepted — G2.4/G2.5 final live acceptance and regression closure (#16, 2026-11-10)
+
+- Re-ran production WSL-Mingw preparation on the physical Windows 11/WSL2
+  development host using an isolated temporary identity workspace and
+  in-memory backend selection. Fresh G1 data identified an Intel i9-7980XE and
+  NVIDIA TITAN V (compute capability 7.0); CUDA 12.4.99 resolved from
+  `CUDA_HOME`, used project-managed GCC 12.5.0 as explicit `-ccbin`, and passed
+  the `compute_70` PTX probe with the scoped `-Xcompiler=-U_GNU_SOURCE`
+  workaround. Vulkan resolved from `VULKAN_SDK`; `glslc` shader compilation and
+  `spirv-val` validation passed without consulting Vulkan GPU/runtime state.
+- Safe negative checks confirmed missing/invalid explicit SDK roots do not
+  fall back to ambient SDKs or same-named tools on `PATH`; unusable selected
+  NVCC, missing selected Vulkan tools, invalid Vulkan layout, unavailable
+  project GCC, and invalid Windows compute capability fail in their respective
+  ownership categories. Disabled CUDA/Vulkan capabilities did not require
+  their SDKs; enabling either with an invalid root failed preparation.
+- A controlled contaminated environment removed 14 Linux SDK/runtime/discovery
+  entries while preserving host-tool `PATH` and leaving the parent unchanged.
+  Headless and TUI build entry paths both completed prerequisite preparation
+  and stopped before builder construction, component work, and G3.
+- The final acceptance report records the full validation results and
+  repository baseline. No SDK, Windows host, system compiler configuration,
+  saved build configuration, or real workspace state was changed. G2.6, G2.7,
+  G2.8, and G3 remain unstarted; no Windows cross-build is claimed.
+
 ### Added — G2.4/G2.5 WSL-Mingw production prerequisite preparation
 
 - Deferred CUDA SDK and project-managed ccbin resolution until after the fresh

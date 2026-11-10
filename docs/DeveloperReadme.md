@@ -393,6 +393,35 @@ Store behaviour (all profiles, not just LLVM-MinGW):
   produced 758 bytes of PTX with `.version 8.4` and `.target sm_70`; temporary
   files were removed. This is not a Windows runtime or GPU portability claim.
 
+  Final G2.4/G2.5 acceptance (issue #16) repeated the full `prepare_target()`
+  path in an isolated workspace using a fresh Windows probe: Windows 11 Pro
+  for Workstations, Intel i9-7980XE, and NVIDIA TITAN V at compute capability
+  7.0. CUDA resolved from `CUDA_HOME` to `/opt/cuda-12.4/bin/nvcc` 12.4.99,
+  selected verified ToolchainStore `gcc12` 12.5.0 as explicit `-ccbin`, and
+  passed PTX generation for `compute_70` with the scoped
+  `-Xcompiler=-U_GNU_SOURCE` workaround. Vulkan resolved from `VULKAN_SDK` to
+  `/opt/vulkan-sdk/1.4.363.1/x86_64`; `glslc` compiled the shader and
+  `spirv-val` validated the SPIR-V. The shader probe did not access a Vulkan
+  GPU or runtime.
+
+  Temporary invalid/missing-root checks rejected absent CUDA/Vulkan SDKs,
+  invalid explicit roots despite usable ambient SDK/PATH entries, selected
+  CUDA roots without NVCC, selected Vulkan roots without required host tools,
+  and invalid Vulkan layouts. A missing project GCC was classified as
+  `toolchain_install`; missing Windows compute capability as `target_data`;
+  prerequisite and PTX failures retain their separate
+  `external_prerequisite` and `cuda_compatibility` categories. With CUDA and
+  Vulkan explicitly disabled, preparation succeeded despite invalid SDK
+  overrides; enabling either capability made its missing SDK fail preparation.
+  The controlled contamination case removed 14 Linux SDK/runtime/discovery
+  entries, retained host-tool `PATH`, excluded SDK library and metadata paths,
+  and left its parent environment unchanged.
+
+  Both `scripts/run_build.py`'s headless `run_build()` and the TUI
+  `_run_build()` path reached the same successful preparation result and were
+  deliberately stopped at builder construction, before components or a G3
+  build. This does not claim that either path can yet build a Windows target.
+
 Isolated offline provisioning (does not touch the normal store):
 
 ```bash

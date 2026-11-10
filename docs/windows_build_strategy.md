@@ -1,9 +1,10 @@
 # Windows FFmpeg cross-build strategy
 
-**Status:** G0/G0A feasibility, G1 target preparation, and G2.1–G2.5
-prerequisite validation/isolation are complete for their scoped requirements.
-G2.6–G2.8, the G3 `linux-cross-mingw` cross-build backend, and the full
-component stack remain unimplemented.
+**Status:** G1 **PASS**; G2.1 complete; G2.2 complete; G2.3 complete; G2.4/G2.5
+**PASS** after final live acceptance in issue #16. G2.6, G2.7, G2.8, and G3
+have **not started**. The `linux-cross-mingw` cross-build backend and full
+Windows component stack remain unimplemented; this is not an end-to-end
+Windows FFmpeg build acceptance.
 
 **Naming.** The user-facing Windows build route is **WSL-Mingw**: Windows host
 → WSL2 Ubuntu build environment → LLVM-MinGW/UCRT cross toolchain → Windows

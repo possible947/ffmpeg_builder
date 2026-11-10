@@ -199,6 +199,17 @@ LunarG `setup-env.sh` globally sets Linux-native `LD_LIBRARY_PATH`,
 `PKG_CONFIG_PATH`, `CMAKE_PREFIX_PATH` and Vulkan layer paths; these must not
 reach Windows target dependency discovery.
 
+For `target_backend: linux-cross-mingw`, optional explicit SDK roots use
+`external_prerequisite_paths.cuda` and `.vulkan` in `build_config.yaml`.
+Without an override, CUDA resolves `CUDA_HOME` then `CUDA_PATH`, and Vulkan
+resolves `VULKAN_SDK`; an invalid explicit root fails rather than falling back
+to the environment or `PATH`. These are externally managed WSL host
+prerequisites, not project-managed Windows target libraries.
+
+G2.4/G2.5 prerequisite preparation has passed live acceptance on the validated
+host. The Windows cross-build backend and end-to-end Windows FFmpeg build are
+not implemented; G2.6–G2.8 and G3 remain unstarted.
+
 ### Windows runtime prerequisites
 
 GPU drivers and runtimes belong to Windows itself: the NVIDIA driver and CUDA
