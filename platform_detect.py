@@ -11,6 +11,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from .build_types import CATEGORY_TOOLCHAIN_INSTALL, BuildError
+from .config import BuildConfig, TARGET_BACKEND_CROSS_MINGW
+from .cuda_prerequisites import ResolvedCudaBuildHostInputs
+
 
 @dataclass
 class SystemInfo:
@@ -83,6 +87,7 @@ class PlatformInfo:
     cuda_nvcc_reason: str = ""
     nvcc_ccbin: Optional[str] = None
     nvcc_ccbin_reason: str = ""
+    cuda_build_host_inputs: Optional[ResolvedCudaBuildHostInputs] = None
     libvmaf_cuda_supported: bool = False
     libvmaf_cuda_reason: str = ""
     vaapi_available: bool = False
@@ -145,6 +150,9 @@ class PlatformInfo:
             "cuda_nvcc_reason": self.cuda_nvcc_reason,
             "nvcc_ccbin": self.nvcc_ccbin,
             "nvcc_ccbin_reason": self.nvcc_ccbin_reason,
+            "cuda_build_host_inputs": (
+                self.cuda_build_host_inputs.to_dict() if self.cuda_build_host_inputs else None
+            ),
             "libvmaf_cuda_supported": self.libvmaf_cuda_supported,
             "libvmaf_cuda_reason": self.libvmaf_cuda_reason,
             "vaapi_available": self.vaapi_available,
@@ -202,8 +210,9 @@ class PlatformDetector:
             return text
         return text.replace("\\", "/")
 
-    def __init__(self) -> None:
+    def __init__(self, config: Optional[BuildConfig] = None) -> None:
         """Initialize platform detector."""
+        self.config = config
         self.system_info = SystemInfo()
         self.platform_info = PlatformInfo()
         self.tools: Dict[str, ToolInfo] = {}
@@ -604,7 +613,12 @@ class PlatformDetector:
         if self.platform_info.is_linux or self.platform_info.is_windows:
             self._detect_cuda()
             self._detect_libvmaf_cuda_support()
-            self._detect_nvenc_api_version()
+            if not self._uses_cross_mingw_backend():
+                self._detect_nvenc_api_version()
+            else:
+                self.platform_info.nvenc_reason = (
+                    "Windows target capabilities are supplied by the G1 target probe."
+                )
             self.platform_info.qsv_available = self._check_qsv()
         # Vulkan and OpenCL are available on all platforms (including macOS via LunarG SDK / OpenCL.framework)
         self.platform_info.vulkan_available = self._check_vulkan()
@@ -672,8 +686,15 @@ class PlatformDetector:
 
         return "unknown"
 
+    def _uses_cross_mingw_backend(self) -> bool:
+        return bool(self.config and self.config.target_backend == TARGET_BACKEND_CROSS_MINGW)
+
     def _detect_cuda(self) -> None:
         """Detect CUDA installation."""
+        if self._uses_cross_mingw_backend():
+            self._detect_cross_mingw_cuda()
+            return
+
         # Try PATH first
         nvcc_path = shutil.which("nvcc")
         if nvcc_path:
@@ -709,6 +730,52 @@ class PlatformDetector:
                 self._detect_cuda_compute_capability()
                 self._detect_cuda_nvcc_support(str(nvcc))
                 return
+
+    def _detect_cross_mingw_cuda(self) -> None:
+        """Resolve only configured external CUDA and project-owned host tools."""
+        from .cuda_prerequisites import resolve_wsl_mingw_cuda_inputs
+        from .toolchain_registry import ToolchainRegistry
+        from .toolchain_store import ToolchainStore, resolve_store_root
+
+        config = self.config
+        if config is None:
+            raise RuntimeError("linux-cross-mingw CUDA resolution requires BuildConfig")
+        try:
+            registry = ToolchainRegistry()
+        except (OSError, ValueError) as exc:
+            raise BuildError(
+                "CUDA host compiler",
+                f"Toolchain registry could not be loaded: {exc}",
+                category=CATEGORY_TOOLCHAIN_INSTALL,
+                code="cuda_host_registry_unavailable",
+            ) from exc
+        store = ToolchainStore(
+            resolve_store_root(Path(__file__).resolve().parent),
+            backend=TARGET_BACKEND_CROSS_MINGW,
+        )
+        inputs = resolve_wsl_mingw_cuda_inputs(
+            config,
+            registry,
+            store,
+            required=config.enable_libvmaf and config.enable_libvmaf_cuda,
+        )
+        if inputs is None:
+            return
+
+        self.platform_info.cuda_build_host_inputs = inputs
+        self.platform_info.cuda_available = True
+        self.platform_info.cuda_path = str(inputs.nvcc_path)
+        self.platform_info.cuda_version = inputs.detected_cuda_version
+        self.platform_info.nvcc_ccbin = str(inputs.ccbin_path)
+        self.platform_info.nvcc_ccbin_reason = (
+            f"Project-managed {inputs.ccbin_profile} {inputs.ccbin_profile_version}; "
+            "CUDA_NVCC_CCBIN is ignored for linux-cross-mingw"
+        )
+        self.platform_info.cuda_nvcc_supported = False
+        self.platform_info.cuda_nvcc_reason = (
+            "CUDA SDK and project host compiler are resolved; functional NVCC "
+            "compatibility validation is pending."
+        )
 
     def _detect_cuda_version(self, nvcc_path: str) -> None:
         """Detect the CUDA Toolkit version from ``nvcc --version`` output.

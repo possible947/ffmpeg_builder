@@ -316,7 +316,7 @@ def _run_probe(command: List[str]) -> Optional[str]:
     return None
 
 
-def _verify_compiler(prefix: Path) -> List[str]:
+def _verify_compiler(prefix: Path, expected_version: Optional[str] = None) -> List[str]:
     """Verify a C/C++ compiler toolchain with a real compile-and-link probe."""
     failures: List[str] = []
     cc = _tool(prefix, "gcc")
@@ -331,6 +331,18 @@ def _verify_compiler(prefix: Path) -> List[str]:
         error = _run_probe([str(tool), "--version"])
         if error:
             failures.append(error)
+        elif expected_version:
+            status, output = _run_capture(
+                [str(tool), "-dumpfullversion", "-dumpversion"], clean_env(), prefix
+            )
+            if status != 0:
+                failures.append(
+                    f"{tool} could not report its compiler version: {_last_line(output)}"
+                )
+            elif output.strip() != expected_version:
+                failures.append(
+                    f"{tool} reports version {output.strip()!r}; expected {expected_version!r}"
+                )
 
     with tempfile.TemporaryDirectory(prefix="toolchain-verify-") as temp_dir:
         work = Path(temp_dir)
@@ -700,4 +712,6 @@ def verify_installation(
         return verify_declared(profile, prefix)
     if source is not None and source.recipe == "rust_standalone":
         return _verify_rust(prefix, profile, extras)
+    if source is not None and source.recipe == "gcc" and profile is not None:
+        return _verify_compiler(prefix, expected_version=profile.version)
     return verify_profile(source.recipe if source is not None else None, prefix)

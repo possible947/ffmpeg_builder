@@ -273,3 +273,101 @@ def test_verify_installed_without_entries(tmp_path, capsys):
 def test_parse_args_accepts_verify_only():
     args = prepare_toolchains.parse_args(["--verify-only"])
     assert args.verify_only is True
+
+
+def test_verify_only_selected_profile_preserves_other_entries(tmp_path, monkeypatch, capsys):
+    from ffmpeg_builder.toolchain_store import InstalledToolchain, ToolchainState, ToolchainStore
+
+    registry = _local_registry(tmp_path)
+    store = ToolchainStore(tmp_path / "store")
+    good = tmp_path / "local-cc"
+    broken = tmp_path / "broken"
+    broken.mkdir()
+    store.save_state(
+        ToolchainState(
+            profiles={
+                name: InstalledToolchain(
+                    profile=name,
+                    version="1.0",
+                    variant="build",
+                    path=str(path),
+                    installed_at="2026-01-01T00:00:00",
+                )
+                for name, path in (("goodcc", good), ("brokencc", broken))
+            }
+        )
+    )
+    original_broken = store.load_state().profiles["brokencc"].to_dict()
+    monkeypatch.setattr(prepare_toolchains, "ToolchainRegistry", lambda *a, **k: registry)
+
+    before = store.load_state().to_dict()
+    assert prepare_toolchains.verify_installed(store, profiles=["goodcc", "missing"]) == 1
+    assert store.load_state().to_dict() == before
+    assert "missing" in capsys.readouterr().out
+
+    assert prepare_toolchains.verify_installed(store, profiles=["goodcc"]) == 0
+
+    output = capsys.readouterr().out
+    assert "goodcc" in output and "brokencc" not in output
+    assert store.installed_status(registry, "goodcc")[0] == "compatible"
+    assert store.load_state().profiles["brokencc"].to_dict() == original_broken
+
+
+def test_verify_only_cli_forwards_profiles_without_host_detection(tmp_path, monkeypatch):
+    config = SimpleNamespace(
+        ffmpeg_version="8.1",
+        source_archives_dir="third_party/sources",
+        allow_network_downloads=False,
+    )
+    monkeypatch.setattr(
+        prepare_toolchains, "ConfigManager", lambda *a, **k: SimpleNamespace(load=lambda: config)
+    )
+
+    def unexpected_detector():
+        raise AssertionError("verify-only must not run unrelated host detection")
+
+    monkeypatch.setattr(prepare_toolchains, "PlatformDetector", unexpected_detector)
+    calls = []
+
+    def verify(store, adopt_relocated=False, profiles=None):
+        calls.append((store.root, adopt_relocated, profiles))
+        return 0
+
+    monkeypatch.setattr(prepare_toolchains, "verify_installed", verify)
+    store_root = tmp_path / "store"
+
+    assert (
+        prepare_toolchains.main(
+            ["--verify-only", "--profiles", "gcc12", "--store", str(store_root)]
+        )
+        == 0
+    )
+    assert calls == [(store_root, False, ["gcc12"])]
+
+
+def test_verify_only_selected_profile_fails_when_version_remains_stale(
+    tmp_path, monkeypatch, capsys
+):
+    from ffmpeg_builder.toolchain_store import InstalledToolchain, ToolchainState, ToolchainStore
+
+    registry = _local_registry(tmp_path)
+    store = ToolchainStore(tmp_path / "store")
+    store.save_state(
+        ToolchainState(
+            profiles={
+                "goodcc": InstalledToolchain(
+                    profile="goodcc",
+                    version="0.9",
+                    variant="build",
+                    path=str(tmp_path / "local-cc"),
+                    installed_at="2026-01-01T00:00:00",
+                )
+            }
+        )
+    )
+    monkeypatch.setattr(prepare_toolchains, "ToolchainRegistry", lambda *a, **k: registry)
+
+    assert prepare_toolchains.verify_installed(store, profiles=["goodcc"]) == 1
+
+    assert store.installed_status(registry, "goodcc")[0] == "stale"
+    assert "stale" in capsys.readouterr().out

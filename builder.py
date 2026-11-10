@@ -47,7 +47,7 @@ from .builders.network.zmq import build_libzmq
 from .builders.tools.meson import build_meson as build_meson_component
 from .builders.tools.ninja import build_ninja
 from .components import BuildSystem, Component, ComponentRegistry
-from .config import BuildConfig
+from .config import BuildConfig, TARGET_BACKEND_CROSS_MINGW
 from .downloader import AsyncDownloadManager, Downloader
 from .executor import CommandExecutor, ExecutionResult
 from .patches import get_patch_registry
@@ -627,7 +627,10 @@ class FFmpegBuilder:
                 )
 
         # CUDA paths
-        if self.platform_detector.platform_info.cuda_available:
+        if (
+            self.platform_detector.platform_info.cuda_available
+            and self.config.target_backend != TARGET_BACKEND_CROSS_MINGW
+        ):
             cuda_path = self.platform_detector.platform_info.cuda_path
             if cuda_path:
                 cuda_home = str(Path(cuda_path).parent.parent)

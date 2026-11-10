@@ -847,6 +847,91 @@ class TestHardenedInstall:
         store.reverify(registry)
         assert store.installed_status(registry, "bootstrap")[0] == "stale"
 
+    @pytest.mark.parametrize(
+        ("cc_version", "cxx_version"),
+        [("13.4.0", "12.5.0"), ("12.5.0", "13.4.0")],
+    )
+    def test_reverify_legacy_gcc_rejects_mismatched_binary_version(
+        self, tmp_path, cc_version, cxx_version
+    ):
+        from ffmpeg_builder.toolchain_store import InstalledToolchain, ToolchainState
+
+        registry = _write_registry(
+            tmp_path,
+            {
+                "gcc12": {
+                    "kind": "compiler",
+                    "platforms": ["linux"],
+                    "version": "12.5.0",
+                    "source": {
+                        "default": "build",
+                        "build": {
+                            "type": "build",
+                            "recipe": "gcc",
+                            "url": "https://example.org/gcc-12.5.0.tar.xz",
+                            "sha256": _SHA,
+                        },
+                    },
+                }
+            },
+        )
+        store = _store(tmp_path)
+        prefix = store.installed_dir / "gcc12-12.5.0"
+        (prefix / "bin").mkdir(parents=True)
+        for name, version in (("gcc", cc_version), ("g++", cxx_version)):
+            tool = prefix / "bin" / name
+            tool.write_text(
+                f'#!/bin/sh\nif [ "$1" = "-dumpfullversion" ]; then echo "{version}"; fi\n',
+                encoding="utf-8",
+            )
+            tool.chmod(0o755)
+        store.save_state(
+            ToolchainState(
+                profiles={
+                    "gcc12": InstalledToolchain(
+                        profile="gcc12",
+                        version="12.5.0",
+                        variant="build",
+                        path=str(prefix),
+                        installed_at="2026-01-01T00:00:00",
+                    )
+                }
+            )
+        )
+
+        assert store.reverify(registry, profiles=["gcc12"]) == ["gcc12"]
+        entry = store.load_state().profiles["gcc12"]
+        assert entry.schema_version == 1
+        assert entry.source_sha256 == ""
+        assert not entry.verified
+        assert store.installed_status(registry, "gcc12")[0] != "compatible"
+
+    @pytest.mark.parametrize(
+        "mismatch", ["source_sha256", "variant", "archive_filename", "runtime"]
+    )
+    def test_reverify_does_not_backfill_conflicting_legacy_source(self, tmp_path, mismatch):
+        registry, _ = _real_sha_binary(tmp_path)
+        store = _store(tmp_path)
+        store.acquire(registry, "bootstrap", verifier=_skip_verification)
+        state = store.load_state()
+        entry = state.profiles["bootstrap"]
+        entry.schema_version = 1
+        if mismatch == "source_sha256":
+            entry.source_sha256 = "f" * 64
+        elif mismatch == "variant":
+            entry.variant = "not-declared"
+        elif mismatch == "archive_filename":
+            entry.archive_filename = "other-archive.tar.gz"
+        else:
+            entry.runtime = "different-runtime"
+        original = entry.to_dict()
+        store.save_state(state)
+
+        assert store.reverify(registry) == []
+
+        assert store.load_state().profiles["bootstrap"].to_dict() == original
+        assert store.installed_status(registry, "bootstrap")[0] == "stale"
+
     def test_store_root_precedence(self, tmp_path, monkeypatch):
         from ffmpeg_builder.toolchain_store import resolve_store_root
 

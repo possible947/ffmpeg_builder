@@ -449,8 +449,13 @@ class ToolchainStore:
             entry.verified = False
             self.save_state(state)
 
-    def reverify(self, registry: ToolchainRegistry, adopt_relocated: bool = False) -> List[str]:
-        """Re-run verification for every installed profile.
+    def reverify(
+        self,
+        registry: ToolchainRegistry,
+        adopt_relocated: bool = False,
+        profiles: Optional[Sequence[str]] = None,
+    ) -> List[str]:
+        """Re-run verification for the selected installed profiles, or all profiles.
 
         Prefixes are resolved with :meth:`resolve_entry_path`, so this is also
         the store-relocation acceptance check: copy the store, run this against
@@ -462,8 +467,15 @@ class ToolchainStore:
         """
         failures: List[str] = []
         state = self.load_state()
+        selected = set(profiles) if profiles is not None else None
+        if selected is not None:
+            missing = sorted(selected.difference(state.profiles))
+            if missing:
+                return missing
         changed = False
         for name, entry in state.profiles.items():
+            if selected is not None and name not in selected:
+                continue
             prefix = self.resolve_entry_path(entry)
             profile = registry.get_profile(name)
             source = None
@@ -488,6 +500,19 @@ class ToolchainStore:
                 and source is not None
                 and entry.schema_version < STATE_SCHEMA_VERSION
                 and entry.version == (profile.version or "")
+                and entry.variant in profile.sources
+                and (
+                    not entry.source_sha256
+                    or entry.source_sha256.lower() == (source.sha256 or "").lower()
+                )
+                and (
+                    not entry.archive_filename
+                    or entry.archive_filename == _archive_filename(source, profile)
+                )
+                and (
+                    not entry.runtime
+                    or entry.runtime == (profile.target.runtime if profile.target else "")
+                )
             ):
                 # Backfill provenance for a legacy entry that matches the registry.
                 # No additive artifact is claimed: it cannot be vouched for.

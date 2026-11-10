@@ -20,6 +20,8 @@ from pathlib import Path
 import pytest
 
 from ffmpeg_builder.platform_detect import PlatformDetector
+from ffmpeg_builder.config import BuildConfig, TARGET_BACKEND_CROSS_MINGW
+from ffmpeg_builder.cuda_prerequisites import ResolvedCudaBuildHostInputs
 
 
 def _normalize_path_string(value):
@@ -488,3 +490,91 @@ class TestRealHardware:
         if libva_dev_present:
             assert platform_info.vaapi_available is True
             assert platform_info.vaapi_detected_via == "pkg-config (libva)"
+
+
+def test_cross_mingw_cuda_uses_deterministic_resolver_not_ambient_nvcc(monkeypatch):
+    detector = PlatformDetector(BuildConfig(target_backend=TARGET_BACKEND_CROSS_MINGW))
+    called = []
+    monkeypatch.setattr(detector, "_detect_cross_mingw_cuda", lambda: called.append(True))
+    monkeypatch.setattr("ffmpeg_builder.platform_detect.shutil.which", lambda name: "/ambient/nvcc")
+
+    detector._detect_cuda()
+
+    assert called == [True]
+    assert detector.platform_info.cuda_path is None
+
+
+def test_cross_mingw_detection_records_selection_without_compile_probe(monkeypatch):
+    config = BuildConfig(target_backend=TARGET_BACKEND_CROSS_MINGW)
+    detector = PlatformDetector(config)
+    cuda_inputs = ResolvedCudaBuildHostInputs(
+        cuda_root=Path("/fixture/cuda"),
+        nvcc_path=Path("/fixture/cuda/bin/nvcc"),
+        detected_cuda_version="12.4",
+        ccbin_path=Path("/fixture/gcc12/bin/gcc"),
+        ccbin_profile="gcc12",
+        ccbin_profile_version="12.5.0",
+        ccbin_provenance={"base_sha256": "fixture"},
+        resolution_source="config",
+        diagnostics=("selected fixture",),
+    )
+    monkeypatch.setattr(
+        "ffmpeg_builder.cuda_prerequisites.resolve_wsl_mingw_cuda_inputs",
+        lambda *args, **kwargs: cuda_inputs,
+    )
+    monkeypatch.setattr(detector, "_probe_nvcc_compile", lambda *args, **kwargs: pytest.fail())
+
+    detector._detect_cross_mingw_cuda()
+
+    assert detector.platform_info.cuda_path == str(cuda_inputs.nvcc_path)
+    assert detector.platform_info.cuda_version == "12.4"
+    assert detector.platform_info.nvcc_ccbin == str(cuda_inputs.ccbin_path)
+    assert detector.platform_info.cuda_nvcc_supported is False
+    assert detector.platform_info.cuda_build_host_inputs is cuda_inputs
+    assert detector.platform_info.cuda_compute_capability is None
+    assert detector.platform_info.to_dict()["cuda_build_host_inputs"]["ccbin_profile"] == "gcc12"
+
+
+def test_native_cuda_path_remains_ambient_path_based(monkeypatch):
+    detector = PlatformDetector()
+    monkeypatch.setattr(
+        "ffmpeg_builder.platform_detect.shutil.which",
+        lambda name: "/native/nvcc" if name == "nvcc" else None,
+    )
+    calls = []
+    monkeypatch.setattr(
+        detector, "_detect_cuda_version", lambda path: calls.append(("version", path))
+    )
+    monkeypatch.setattr(
+        detector, "_detect_cuda_compute_capability", lambda: calls.append(("capability", None))
+    )
+    monkeypatch.setattr(
+        detector, "_detect_cuda_nvcc_support", lambda path: calls.append(("support", path))
+    )
+
+    detector._detect_cuda()
+
+    assert detector.platform_info.cuda_path == "/native/nvcc"
+    assert calls == [
+        ("version", "/native/nvcc"),
+        ("capability", None),
+        ("support", "/native/nvcc"),
+    ]
+
+
+def test_native_cuda_nvcc_ccbin_override_remains_supported(monkeypatch):
+    detector = PlatformDetector()
+    monkeypatch.setenv("CUDA_NVCC_CCBIN", "/native/compiler")
+    calls = []
+
+    def probe(nvcc, ccbin=None):
+        calls.append((nvcc, ccbin))
+        return True
+
+    monkeypatch.setattr(detector, "_probe_nvcc_compile", probe)
+
+    detector._detect_cuda_nvcc_support("/native/nvcc")
+
+    assert calls == [("/native/nvcc", "/native/compiler")]
+    assert detector.platform_info.nvcc_ccbin == "/native/compiler"
+    assert detector.platform_info.cuda_nvcc_supported is True

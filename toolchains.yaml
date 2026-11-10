@@ -265,4 +265,5 @@ platform_profiles:
 cuda:
   "12.2": gcc12
   "12.3": gcc12
+  "12.4": gcc12
   "13.1": gcc13

@@ -20,7 +20,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # The package is the repository root (flat layout), so its *parent* goes on the path.
@@ -43,7 +43,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         "--profiles",
         nargs="+",
         metavar="NAME",
-        help="Explicit ordered list of profiles to acquire.",
+        help="Explicit ordered list of profiles to acquire or verify.",
     )
     parser.add_argument(
         "--all",
@@ -139,8 +139,12 @@ def select_profiles(
     ]
 
 
-def verify_installed(store: ToolchainStore, adopt_relocated: bool = False) -> int:
-    """Re-run verification for every installed profile; return an exit code.
+def verify_installed(
+    store: ToolchainStore,
+    adopt_relocated: bool = False,
+    profiles: Optional[Sequence[str]] = None,
+) -> int:
+    """Re-run verification for selected installed profiles, or all profiles.
 
     Resolution goes through the store (:meth:`ToolchainStore.resolve_entry_path`),
     so running with ``--store <moved-copy>`` is the store-relocation acceptance
@@ -150,23 +154,30 @@ def verify_installed(store: ToolchainStore, adopt_relocated: bool = False) -> in
     """
     registry = ToolchainRegistry()
     entries = store.list_installed()
+    if profiles is not None:
+        selected = set(profiles)
+        missing = sorted(selected.difference(entry.profile for entry in entries))
+        if missing:
+            print(f"Not installed: {', '.join(missing)}")
+            return 1
+        entries = [entry for entry in entries if entry.profile in selected]
     if not entries:
         print("Nothing installed to verify.")
         return 0
 
-    failures = store.reverify(registry, adopt_relocated=adopt_relocated)
+    failures = store.reverify(registry, adopt_relocated=adopt_relocated, profiles=profiles)
+    unusable = set(failures)
     for entry in sorted(entries, key=lambda item: item.profile):
         resolved = store.resolve_entry_path(entry)
-        status = "FAILED" if entry.profile in failures else "ok    "
+        state, reason = store.installed_status(registry, entry.profile)
+        if profiles is not None and state != "compatible":
+            unusable.add(entry.profile)
+        status = "FAILED" if entry.profile in unusable else "ok    "
         print(f"{status} {entry.profile} ({entry.variant}) at {resolved}")
-        if entry.profile in failures or (
-            store.installed_status(registry, entry.profile)[0] != "compatible"
-        ):
-            state, reason = store.installed_status(registry, entry.profile)
-            if state != "compatible":
-                print(f"       {state}: {reason}")
-    if failures:
-        print(f"\n{len(failures)} profile(s) failed verification.")
+        if state != "compatible":
+            print(f"       {state}: {reason}")
+    if unusable:
+        print(f"\n{len(unusable)} profile(s) failed verification or remain incompatible.")
         return 1
     if adopt_relocated:
         print("\nRelocated store adopted: recorded paths now point at the new root.")
@@ -178,11 +189,6 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     registry = ToolchainRegistry()
     config = ConfigManager(PROJECT_ROOT / "build_config.yaml").load()
-    _, platform_info, tools = PlatformDetector().detect_all()
-    platform = args.platform or platform_info.platform or "linux"
-    ffmpeg_version = args.ffmpeg_version or config.ffmpeg_version
-    versions = detected_system_tool_versions(platform_info, tools)
-
     if args.sources is not None and not args.sources.is_dir():
         print(f"error: --sources {args.sources} is not a directory", file=sys.stderr)
         return 2
@@ -193,6 +199,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         backend=args.backend,
     )
 
+    if args.verify_only:
+        return verify_installed(store, args.adopt, args.profiles)
+
+    _, platform_info, tools = PlatformDetector().detect_all()
+    platform = args.platform or platform_info.platform or "linux"
+    ffmpeg_version = args.ffmpeg_version or config.ffmpeg_version
+    versions = detected_system_tool_versions(platform_info, tools)
     installed_entries = store.list_installed()
     registry_status = {
         item.profile: store.installed_status(registry, item.profile)[0]
@@ -203,9 +216,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         for name, status in registry_status.items()
         if status == "compatible" or not args.backend
     ]
-
-    if args.verify_only:
-        return verify_installed(store, args.adopt)
 
     profiles = select_profiles(
         registry,

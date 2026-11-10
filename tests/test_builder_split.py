@@ -9,7 +9,7 @@ import pytest
 
 from ffmpeg_builder.builder import BuildError, CARGO_C_VERSION, FFmpegBuilder
 from ffmpeg_builder.components import BuildSystem, Component, ComponentCategory
-from ffmpeg_builder.config import BuildConfig
+from ffmpeg_builder.config import BuildConfig, TARGET_BACKEND_CROSS_MINGW
 from ffmpeg_builder.component_builders import get_custom_builder
 from ffmpeg_builder.platforms.linux_gcc15 import LinuxGcc15Platform
 from ffmpeg_builder.release_bundle import make_release_bundle
@@ -480,6 +480,48 @@ def _make_builder_with_archives(tmp_path: Path, source_archives_dir: str) -> FFm
         state_manager=StateManager(tmp_path / "state.json"),
         platform_detector=_PlatformDetector("windows"),
     )
+
+
+def test_cross_mingw_build_env_does_not_add_linux_cuda_paths(tmp_path: Path):
+    from ffmpeg_builder.platform_detect import PlatformDetector
+
+    cuda_root = tmp_path / "cuda-sdk"
+    for relative in (
+        "bin",
+        "include",
+        "lib",
+        "lib64",
+        "targets/x86_64-linux/lib",
+        "targets/x86_64-linux/lib/stubs",
+    ):
+        (cuda_root / relative).mkdir(parents=True, exist_ok=True)
+    config = BuildConfig(
+        target_backend=TARGET_BACKEND_CROSS_MINGW,
+        openmp=False,
+    )
+    detector = PlatformDetector(config)
+    detector.platform_info.cuda_available = True
+    detector.platform_info.cuda_path = str(cuda_root / "bin" / "nvcc")
+    builder = FFmpegBuilder(
+        config=config,
+        workspace=tmp_path / "workspace",
+        packages=tmp_path / "packages",
+        state_manager=StateManager(tmp_path / "state.json"),
+        platform_detector=detector,
+    )
+
+    for key in (
+        "CFLAGS",
+        "CXXFLAGS",
+        "LDFLAGS",
+        "PKG_CONFIG_PATH",
+        "PKG_CONFIG_LIBDIR",
+        "CMAKE_PREFIX_PATH",
+        "LIBRARY_PATH",
+        "LD_LIBRARY_PATH",
+    ):
+        assert str(cuda_root) not in builder.env.get(key, "")
+    assert builder.env["PATH"].split(os.pathsep)[1:] == os.environ.get("PATH", "").split(os.pathsep)
 
 
 def test_relative_source_archives_dir_anchored_to_project_root(tmp_path: Path):
