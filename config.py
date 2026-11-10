@@ -10,6 +10,9 @@ import yaml
 # config path to it so relative paths do not depend on the CWD.
 PROJECT_ROOT = Path(__file__).resolve().parent
 SUPPORTED_FFMPEG_VERSIONS = ("8.1", "9.0")
+TARGET_BACKEND_NATIVE = "native"
+TARGET_BACKEND_CROSS_MINGW = "linux-cross-mingw"
+SUPPORTED_TARGET_BACKENDS = (TARGET_BACKEND_NATIVE, TARGET_BACKEND_CROSS_MINGW)
 
 
 def get_workspace_dir_name(ffmpeg_version: str) -> str:
@@ -47,6 +50,12 @@ class WindowsConfig:
     command_mode: str = "posix"
     msys2_root: str = "C:\\msys64"
     prefer_system_packages: bool = True
+    # WSL-Mingw (linux-cross-mingw) target description. ``None`` = probe the
+    # physical Windows host through WSL interop. A mapping is an explicit
+    # override: ``mode: full`` replaces the probe, ``mode: supplement`` patches
+    # a fresh probe (see windows_probe.parse_override).
+    target_override: Optional[Dict[str, Any]] = None
+    probe_timeout_seconds: int = 120
 
 
 @dataclass
@@ -54,6 +63,11 @@ class BuildConfig:
     """Build configuration."""
 
     ffmpeg_version: str = "8.1"
+    # "native": build for the machine running the builder (Linux/WSL/macOS).
+    # "linux-cross-mingw": WSL-Mingw route; the physical Windows host running
+    # WSL is the target. Backend implementation arrives in a later gate; this
+    # setting currently selects the target probe + identity guard.
+    target_backend: str = TARGET_BACKEND_NATIVE
     gpl_enabled: bool = False
     make_release: bool = False
     native_build: bool = False
@@ -83,6 +97,11 @@ class BuildConfig:
             versions = ", ".join(SUPPORTED_FFMPEG_VERSIONS)
             raise ValueError(
                 f"Unsupported FFmpeg version {self.ffmpeg_version!r}; supported versions: {versions}"
+            )
+        if self.target_backend not in SUPPORTED_TARGET_BACKENDS:
+            backends = ", ".join(SUPPORTED_TARGET_BACKENDS)
+            raise ValueError(
+                f"Unsupported target_backend {self.target_backend!r}; supported: {backends}"
             )
 
     @property

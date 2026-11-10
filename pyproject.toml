@@ -66,7 +66,7 @@ packages = [
     "ffmpeg_builder.patches",
     "ffmpeg_builder.platforms",
 ]
-py-modules = ["app", "build_steps", "build_types", "builder", "component_builders", "components", "config", "downloader", "executor", "platform_detect", "release_bundle", "state", "system_report", "toolchain_builders", "toolchain_registry", "toolchain_store"]
+py-modules = ["app", "build_identity", "build_steps", "build_types", "builder", "component_builders", "components", "config", "downloader", "executor", "platform_detect", "release_bundle", "state", "target_guard", "windows_probe", "windows_probe_script", "system_report", "toolchain_builders", "toolchain_registry", "toolchain_store"]
 
 [tool.setuptools.package-dir]
 ffmpeg_builder = "."

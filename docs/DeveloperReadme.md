@@ -59,6 +59,12 @@ each, smoke-tested). See `CHANGELOG.md` for the release history.
 
 ## Module Reference
 
+### `windows_probe.py`, `build_identity.py`, `target_guard.py` (G1)
+
+Windows target probe (WSL interop, overrides), semantic build/runtime identity
+and the reuse guard used by `app.prepare_target()` and `scripts/run_build.py`.
+Details: `docs/windows_build_strategy.md`, "G1 implementation notes".
+
 ### `__main__.py`
 
 Entry point. Instantiates `FFmpegBuilderApp` and executes the application.

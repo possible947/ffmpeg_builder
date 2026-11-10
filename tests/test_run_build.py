@@ -158,6 +158,12 @@ def test_run_build_stops_at_first_failure(monkeypatch):
         def _get_buildable_components(self, config):
             return [good, bad]
 
+        def prepare_target(self, config, resume):
+            return SimpleNamespace(notes=[], stamp=lambda manager: None)
+
+        def recheck_target_runtime(self, config, session):
+            return None
+
         def _component_toolchain_env(self, config, components):
             return {}
 

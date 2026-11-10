@@ -1,3 +1,14 @@
+### Added — G1: Windows target probe and build/runtime identity guard
+
+- New `windows_probe.py`, `build_identity.py`, `target_guard.py`: fresh Windows
+  probe via WSL interop, explicit overrides (`windows.target_override`), semantic
+  build/runtime identity, identity-isolated workspaces for
+  `target_backend: linux-cross-mingw`, and a guard blocking unsafe state/artifact
+  reuse (TUI and `scripts/run_build.py`). `state.py` gained `identity`/`acceptance`,
+  `inspect()` and a trust gate. Native flows are unchanged. The WSL-Mingw build
+  backend (G3) and runtime acceptance (G5) are not implemented. See
+  `docs/windows_build_strategy.md` (G1 implementation notes).
+
 ### Changed — Windows documentation direction: WSL-Mingw replaces MSYS2-UCRT64 (2026-11-10)
 
 - **Architectural/documentation decision only; no production code changed.** The

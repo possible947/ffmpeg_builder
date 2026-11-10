@@ -79,6 +79,13 @@ def run_build(app: FFmpegBuilderApp, config: BuildConfig, resume: bool, no_relea
     """Execute the build; return an exit code."""
     all_components = app._get_buildable_components(config)
     components = list(all_components)
+    try:
+        session = app.prepare_target(config, resume)
+    except BuildError as exc:
+        print(f"BLOCKED by identity guard: {exc}", flush=True)
+        return 2
+    for note in session.notes:
+        print(f"NOTE: {note}", flush=True)
     if resume:
         resume_point = app.state_manager.get_resume_point()
         if resume_point:
@@ -105,6 +112,7 @@ def run_build(app: FFmpegBuilderApp, config: BuildConfig, resume: bool, no_relea
     state.config = config.to_dict()
     state.total_steps = len(all_components)
     app.state_manager.save()
+    session.stamp(app.state_manager)
 
     completed = 0
     for position, component in enumerate(components, 1):
@@ -144,6 +152,9 @@ def run_build(app: FFmpegBuilderApp, config: BuildConfig, resume: bool, no_relea
             builder.shutdown_downloads(wait=False)
 
     print(f"\nAll components done: {completed} completed.", flush=True)
+    drift = app.recheck_target_runtime(config, session)
+    if drift:
+        print(f"WARNING: {drift}", flush=True)
     if not no_release and config.make_release:
         try:
             release_dir = builder.make_release_bundle()

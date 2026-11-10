@@ -382,12 +382,58 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
 
 ### G1 — Windows probe and identity isolation
 
+#### G1 implementation notes
+
+- **Config:** `target_backend: native | linux-cross-mingw` (default `native`),
+  `windows.target_override` (mapping, default none) and
+  `windows.probe_timeout_seconds` (default 120).
+- **Probe:** a fresh probe per build/resume via WSL interop (`powershell.exe`,
+  argv without a shell, gzip+base64 `-EncodedCommand` bootstrap, explicit
+  timeout). Missing/failed/timed-out/malformed/incomplete probes raise
+  `WindowsProbeError` with an override hint; WSL Linux data is never
+  substituted. A technology reported `unavailable` never matches saved state.
+- **Overrides:** `mode: full` (default) replaces the probe and must state every
+  section (`os`, `cpu`, `gpus`, `nvidia`, `vulkan`, `opencl`; use
+  `state: absent` for hardware that is not installed). `mode: supplement`
+  probes first; `os`/`cpu` fields merge per field, other sections are replaced
+  as a whole. A failed probe is not rescued by a supplement.
+- **Identity:** *build identity* (backend, target OS/arch, FFmpeg version,
+  material config, component versions/toolchain profiles, CPU specialisation
+  only when `native_build` is set) decides artifact reuse and names the
+  workspace. *Runtime identity* (OS version/build, CPU/ISA, GPUs, NVIDIA,
+  Vulkan, OpenCL) decides whether earlier runtime acceptance is valid.
+  Edition, UBR, ICD manifests and `probed_at` are diagnostic only. Identities
+  are canonical JSON with SHA-256 fingerprints verified on load.
+- **Isolation:** WSL-Mingw builds run in
+  `<workspace>/targets/linux-cross-mingw-<build_key>/` (prefix, `packages`,
+  logs, `build_state.json`, `workspace_identity.json`). A material change
+  selects a new directory; old artifacts are preserved until Cleanup.
+- **Guard:** runs before reset/resume/config overwrite in the TUI and in
+  `scripts/run_build.py` (exit code 2). It refuses, without modifying anything,
+  a non-empty directory without a trusted marker, corrupt or legacy
+  (identity-less) state, and build-identity mismatch. A corrupt state file is
+  never treated as "no state". Legacy base-level state is preserved and
+  ignored by this route. `StateManager` also refuses to trust
+  `completed`/`system` or a resume point until the guard verified the state.
+- **Runtime drift:** runtime-only differences on resume reuse artifacts but set
+  `acceptance.status = invalidated` in the state. After a successful build the
+  target is re-probed; drift invalidates acceptance and a failed re-probe is
+  reported. Native Linux/WSL/macOS flows keep their behaviour: they record a
+  minimal identity, adopt legacy state, and only refuse resume on a recorded
+  identity mismatch.
+- **Not in G1:** toolchain/SDK installation, backend selection (G3), the runtime
+  acceptance suite (G5).
+
 - **Scope / code:** Add a fresh Windows interop probe (module name may be
   `windows_probe.py`), explicit overrides, identity model and guard before
   resume/reuse. Integrate with `platform_detect.py`, `config.py`, `app.py`,
   `state.py`, `builder.py` and workspace selection.
-- **Status:** [IMPLEMENTATION] No production probe or identity enforcement is
-  implemented by this consolidation.
+- **Status:** [IMPLEMENTED — G1] `windows_probe.py` (+ `windows_probe_script.py`),
+  `build_identity.py` and `target_guard.py` implement the probe, overrides,
+  semantic identity and reuse guard; see "G1 implementation notes" below. The
+  `linux-cross-mingw` build backend itself (G3) and runtime acceptance (G5)
+  are **not** implemented; selecting `target_backend: linux-cross-mingw`
+  currently runs the probe/guard only.
 - **Probe contract:** Windows version/build; CPU model/signature plus effective
   ISA and OS-enabled state; GPU inventory; NVIDIA model, compute capability,
   driver, and NVENC/NVDEC/API information needed for selection/acceptance;

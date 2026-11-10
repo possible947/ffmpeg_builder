@@ -11,6 +11,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
+from .build_types import BuildError
+
 # The package is the repository root (flat layout); anchor the default
 # state path to it so it does not depend on the CWD.
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -66,6 +68,12 @@ class BuildState:
     components: Dict[str, ComponentState] = field(default_factory=dict)
     current_step: int = 0
     total_steps: int = 0
+    # Persisted semantic identity (see build_identity.py). ``None`` means the
+    # state predates identity tracking (legacy). Kept raw so a corrupt value is
+    # never silently repaired.
+    identity: Any = None
+    # Runtime-acceptance bookkeeping, e.g. {"status": "invalidated", ...}.
+    acceptance: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -85,6 +93,8 @@ class BuildState:
             },
             "current_step": self.current_step,
             "total_steps": self.total_steps,
+            "identity": self.identity,
+            "acceptance": self.acceptance,
         }
 
     @classmethod
@@ -123,6 +133,15 @@ class BuildState:
         return state
 
 
+@dataclass
+class StateInspection:
+    """Result of inspecting a state file without treating errors as "no state"."""
+
+    kind: str  # "missing" | "ok" | "corrupt"
+    state: Optional[BuildState] = None
+    error: Optional[str] = None
+
+
 class StateManager:
     """Manages build state."""
 
@@ -135,12 +154,35 @@ class StateManager:
         self.state_path = state_path or PROJECT_ROOT / "workspace_81" / "build_state.json"
         self.state: Optional[BuildState] = None
         self._lock = threading.RLock()
+        # When True (target builds), completed/system statuses and the resume
+        # point are only trusted after the identity guard verified the state.
+        self.require_verified_identity = False
+        self.identity_verified = False
+        self.load_error: Optional[str] = None
         self.status_listener: Optional[
             Callable[
                 [str, ComponentStatus, Optional[str], Optional[str], Optional[str]],
                 None,
             ]
         ] = None
+
+    def inspect(self) -> StateInspection:
+        """Load the state file, distinguishing missing from corrupt.
+
+        Unlike :meth:`load`, a corrupt file is reported as such so identity
+        guards never mistake it for a fresh workspace.
+        """
+        if not self.state_path.exists():
+            return StateInspection("missing")
+        try:
+            with open(self.state_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                raise ValueError(f"expected a JSON object, got {type(data).__name__}")
+            return StateInspection("ok", BuildState.from_dict(data))
+        except (OSError, ValueError, TypeError) as e:
+            # json.JSONDecodeError is a ValueError subclass.
+            return StateInspection("corrupt", error=str(e))
 
     def load(self) -> Optional[BuildState]:
         """Load state from file.
@@ -150,21 +192,20 @@ class StateManager:
             file is unreadable/corrupt (a corrupt file is logged and
             treated as "no previous build" instead of crashing the app,
             which would make the state file unrecoverable without manual
-            deletion).
+            deletion). Target builds use :meth:`inspect` instead so a corrupt
+            file is never equivalent to a fresh state; the reason is kept in
+            ``load_error``.
         """
-        if not self.state_path.exists():
-            return None
-        try:
-            with open(self.state_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            self.state = BuildState.from_dict(data)
+        inspection = self.inspect()
+        self.load_error = inspection.error
+        if inspection.kind == "ok":
+            self.state = inspection.state
             return self.state
-        except (OSError, ValueError, TypeError) as e:
-            # json.JSONDecodeError is a ValueError subclass.
+        if inspection.kind == "corrupt":
             logging.getLogger(__name__).warning(
-                "Ignoring unreadable build state file %s: %s", self.state_path, e
+                "Ignoring unreadable build state file %s: %s", self.state_path, inspection.error
             )
-            return None
+        return None
 
     def save(self, state: Optional[BuildState] = None) -> None:
         """Save state to file.
@@ -275,12 +316,21 @@ class StateManager:
             state.total_steps = total_steps
             self.save()
 
+    def _require_trust(self, what: str) -> None:
+        if self.require_verified_identity and not self.identity_verified:
+            raise BuildError(
+                "build-state",
+                f"refusing to {what}: the saved state has not passed the build-identity "
+                "guard (run the guard before resuming or reusing artifacts)",
+            )
+
     def get_resume_point(self) -> Optional[str]:
         """Get name of first incomplete component.
 
         Returns:
             Component name to resume from, or None if all completed.
         """
+        self._require_trust("select a resume point")
         state = self.get()
 
         for name, comp_state in state.components.items():
@@ -299,6 +349,7 @@ class StateManager:
         Returns:
             True if completed with matching version.
         """
+        self._require_trust("trust a completed/system component")
         state = self.get()
 
         if component_name not in state.components:

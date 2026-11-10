@@ -1,6 +1,8 @@
 """Main application class for FFmpeg Builder."""
 
 import os
+import platform as _platform
+import sys
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Callable, Dict, List, Optional, Tuple, Type
@@ -11,7 +13,8 @@ from rich.live import Live
 from .build_types import BuildError, SkipComponent
 from .builder import FFmpegBuilder
 from .components import Component, ComponentRegistry
-from .config import BuildConfig, ConfigManager
+from .build_identity import build_native_identity
+from .config import TARGET_BACKEND_CROSS_MINGW, BuildConfig, ConfigManager
 from .ffmpeg_policy import (
     FfmpegPolicy,
     detected_system_tool_versions,
@@ -19,9 +22,21 @@ from .ffmpeg_policy import (
 )
 from .platform_detect import PlatformDetector
 from .state import ComponentStatus, StateManager
+from .target_guard import (
+    IdentityError,
+    TargetSession,
+    baseline_from_state,
+    invalidate_acceptance,
+    mark_state_verified,
+    prepare_native_target,
+    prepare_windows_target,
+    probe_current_identity,
+    recheck_runtime_identity,
+)
 from .system_report import SystemReportGenerator
 from .toolchain_registry import ToolchainRegistry
 from .toolchain_store import ToolchainStore
+from .windows_probe import probe_windows_target
 from .ui.dashboard import BuildDashboard
 from .ui.error_handler import ErrorHandler
 from .ui.screens import (
@@ -50,6 +65,9 @@ class FFmpegBuilderApp:
         """
         self._custom_workspace = workspace
         self.console = Console()
+        # Injectable for tests; the real probe talks to the physical Windows
+        # host through WSL interop.
+        self.windows_probe = probe_windows_target
 
         self.config_manager = ConfigManager(PROJECT_ROOT / "build_config.yaml")
         config = self.config_manager.load()
@@ -83,8 +101,79 @@ class FFmpegBuilderApp:
             self.workspace = self._custom_workspace
         else:
             self.workspace = config.get_workspace_path(PROJECT_ROOT)
+        self.base_workspace = self.workspace
         self.packages = self.workspace / "packages"
         self.state_manager = StateManager(self.workspace / "build_state.json")
+
+    @staticmethod
+    def _is_cross_mingw(config: BuildConfig) -> bool:
+        return config.target_backend == TARGET_BACKEND_CROSS_MINGW
+
+    def current_windows_identity(self, config: BuildConfig) -> Any:
+        """Freshly probe the Windows target (or apply the override) -> identity."""
+        components = self._get_buildable_components(config)
+        windows = config.windows
+        probe = self.windows_probe
+
+        def _probe(override: Any, **kwargs: Any) -> Any:
+            return probe(override, timeout=windows.probe_timeout_seconds, **kwargs)
+
+        return probe_current_identity(
+            config.to_dict(),
+            windows.target_override,
+            components={c.name: c.version for c in components},
+            toolchains={c.name: c.toolchain for c in components},
+            host={"platform": self.platform_detector.get_build_backend_name()},
+            probe=_probe,
+        )
+
+    def prepare_target(self, config: BuildConfig, resume: bool) -> TargetSession:
+        """Run the identity guard; must precede any reset/resume/state overwrite.
+
+        Switches ``workspace``/``packages``/``state_manager`` to the identity
+        workspace on the WSL-Mingw route. Raises ``IdentityError`` when reuse is
+        unsafe, leaving saved state and artifacts untouched.
+        """
+        if self._is_cross_mingw(config):
+            current = self.current_windows_identity(config)
+            session = prepare_windows_target(self.base_workspace, current, resume)
+            self.workspace = session.workspace
+            self.packages = self.workspace / "packages"
+            self.state_manager = StateManager(self.workspace / "build_state.json")
+            self.state_manager.require_verified_identity = True
+            mark_state_verified(self.state_manager)
+            return session
+        identity = build_native_identity(
+            config.to_dict(),
+            self.platform_detector.get_build_backend_name(),
+            sys.platform,
+            _platform.machine(),
+        )
+        return prepare_native_target(self.base_workspace, self.state_manager, identity, resume)
+
+    def recheck_target_runtime(self, config: BuildConfig, session: TargetSession) -> Optional[str]:
+        """Re-probe before runtime acceptance; return a warning message if drifted.
+
+        Only the WSL-Mingw route is checked. Full runtime acceptance is a later gate;
+        this records invalidation in the state so it can never be trusted stale.
+        """
+        if not self._is_cross_mingw(config):
+            return None
+        baseline = baseline_from_state(self.state_manager.get()) or session.identity
+        try:
+            current = self.current_windows_identity(config)
+        except BuildError as exc:
+            invalidate_acceptance(self.state_manager, f"re-probe failed: {exc}", [])
+            return f"Windows target re-probe failed; runtime acceptance invalid: {exc}"
+        drift = recheck_runtime_identity(baseline, current)
+        if drift.build_unsafe or not drift.acceptance_valid:
+            invalidate_acceptance(
+                self.state_manager,
+                "runtime identity changed after build start",
+                [d.path for d in drift.comparison.differences],
+            )
+            return drift.message
+        return None
 
     def _build_policy(self, config: BuildConfig) -> FfmpegPolicy:
         return evaluate_ffmpeg_policy(config, self.platform_info, self.tools)
@@ -129,7 +218,7 @@ class FFmpegBuilderApp:
                         continue
                     self._run_build(config, resume=False)
                 elif action == "resume":
-                    if state:
+                    if state or self._is_cross_mingw(config):
                         if not policy.selected_version_allowed:
                             self.console.print(
                                 f"[red]Resume blocked by FFmpeg policy:[/red] {policy.blocked_reason}"
@@ -361,6 +450,14 @@ class FFmpegBuilderApp:
         all_components = self._get_buildable_components(config)
         components = list(all_components)
 
+        try:
+            session = self.prepare_target(config, resume)
+        except BuildError as e:
+            self.console.print(f"[red]Build blocked by identity guard:[/red] {e}")
+            return
+        for note in session.notes:
+            self.console.print(f"[yellow]{note}[/yellow]")
+
         if resume:
             resume_point = self.state_manager.get_resume_point()
             if resume_point:
@@ -410,6 +507,7 @@ class FFmpegBuilderApp:
         state.config = config.to_dict()
         state.total_steps = len(all_components)
         self.state_manager.save()
+        session.stamp(self.state_manager)
 
         for name, component_state in state.components.items():
             dashboard.update_status(name, component_state.status, component_state.version)
@@ -507,6 +605,11 @@ class FFmpegBuilderApp:
             error_message,
         )
 
+        if success:
+            drift = self.recheck_target_runtime(config, session)
+            if drift:
+                self.console.print(f"[yellow]{drift}[/yellow]")
+
         if success and config.make_release:
             try:
                 release_dir = builder.make_release_bundle()
@@ -535,6 +638,8 @@ class FFmpegBuilderApp:
 
         self.state_manager.reset()
         self.console.print("[green]Reset build state[/green]")
+        self.workspace = self.base_workspace
+        self.packages = self.workspace / "packages"
 
         legacy_workspace = PROJECT_ROOT / "workspace"
         if legacy_workspace.exists():
