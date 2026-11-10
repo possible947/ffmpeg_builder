@@ -305,6 +305,26 @@ Store behaviour (all profiles, not just LLVM-MinGW):
   `PATH`, install or hash SDKs, or modify build/target environment variables.
   SDK-specific root names, tools and validation remain the responsibility of
   later technology-specific resolvers.
+- **WSL-Mingw Vulkan SDK inputs:** `resolve_wsl_mingw_vulkan_sdk()` in
+  `vulkan_prerequisites.py` resolves `external_prerequisite_paths.vulkan`
+  before `VULKAN_SDK`; an invalid configured root is authoritative. It accepts
+  either the SDK package root (with an `x86_64/` subtree) or the effective
+  architecture root, then verifies the Vulkan header layout marker and resolves
+  requested host tools only from that root's `bin/`. Shader compilation uses
+  `glslc` or `glslangValidator`, followed by `spirv-val`; each selected tool is
+  executable- and version-probed, and the shader/validation capability is
+  functionally tested with a temporary compute shader and SPIR-V output.
+  `spirv-opt` is selected and exercised only when the caller explicitly
+  requires `spirv_optimization`; current consumers do not require optimization.
+  The typed `ResolvedVulkanSdk` result carries selected/effective roots,
+  configuration/environment provenance, tool paths, validated capabilities,
+  and diagnostic tool-version output. Tool versions are diagnostic, not
+  ToolchainRegistry inputs. The resolver does not source `setup-env.sh`, search
+  `PATH`, touch Vulkan runtime/GPU state, or expose SDK libraries,
+  pkg-config directories, or CMake prefixes to target discovery. It does not
+  provision, copy, hash, or otherwise own the external SDK. This API is for
+  later `linux-cross-mingw` consumers; existing native Linux/macOS Vulkan
+  detection and build behavior are unchanged.
 - **WSL-Mingw CUDA inputs:** `resolve_wsl_mingw_cuda_inputs()` resolves the
   optional `external_prerequisite_paths.cuda` root, then `CUDA_HOME`, then
   `CUDA_PATH`. It accepts NVCC only from `<root>/bin/nvcc`, checks that the
