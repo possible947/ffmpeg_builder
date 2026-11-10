@@ -16,10 +16,18 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Protocol, Set, 
 
 import yaml
 
-ALLOWED_KINDS = frozenset({"compiler", "build_tool", "rust", "rust_tool", "bootstrap_lib"})
+ALLOWED_KINDS = frozenset(
+    {"compiler", "cross_compiler", "build_tool", "rust", "rust_tool", "bootstrap_lib"}
+)
 ALLOWED_PLATFORMS = frozenset({"linux", "darwin", "windows"})
 ALLOWED_SOURCE_TYPES = frozenset({"build", "binary", "download", "local"})
 ALLOWED_RECIPES = frozenset({"gcc", "autotools", "rust_standalone"})
+# Target build backends a platform profile can be bound to (mirrors config.py).
+ALLOWED_BACKENDS = frozenset({"linux-cross-mingw"})
+# Cross-compiler target metadata accepted by the generic verifier.
+ALLOWED_TARGET_ARCHES = frozenset({"x86_64"})
+ALLOWED_TARGET_FAMILIES = frozenset({"mingw-w64"})
+ALLOWED_TARGET_RUNTIMES = frozenset({"ucrt"})
 
 _SHA256_RE = re.compile(r"\A[0-9a-fA-F]{64}\Z")
 _RANGE_OP_RE = re.compile(r"\A(>=|<=|==|>|<)\s*(\d+(?:\.\d+)*)\Z")
@@ -50,6 +58,42 @@ class ToolchainSource:
 
 
 @dataclass(frozen=True)
+class TargetSpec:
+    """The Windows target a cross-compiler profile produces binaries for."""
+
+    triple: str
+    arch: str
+    family: str
+    runtime: str
+
+
+@dataclass(frozen=True)
+class VersionCheck:
+    """A prefix-relative tool whose ``--version`` output must match ``pattern``."""
+
+    tool: str
+    pattern: str
+
+
+@dataclass(frozen=True)
+class CompileProbe:
+    """Compile/link smoke test run with the candidate installation only."""
+
+    cc: str
+    inspector: str
+    cxx: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class VerifySpec:
+    """Declarative verification contract consumed by the generic verifier."""
+
+    required_tools: List[str] = field(default_factory=list)
+    version_checks: List[VersionCheck] = field(default_factory=list)
+    compile_probe: Optional[CompileProbe] = None
+
+
+@dataclass(frozen=True)
 class ToolchainProfile:
     """A named toolchain profile resolved to a pinned version."""
 
@@ -63,6 +107,8 @@ class ToolchainProfile:
     sources: Dict[str, ToolchainSource] = field(default_factory=dict)
     default_source: Optional[str] = None
     note: str = ""
+    target: Optional[TargetSpec] = None
+    verify: Optional[VerifySpec] = None
 
     @property
     def deployable(self) -> bool:
@@ -79,6 +125,8 @@ class PlatformProfile:
     platform: str
     system_tool_range: Dict[str, str] = field(default_factory=dict)
     fallback_toolchain: Optional[str] = None
+    backend: Optional[str] = None
+    required_toolchains: List[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -141,14 +189,29 @@ class ToolchainRegistry:
         return self.platform_profiles.get(name)
 
     def resolve_platform_profile(
-        self, ffmpeg_version: str, platform: str
+        self, ffmpeg_version: str, platform: str, backend: Optional[str] = None
     ) -> Optional[PlatformProfile]:
-        """Resolve the platform profile for an (ffmpeg_version, platform) pair."""
+        """Resolve the platform profile for an (ffmpeg_version, platform, backend).
+
+        ``backend=None`` selects the native profile only; backend-bound profiles
+        (e.g. ``linux-cross-mingw``) never match a native lookup.
+        """
         wanted = str(ffmpeg_version)
         for profile in self.platform_profiles.values():
-            if profile.ffmpeg_version == wanted and profile.platform == platform:
+            if (
+                profile.ffmpeg_version == wanted
+                and profile.platform == platform
+                and profile.backend == backend
+            ):
                 return profile
         return None
+
+    def required_toolchains_for(
+        self, ffmpeg_version: str, platform: str, backend: Optional[str]
+    ) -> List[str]:
+        """Toolchain profiles a backend-bound platform profile requires."""
+        profile = self.resolve_platform_profile(ffmpeg_version, platform, backend)
+        return list(profile.required_toolchains) if profile is not None else []
 
     def default_toolchain_for(self, ffmpeg_version: str, platform: str) -> Optional[str]:
         """Return the fallback toolchain profile name for a platform profile.
@@ -224,6 +287,7 @@ class ToolchainRegistry:
         components: Iterable[_HasToolchain] = (),
         installed: Iterable[str] = (),
         cuda_version: Optional[str] = None,
+        backend: Optional[str] = None,
     ) -> List[Tuple[str, str]]:
         """Recommended acquisitions derived from the current system analysis.
 
@@ -231,7 +295,9 @@ class ToolchainRegistry:
 
         1. the platform-profile effective toolchain — when the detected system
            toolchain is outside the profile's range, its ``fallback_toolchain``
-           is recommended;
+           is recommended. With a ``backend`` (e.g. ``linux-cross-mingw``) the
+           backend-bound platform profile's ``required_toolchains`` are
+           recommended instead and the native fallback does not apply;
         2. the bootstrap prerequisites of every recommended profile
            (``source.bootstrap.requires``), expanded before their dependents;
         3. explicit lower ``toolchain`` requirements declared by ``components``;
@@ -253,15 +319,19 @@ class ToolchainRegistry:
                 return
             ordered[name] = reason
 
-        assignment = self.resolve_effective_toolchain(
-            ffmpeg_version, platform, system_tool_versions
-        )
-        if assignment is not None and assignment.mode == "deploy":
-            _add(
-                assignment.profile,
-                f"fallback toolchain for FFmpeg {ffmpeg_version} "
-                "(detected system toolchain is out of range)",
+        if backend is not None:
+            for required in self.required_toolchains_for(ffmpeg_version, platform, backend):
+                _add(required, f"required by the {backend} backend for FFmpeg {ffmpeg_version}")
+        else:
+            assignment = self.resolve_effective_toolchain(
+                ffmpeg_version, platform, system_tool_versions
             )
+            if assignment is not None and assignment.mode == "deploy":
+                _add(
+                    assignment.profile,
+                    f"fallback toolchain for FFmpeg {ffmpeg_version} "
+                    "(detected system toolchain is out of range)",
+                )
 
         for component in components:
             if component.toolchain and component.toolchain != "n/a":
@@ -417,6 +487,10 @@ class ToolchainRegistry:
             if note is not None and not isinstance(note, str):
                 raise ValueError(f"Toolchain {name!r} note must be a string")
             sources, default_source = self._parse_sources(name, entry.get("source"))
+            target = _parse_target(name, kind, entry.get("target"))
+            verify = _parse_verify(name, entry.get("verify"), target)
+            if kind == "cross_compiler":
+                _validate_cross_compiler(name, target, verify, materialize, sources)
             profiles[name] = ToolchainProfile(
                 name=name,
                 kind=kind,
@@ -428,6 +502,8 @@ class ToolchainRegistry:
                 sources=sources,
                 default_source=default_source,
                 note=note or "",
+                target=target,
+                verify=verify,
             )
         return profiles
 
@@ -529,6 +605,7 @@ class ToolchainRegistry:
 
     def _parse_platform_profiles(self, raw: Dict[str, Any]) -> Dict[str, PlatformProfile]:
         result: Dict[str, PlatformProfile] = {}
+        seen_keys: Dict[Tuple[str, str, Optional[str]], str] = {}
         for key, entry in raw.items():
             name = str(key)
             if not isinstance(entry, dict):
@@ -552,12 +629,40 @@ class ToolchainRegistry:
                 raise ValueError(
                     f"Platform profile {name!r} fallback_toolchain must be a string or null"
                 )
+            backend = entry.get("backend")
+            if backend is not None and backend not in ALLOWED_BACKENDS:
+                raise ValueError(
+                    f"Platform profile {name!r} has invalid backend {backend!r}; "
+                    f"allowed: {', '.join(sorted(ALLOWED_BACKENDS))}"
+                )
+            required = _as_str_list(
+                entry.get("required_toolchains"),
+                f"platform profile {name!r} required_toolchains",
+            )
+            if required and backend is None:
+                raise ValueError(
+                    f"Platform profile {name!r} declares required_toolchains without a backend"
+                )
+            if backend is not None and (system_tool_range or fallback is not None):
+                raise ValueError(
+                    f"Platform profile {name!r} is backend-bound; system_tool_range and "
+                    "fallback_toolchain apply to native profiles only"
+                )
+            profile_key = (str(ffmpeg_version), platform, backend)
+            if profile_key in seen_keys:
+                raise ValueError(
+                    f"Platform profile {name!r} duplicates {seen_keys[profile_key]!r} for "
+                    f"(ffmpeg_version, platform, backend) = {profile_key!r}"
+                )
+            seen_keys[profile_key] = name
             result[name] = PlatformProfile(
                 name=name,
                 ffmpeg_version=ffmpeg_version,
                 platform=platform,
                 system_tool_range=system_tool_range,
                 fallback_toolchain=fallback,
+                backend=backend,
+                required_toolchains=required,
             )
         return result
 
@@ -588,6 +693,12 @@ class ToolchainRegistry:
                     f"Platform profile {platform_profile.name!r} references unknown "
                     f"fallback_toolchain {fallback!r}"
                 )
+            for required in platform_profile.required_toolchains:
+                if required not in self.profiles:
+                    raise ValueError(
+                        f"Platform profile {platform_profile.name!r} references unknown "
+                        f"required toolchain {required!r}"
+                    )
         for cuda_version, profile_name in self.cuda_map.items():
             if profile_name not in self.profiles:
                 raise ValueError(
@@ -700,6 +811,157 @@ def _parse_bootstrap(name: str, raw: Any) -> Optional[BootstrapSpec]:
         raise ValueError(f"Toolchain {name!r} bootstrap compiler must be a non-empty string")
     requires = _as_str_list(raw.get("requires"), f"toolchain {name!r} bootstrap requires")
     return BootstrapSpec(compiler=compiler, requires=requires)
+
+
+def _parse_exact_mapping(
+    value: Any, context: str, allowed: Iterable[str], required: Iterable[str]
+) -> Dict[str, Any]:
+    """Validate a mapping's key set (unknown or missing keys are errors)."""
+    if not isinstance(value, dict):
+        raise ValueError(f"{context} must be a mapping")
+    unknown = sorted(set(map(str, value)) - set(allowed))
+    if unknown:
+        raise ValueError(f"{context} has unknown keys: {', '.join(unknown)}")
+    missing = [key for key in required if key not in value]
+    if missing:
+        raise ValueError(f"{context} requires: {', '.join(missing)}")
+    return value
+
+
+def _parse_target(name: str, kind: str, raw: Any) -> Optional[TargetSpec]:
+    context = f"toolchain {name!r} target"
+    if raw is None:
+        if kind == "cross_compiler":
+            raise ValueError(f"Toolchain {name!r} of kind 'cross_compiler' requires a 'target'")
+        return None
+    if kind != "cross_compiler":
+        raise ValueError(f"Toolchain {name!r} declares a 'target' but is not a cross_compiler")
+    entry = _parse_exact_mapping(
+        raw, context, ("triple", "arch", "family", "runtime"), ("triple", "arch", "runtime")
+    )
+    triple = _require_str(entry, "triple", context)
+    arch = _require_str(entry, "arch", context)
+    runtime = _require_str(entry, "runtime", context)
+    family = entry.get("family", "mingw-w64")
+    if not isinstance(family, str):
+        raise ValueError(f"{context} family must be a string")
+    if arch not in ALLOWED_TARGET_ARCHES:
+        raise ValueError(
+            f"{context} has unsupported arch {arch!r}; "
+            f"allowed: {', '.join(sorted(ALLOWED_TARGET_ARCHES))}"
+        )
+    if family not in ALLOWED_TARGET_FAMILIES:
+        raise ValueError(
+            f"{context} has unsupported family {family!r}; "
+            f"allowed: {', '.join(sorted(ALLOWED_TARGET_FAMILIES))}"
+        )
+    if runtime not in ALLOWED_TARGET_RUNTIMES:
+        raise ValueError(
+            f"{context} has unsupported runtime {runtime!r}; "
+            f"allowed: {', '.join(sorted(ALLOWED_TARGET_RUNTIMES))}"
+        )
+    if triple != f"{arch}-w64-mingw32":
+        raise ValueError(
+            f"{context} triple {triple!r} is inconsistent with arch {arch!r} "
+            f"and family {family!r} (expected {arch}-w64-mingw32)"
+        )
+    return TargetSpec(triple=triple, arch=arch, family=family, runtime=runtime)
+
+
+def _relative_tool(value: Any, context: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{context} must be a non-empty string")
+    parts = Path(value).parts
+    if Path(value).is_absolute() or ".." in parts:
+        raise ValueError(f"{context} {value!r} must be a prefix-relative path without '..'")
+    return value
+
+
+def _parse_verify(name: str, raw: Any, target: Optional[TargetSpec]) -> Optional[VerifySpec]:
+    if raw is None:
+        return None
+    context = f"toolchain {name!r} verify"
+    entry = _parse_exact_mapping(
+        raw, context, ("required_tools", "version_checks", "compile_probe"), ("required_tools",)
+    )
+    required_raw = _as_str_list(entry.get("required_tools"), f"{context} required_tools")
+    if not required_raw:
+        raise ValueError(f"{context} required_tools must list at least one tool")
+    required = [_relative_tool(item, f"{context} required_tools entry") for item in required_raw]
+    declared = set(required)
+
+    checks: List[VersionCheck] = []
+    for item in entry.get("version_checks") or []:
+        check = _parse_exact_mapping(
+            item, f"{context} version_checks entry", ("tool", "pattern"), ("tool", "pattern")
+        )
+        tool = _relative_tool(check["tool"], f"{context} version_checks tool")
+        pattern = check["pattern"]
+        if not isinstance(pattern, str) or not pattern:
+            raise ValueError(f"{context} version_checks pattern must be a non-empty string")
+        try:
+            re.compile(pattern)
+        except re.error as exc:
+            raise ValueError(f"{context} version_checks pattern {pattern!r} is invalid: {exc}")
+        if tool not in declared:
+            raise ValueError(f"{context} version_checks tool {tool!r} is not in required_tools")
+        checks.append(VersionCheck(tool=tool, pattern=pattern))
+
+    probe: Optional[CompileProbe] = None
+    probe_raw = entry.get("compile_probe")
+    if probe_raw is not None:
+        if target is None:
+            raise ValueError(f"{context} compile_probe requires a cross_compiler 'target'")
+        spec = _parse_exact_mapping(
+            probe_raw, f"{context} compile_probe", ("cc", "cxx", "inspector"), ("cc", "inspector")
+        )
+        tools = {
+            key: _relative_tool(spec[key], f"{context} compile_probe {key}")
+            for key in ("cc", "cxx", "inspector")
+            if spec.get(key) is not None
+        }
+        for key, tool in tools.items():
+            if tool not in declared:
+                raise ValueError(f"{context} compile_probe {key} {tool!r} is not in required_tools")
+        probe = CompileProbe(cc=tools["cc"], inspector=tools["inspector"], cxx=tools.get("cxx"))
+    return VerifySpec(required_tools=required, version_checks=checks, compile_probe=probe)
+
+
+def _validate_cross_compiler(
+    name: str,
+    target: Optional[TargetSpec],
+    verify: Optional[VerifySpec],
+    materialize: Dict[str, Optional[str]],
+    sources: Dict[str, ToolchainSource],
+) -> None:
+    """Enforce the managed-binary contract for ``cross_compiler`` profiles."""
+    assert target is not None  # guaranteed by _parse_target
+    if verify is None or verify.compile_probe is None:
+        raise ValueError(
+            f"Toolchain {name!r} of kind 'cross_compiler' requires a verify block "
+            "with a compile_probe"
+        )
+    for key in ("bin_subdir", "cc", "cxx"):
+        if not materialize.get(key):
+            raise ValueError(f"Toolchain {name!r} cross_compiler materialize requires {key!r}")
+    if not sources:
+        raise ValueError(f"Toolchain {name!r} of kind 'cross_compiler' requires a binary source")
+    for variant, source in sources.items():
+        if source.type != "binary":
+            raise ValueError(
+                f"Toolchain {name!r} cross_compiler source {variant!r} must be a 'binary' "
+                "archive (managed prebuilt toolchain)"
+            )
+        if not source.archive_filename:
+            raise ValueError(
+                f"Toolchain {name!r} source {variant!r} requires an 'archive_filename'"
+            )
+        if f"-{target.runtime}-" not in source.archive_filename:
+            raise ValueError(
+                f"Toolchain {name!r} source {variant!r} archive "
+                f"{source.archive_filename!r} is inconsistent with target runtime "
+                f"{target.runtime!r}"
+            )
 
 
 # ----------------------------------------------------------------------

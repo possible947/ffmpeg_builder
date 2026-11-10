@@ -30,8 +30,8 @@ if str(PROJECT_ROOT.parent) not in sys.path:
 from ffmpeg_builder.config import ConfigManager  # noqa: E402
 from ffmpeg_builder.ffmpeg_policy import detected_system_tool_versions  # noqa: E402
 from ffmpeg_builder.platform_detect import PlatformDetector  # noqa: E402
-from ffmpeg_builder.toolchain_registry import ToolchainRegistry  # noqa: E402
-from ffmpeg_builder.toolchain_store import InstalledToolchain, ToolchainStore  # noqa: E402
+from ffmpeg_builder.toolchain_registry import ALLOWED_BACKENDS, ToolchainRegistry  # noqa: E402
+from ffmpeg_builder.toolchain_store import ToolchainStore, resolve_store_root  # noqa: E402
 from ffmpeg_builder import toolchain_builders  # noqa: E402
 
 
@@ -62,7 +62,19 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--store",
         type=Path,
-        help="Toolchain store root (default: <repo>/toolchains).",
+        help=(
+            "Toolchain store root (default: $FFMPEG_BUILDER_TOOLCHAINS, " "else <repo>/toolchains)."
+        ),
+    )
+    parser.add_argument(
+        "--sources",
+        type=Path,
+        help="Local source/archive mirror (default: build_config source_archives_dir).",
+    )
+    parser.add_argument(
+        "--backend",
+        choices=sorted(ALLOWED_BACKENDS),
+        help="Select the profiles required by a build backend (e.g. linux-cross-mingw).",
     )
     parser.add_argument(
         "--allow-network",
@@ -109,7 +121,9 @@ def select_profiles(
         return sorted(
             name
             for name, profile in registry.profiles.items()
-            if profile.deployable and platform in profile.platforms
+            if profile.deployable
+            and platform in profile.platforms
+            and (profile.kind != "cross_compiler" or args.backend)
         )
     return [
         name
@@ -120,6 +134,7 @@ def select_profiles(
             components=[],
             installed=installed,
             cuda_version=cuda_version,
+            backend=args.backend,
         )
     ]
 
@@ -162,11 +177,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     ffmpeg_version = args.ffmpeg_version or config.ffmpeg_version
     versions = detected_system_tool_versions(platform_info, tools)
 
+    if args.sources is not None and not args.sources.is_dir():
+        print(f"error: --sources {args.sources} is not a directory", file=sys.stderr)
+        return 2
     store = ToolchainStore(
-        args.store or (PROJECT_ROOT / "toolchains"),
-        source_archives_dir=(
-            PROJECT_ROOT / config.source_archives_dir if args.store is None else None
-        ),
+        resolve_store_root(PROJECT_ROOT, args.store),
+        source_archives_dir=args.sources or (PROJECT_ROOT / config.source_archives_dir),
         allow_network_downloads=args.allow_network or config.allow_network_downloads,
     )
 
@@ -187,6 +203,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
 
     print(f"Store:          {store.root}")
+    print(f"Sources:        {store.source_archives_dir}")
     print(f"Platform:       {platform}  (FFmpeg {ffmpeg_version})")
     print(f"Jobs:           {args.jobs or 'auto'}")
     print(f"Network:        {'allowed' if store.allow_network_downloads else 'disabled'}")

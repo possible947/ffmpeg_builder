@@ -20,7 +20,9 @@ paths.
 Verification: :func:`verify_profile` probes an installed profile (compiler
 version plus a real compile/link for compilers, expected artifacts for
 libraries) and returns a list of failure descriptions. An empty list means the
-profile is usable.
+profile is usable. Profiles that carry a declarative ``verify`` block (managed
+binary cross toolchains) are checked by :func:`verify_declared` instead; the
+store dispatches through :func:`verify_installation`.
 """
 
 from __future__ import annotations
@@ -30,7 +32,9 @@ import re
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
+
+from .toolchain_registry import CompileProbe, ToolchainProfile, ToolchainSource
 
 # (command, cwd, log_file)
 Runner = Callable[[List[str], Path, Path], None]
@@ -368,3 +372,170 @@ def verify_profile(recipe: Optional[str], prefix: Path) -> List[str]:
     if binary_dir.is_dir() and any(binary_dir.iterdir()):
         return []
     return [f"no binaries installed under {binary_dir}"]
+
+
+# ----------------------------------------------------------------------
+# Declarative (profile-driven) verification
+# ----------------------------------------------------------------------
+
+_PE_MACHINES = {"x86_64": "COFF-x86-64"}
+_C_PROBE = '#include <stdio.h>\nint main(void) { puts("probe"); return 0; }\n'
+_CXX_PROBE = (
+    "#include <string>\n" 'int main() { std::string s("probe"); return s.size() == 5 ? 0 : 1; }\n'
+)
+
+
+def _probe_env(prefix: Path) -> Dict[str, str]:
+    """Probe environment whose PATH cannot supply the toolchain being verified.
+
+    Only the candidate ``bin`` directory plus the system essentials needed by the
+    wrapper scripts are on PATH; tools are always invoked by absolute path.
+    """
+    env = clean_env()
+    env["PATH"] = os.pathsep.join([str(prefix / "bin"), "/usr/bin", "/bin"])
+    return env
+
+
+def _run_capture(command: List[str], env: Dict[str, str], cwd: Path) -> Tuple[int, str]:
+    try:
+        result = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            env=env,
+            cwd=str(cwd),
+        )
+    except OSError as exc:
+        return 127, f"{command[0]}: {exc}"
+    return result.returncode, result.stdout or ""
+
+
+def _last_line(output: str) -> str:
+    lines = output.strip().splitlines()
+    return lines[-1] if lines else "no output"
+
+
+def verify_declared(profile: ToolchainProfile, prefix: Path) -> List[str]:
+    """Verify a candidate installation against the profile's ``verify`` contract.
+
+    Runs against ``prefix`` only (a staging directory or an active install):
+
+    1. every required tool exists, is executable and resolves inside ``prefix``;
+    2. each version check matches the tool's ``--version`` output;
+    3. the compile probe builds (and links) a minimal C and, when declared, C++
+       program for the declared Windows target; the output must be a PE/COFF
+       image of the declared architecture importing the declared C runtime.
+
+    The probe never executes the produced binary and writes its outputs to a
+    temporary directory outside ``prefix``.
+    """
+    spec = profile.verify
+    if spec is None:
+        return [f"profile {profile.name!r} declares no verify contract"]
+
+    failures: List[str] = []
+    root = prefix.resolve()
+    resolved: Dict[str, Path] = {}
+    for rel in spec.required_tools:
+        candidate = prefix / rel
+        if not candidate.exists():
+            failures.append(f"missing required tool {rel} under {prefix}")
+            continue
+        real = candidate.resolve()
+        if not real.is_relative_to(root):
+            failures.append(f"required tool {rel} resolves outside the installation: {real}")
+            continue
+        if not (real.is_file() and os.access(real, os.X_OK)):
+            failures.append(f"required tool {rel} is not an executable file")
+            continue
+        resolved[rel] = candidate
+    if failures:
+        return failures
+
+    env = _probe_env(prefix)
+    with tempfile.TemporaryDirectory(prefix="toolchain-verify-") as temp_dir:
+        work = Path(temp_dir)
+        outputs: Dict[str, str] = {}
+        for check in spec.version_checks:
+            code, output = _run_capture([str(resolved[check.tool]), "--version"], env, work)
+            outputs[check.tool] = output
+            if code != 0:
+                failures.append(f"{check.tool} --version exited {code}: {_last_line(output)}")
+            elif re.search(check.pattern, output) is None:
+                failures.append(
+                    f"{check.tool} version does not match /{check.pattern}/: "
+                    f"{output.strip().splitlines()[0] if output.strip() else 'no output'}"
+                )
+        if failures:
+            return failures
+        if spec.compile_probe is not None and profile.target is not None:
+            failures.extend(
+                _verify_compile_probe(profile, spec.compile_probe, resolved, root, env, work)
+            )
+    return failures
+
+
+def _verify_compile_probe(
+    profile: ToolchainProfile,
+    probe: CompileProbe,
+    resolved: Dict[str, Path],
+    root: Path,
+    env: Dict[str, str],
+    work: Path,
+) -> List[str]:
+    assert profile.target is not None
+    target = profile.target
+    failures: List[str] = []
+    inspector = resolved[probe.inspector]
+    expected_format = _PE_MACHINES[target.arch]
+
+    jobs = [("c", probe.cc, "probe.c", _C_PROBE)]
+    if probe.cxx is not None:
+        jobs.append(("c++", probe.cxx, "probe.cpp", _CXX_PROBE))
+    for label, tool, source_name, source_text in jobs:
+        source = work / source_name
+        source.write_text(source_text, encoding="utf-8")
+        output = work / f"probe-{label.replace('+', 'x')}.exe"
+        compiler = resolved[tool]
+        code, text = _run_capture([str(compiler), str(source), "-o", str(output)], env, work)
+        if code != 0 or not output.exists():
+            failures.append(f"{label} compile/link probe failed: {_last_line(text)}")
+            continue
+        head = output.read_bytes()[:4]
+        if head[:2] != b"MZ":
+            failures.append(f"{label} probe output is not a PE image (magic {head!r})")
+            continue
+        code, text = _run_capture(
+            [str(inspector), "--file-headers", "--coff-imports", str(output)], env, work
+        )
+        if code != 0:
+            failures.append(f"{label} probe inspection failed: {_last_line(text)}")
+            continue
+        if f"Format: {expected_format}" not in text:
+            failures.append(
+                f"{label} probe is not {expected_format} (target {target.triple}): "
+                f"{next((ln for ln in text.splitlines() if 'Format:' in ln), 'no format line')}"
+            )
+        if target.runtime == "ucrt" and "api-ms-win-crt-" not in text:
+            failures.append(f"{label} probe does not import the UCRT (api-ms-win-crt-*)")
+
+    code, text = _run_capture([str(resolved[probe.cc]), "--version"], env, work)
+    installed_dir = next(
+        (ln.split(":", 1)[1].strip() for ln in text.splitlines() if ln.startswith("InstalledDir:")),
+        None,
+    )
+    if installed_dir is not None and not Path(installed_dir).resolve().is_relative_to(root):
+        failures.append(f"compiler driver resolves outside the installation: {installed_dir}")
+    return failures
+
+
+def verify_installation(
+    profile: Optional[ToolchainProfile],
+    source: Optional[ToolchainSource],
+    prefix: Path,
+) -> List[str]:
+    """Verify ``prefix`` with the profile's declared contract or its recipe."""
+    if profile is not None and profile.verify is not None:
+        return verify_declared(profile, prefix)
+    return verify_profile(source.recipe if source is not None else None, prefix)

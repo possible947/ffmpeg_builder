@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import json
 import os
 import shutil
 import tarfile
@@ -18,12 +19,57 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import IO, Callable, Dict, Iterator, List, Optional
+from typing import IO, Callable, Dict, Iterator, List, Optional, Tuple
 
 import yaml
 
 from . import toolchain_builders
+from .build_types import CATEGORY_PROJECT_SOURCE, CATEGORY_TOOLCHAIN_INSTALL, BuildError
 from .toolchain_registry import ToolchainProfile, ToolchainRegistry, ToolchainSource
+
+STORE_ROOT_ENV = "FFMPEG_BUILDER_TOOLCHAINS"
+# Installed-state schema: 2 adds registry/source provenance to each entry.
+STATE_SCHEMA_VERSION = 2
+PROVENANCE_FILE = ".toolchain-install.json"
+
+# Installation compatibility statuses (see ToolchainStore.installed_status).
+STATUS_ABSENT = "absent"
+STATUS_COMPATIBLE = "compatible"
+STATUS_UNVERIFIED = "unverified"
+STATUS_STALE = "stale"
+STATUS_CORRUPT = "corrupt"
+
+
+def resolve_store_root(project_root: Path, explicit: Optional[Path] = None) -> Path:
+    """Single precedence rule for the toolchain store root.
+
+    1. an explicit path (CLI ``--store``);
+    2. the ``FFMPEG_BUILDER_TOOLCHAINS`` environment variable;
+    3. ``<project_root>/toolchains``.
+    """
+    if explicit is not None:
+        return Path(explicit)
+    override = os.environ.get(STORE_ROOT_ENV)
+    if override:
+        return Path(override)
+    return project_root / "toolchains"
+
+
+def _source_error(
+    profile: str, message: str, code: str, cause: Optional[BaseException] = None
+) -> BuildError:
+    error = BuildError(profile, message, category=CATEGORY_PROJECT_SOURCE, code=code)
+    error.__cause__ = cause
+    return error
+
+
+def _install_error(
+    profile: str, message: str, code: str, cause: Optional[BaseException] = None
+) -> BuildError:
+    error = BuildError(profile, message, category=CATEGORY_TOOLCHAIN_INSTALL, code=code)
+    error.__cause__ = cause
+    return error
+
 
 STORE_SUBDIRS = ("archives", "installed", "logs", "locks", "profiles", "build")
 
@@ -60,6 +106,12 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _archive_filename(source: ToolchainSource, profile: ToolchainProfile) -> str:
+    """Resolved archive filename of a source (``{version}`` expanded)."""
+    filename = source.archive_filename or Path(source.url or "").name
+    return filename.replace("{version}", profile.version or "")
+
+
 @dataclass
 class InstalledToolchain:
     """A toolchain profile installed in the store."""
@@ -70,6 +122,11 @@ class InstalledToolchain:
     path: str
     installed_at: str
     verified: bool = True
+    # Provenance (schema 2): what the registry declared when this was installed.
+    schema_version: int = 1
+    source_sha256: str = ""
+    archive_filename: str = ""
+    runtime: str = ""
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -79,6 +136,22 @@ class InstalledToolchain:
             "path": self.path,
             "installed_at": self.installed_at,
             "verified": self.verified,
+            "schema_version": self.schema_version,
+            "source_sha256": self.source_sha256,
+            "archive_filename": self.archive_filename,
+            "runtime": self.runtime,
+        }
+
+    def provenance(self) -> Dict[str, object]:
+        """Project-managed inputs identifying this installation (no timestamps)."""
+        return {
+            "profile": self.profile,
+            "version": self.version,
+            "variant": self.variant,
+            "archive_filename": self.archive_filename,
+            "source_sha256": self.source_sha256,
+            "runtime": self.runtime,
+            "schema_version": self.schema_version,
         }
 
     @classmethod
@@ -91,6 +164,10 @@ class InstalledToolchain:
             installed_at=str(data.get("installed_at", "")),
             # Entries written before verification existed default to trusted.
             verified=bool(data.get("verified", True)),
+            schema_version=int(data.get("schema_version", 1) or 1),  # type: ignore[call-overload]
+            source_sha256=str(data.get("source_sha256", "")),
+            archive_filename=str(data.get("archive_filename", "")),
+            runtime=str(data.get("runtime", "")),
         )
 
 
@@ -184,15 +261,64 @@ class ToolchainStore:
 
     def save_state(self, state: ToolchainState) -> None:
         self.ensure_layout()
-        with open(self.state_path, "w", encoding="utf-8") as handle:
+        partial = self.state_path.with_name(self.state_path.name + ".tmp")
+        with open(partial, "w", encoding="utf-8") as handle:
             yaml.safe_dump(state.to_dict(), handle, default_flow_style=False, sort_keys=True)
+        os.replace(partial, self.state_path)
 
-    def installed(self, profile: str) -> Optional[InstalledToolchain]:
+    def installed(
+        self, profile: str, registry: Optional[ToolchainRegistry] = None
+    ) -> Optional[InstalledToolchain]:
+        """Return the verified entry for ``profile``, or ``None``.
+
+        Without ``registry`` only the verified flag is considered (legacy
+        behaviour). With a ``registry`` the entry must also be
+        :data:`STATUS_COMPATIBLE`; stale or corrupt installs are not current.
+        """
         entry = self.load_state().profiles.get(profile)
-        if entry is None or entry.verified:
-            return entry
-        # A failed install was recorded as unverified: treat as absent and warn.
-        return None
+        if entry is None or not entry.verified:
+            return None
+        if (
+            registry is not None
+            and self.installed_status(registry, profile)[0] != STATUS_COMPATIBLE
+        ):
+            return None
+        return entry
+
+    def installed_status(self, registry: ToolchainRegistry, profile_name: str) -> Tuple[str, str]:
+        """Classify an installation against the current registry.
+
+        Returns ``(status, reason)`` where status is one of ``absent``,
+        ``compatible``, ``unverified``, ``stale`` (registry version, source
+        hash, variant, runtime or state schema no longer match; reacquire) and
+        ``corrupt`` (state says installed but the directory is missing).
+        Nothing is deleted or adopted automatically.
+        """
+        entry = self.load_state().profiles.get(profile_name)
+        if entry is None:
+            return STATUS_ABSENT, "not installed"
+        if not entry.verified:
+            return STATUS_UNVERIFIED, "recorded as failed verification"
+        if not self.resolve_entry_path(entry).is_dir():
+            return STATUS_CORRUPT, f"state lists {entry.path} but the directory is missing"
+        profile = registry.get_profile(profile_name)
+        if profile is None:
+            return STATUS_STALE, "profile is no longer declared in the registry"
+        if entry.schema_version < STATE_SCHEMA_VERSION:
+            return STATUS_STALE, "installed state has no provenance (reacquire or --verify-only)"
+        if entry.version != (profile.version or ""):
+            return STATUS_STALE, (
+                f"registry version {profile.version or ''!r} != installed {entry.version!r}"
+            )
+        source = profile.sources.get(entry.variant)
+        if source is None:
+            return STATUS_STALE, f"source variant {entry.variant!r} is no longer declared"
+        if (source.sha256 or "").lower() != entry.source_sha256.lower():
+            return STATUS_STALE, "declared source sha256 changed"
+        runtime = profile.target.runtime if profile.target is not None else ""
+        if runtime != entry.runtime:
+            return STATUS_STALE, f"runtime variant {runtime!r} != installed {entry.runtime!r}"
+        return STATUS_COMPATIBLE, "matches the registry"
 
     def resolve_entry_path(self, entry: InstalledToolchain) -> Path:
         """Resolve an entry's install prefix against this store's root.
@@ -240,21 +366,42 @@ class ToolchainStore:
         changed = False
         for name, entry in state.profiles.items():
             prefix = self.resolve_entry_path(entry)
-            recipe: Optional[str] = None
             profile = registry.get_profile(name)
-            if profile is not None and profile.default_source is not None:
-                source = profile.sources.get(profile.default_source)
-                recipe = source.recipe if source is not None else None
-            if toolchain_builders.verify_profile(recipe, prefix):
+            source = None
+            if profile is not None:
+                source = profile.sources.get(entry.variant)
+                if source is None and profile.default_source is not None:
+                    source = profile.sources.get(profile.default_source)
+            if toolchain_builders.verify_installation(profile, source, prefix):
                 entry.verified = False
                 changed = True
                 failures.append(name)
-            elif adopt_relocated and str(prefix) != entry.path and prefix.exists():
+                continue
+            if adopt_relocated and str(prefix) != entry.path and prefix.exists():
                 entry.path = str(prefix)
+                changed = True
+            if (
+                profile is not None
+                and source is not None
+                and entry.schema_version < STATE_SCHEMA_VERSION
+                and entry.version == (profile.version or "")
+            ):
+                # Backfill provenance for a legacy entry that matches the registry.
+                self._stamp_provenance(entry, profile, source)
                 changed = True
         if changed:
             self.save_state(state)
         return failures
+
+    @staticmethod
+    def _stamp_provenance(
+        entry: InstalledToolchain, profile: ToolchainProfile, source: ToolchainSource
+    ) -> None:
+        entry.schema_version = STATE_SCHEMA_VERSION
+        entry.version = profile.version or ""
+        entry.source_sha256 = (source.sha256 or "").lower()
+        entry.archive_filename = _archive_filename(source, profile)
+        entry.runtime = profile.target.runtime if profile.target is not None else ""
 
     def list_installed(self) -> List[InstalledToolchain]:
         return list(self.load_state().profiles.values())
@@ -289,13 +436,13 @@ class ToolchainStore:
         declares no materialization. Used by the CUDA host-compiler selection
         (``-ccbin``) as well as :meth:`component_env`.
         """
-        installed = self.installed(profile_name)
-        if installed is None or not installed.verified:
+        installed = self.installed(profile_name, registry)
+        if installed is None:
             return {}
         profile = registry.get_profile(profile_name)
         if profile is None:
             return {}
-        prefix = Path(installed.path)
+        prefix = self.resolve_entry_path(installed)
         paths: Dict[str, str] = {}
         bin_subdir = profile.materialize.get("bin_subdir")
         if bin_subdir:
@@ -384,29 +531,31 @@ class ToolchainStore:
         source = profile.sources[chosen]
         build_runner = runner or toolchain_builders.default_runner
         build_jobs = jobs if jobs is not None else max(1, os.cpu_count() or 1)
-        check = verifier or toolchain_builders.verify_profile
-
         with self.lock(profile_name):
             version_suffix = profile.version or "unversioned"
-            dest = self.installed_dir / f"{_safe_name(profile_name)}-{version_suffix}"
-            if dest.exists():
-                shutil.rmtree(dest)
-            dest.mkdir(parents=True, exist_ok=True)
+            safe = _safe_name(profile_name)
+            dest = self.installed_dir / f"{safe}-{version_suffix}"
+            stage = self.installed_dir / f".staging-{safe}-{version_suffix}"
+            backup = self.installed_dir / f".backup-{safe}-{version_suffix}"
+            self.installed_dir.mkdir(parents=True, exist_ok=True)
+            self._recover(dest, stage, backup)
+            status, _reason = self.installed_status(registry, profile_name)
+            existing = self.load_state().profiles.get(profile_name)
+            if status == STATUS_COMPATIBLE and existing is not None and existing.variant == chosen:
+                return existing
 
-            if source.type == "local":
-                self._install_local(source, dest)
-            elif source.type in ("binary", "download"):
-                archive = self._fetch_or_resolve(source, profile)
-                self._extract(archive, dest)
-            elif source.type == "build":
-                self._build(registry, profile, source, dest, build_runner, build_jobs, check)
-                failures = check(source.recipe, dest)
+            def verify(prefix: Path) -> None:
+                failures = (
+                    verifier(source.recipe, prefix)
+                    if verifier is not None
+                    else toolchain_builders.verify_installation(profile, source, prefix)
+                )
                 if failures:
-                    raise RuntimeError(
-                        f"Toolchain {profile_name!r} verification failed: " + "; ".join(failures)
+                    raise _install_error(
+                        profile_name,
+                        f"Toolchain {profile_name!r} verification failed: " + "; ".join(failures),
+                        "verification_failed",
                     )
-            else:  # pragma: no cover - guarded by registry validation
-                raise ValueError(f"Unsupported source type {source.type!r}")
 
             installed = InstalledToolchain(
                 profile=profile_name,
@@ -416,10 +565,96 @@ class ToolchainStore:
                 installed_at=_now(),
                 verified=True,
             )
-            state = self.load_state()
-            state.profiles[profile_name] = installed
-            self.save_state(state)
+            self._stamp_provenance(installed, profile, source)
+
+            if source.type == "build":
+                # Source builds bake the prefix into the result, so they build in
+                # place; the previous installation is parked and rolled back on failure.
+                archive = self._fetch_or_resolve(source, profile)
+                self._commit(
+                    installed,
+                    dest,
+                    backup,
+                    lambda: self._build_in_place(
+                        registry, profile, source, archive, dest, build_runner, build_jobs, verifier
+                    ),
+                    verify_in_place=verify,
+                )
+            else:
+                if source.type == "local":
+                    materialize = lambda: self._install_local(source, stage, profile)  # noqa: E731
+                else:
+                    archive = self._fetch_or_resolve(source, profile)
+                    materialize = lambda: self._extract(archive, stage, profile)  # noqa: E731
+                try:
+                    materialize()
+                    verify(stage)
+                    self._write_provenance(stage, installed)
+                except BaseException:
+                    shutil.rmtree(stage, ignore_errors=True)
+                    raise
+                self._commit(installed, dest, backup, stage=stage)
             return installed
+
+    def _recover(self, dest: Path, stage: Path, backup: Path) -> None:
+        """Deterministic cleanup of leftovers from an interrupted acquisition."""
+        shutil.rmtree(stage, ignore_errors=True)
+        if backup.exists():
+            if not dest.exists():
+                os.replace(backup, dest)  # interrupted between park and activate
+            else:
+                shutil.rmtree(backup, ignore_errors=True)
+
+    def _commit(
+        self,
+        installed: InstalledToolchain,
+        dest: Path,
+        backup: Path,
+        build: Optional[Callable[[], None]] = None,
+        stage: Optional[Path] = None,
+        verify_in_place: Optional[Callable[[Path], None]] = None,
+    ) -> None:
+        """Activate a candidate installation; any failure restores the previous one.
+
+        State is saved only after activation (and, for in-place builds, after
+        verification) succeeded; the superseded installation is deleted last.
+        """
+        parked = False
+        try:
+            if dest.exists():
+                os.replace(dest, backup)
+                parked = True
+            if stage is not None:
+                try:
+                    os.replace(stage, dest)
+                except OSError as exc:
+                    raise _install_error(
+                        installed.profile,
+                        f"activating {dest} failed: {exc}",
+                        "activation_failed",
+                        exc,
+                    ) from exc
+            else:
+                dest.mkdir(parents=True, exist_ok=True)
+                assert build is not None and verify_in_place is not None
+                build()
+                verify_in_place(dest)
+                self._write_provenance(dest, installed)
+            state = self.load_state()
+            state.profiles[installed.profile] = installed
+            self.save_state(state)
+        except BaseException:
+            shutil.rmtree(dest, ignore_errors=True)
+            if parked:
+                os.replace(backup, dest)
+            raise
+        shutil.rmtree(backup, ignore_errors=True)
+
+    @staticmethod
+    def _write_provenance(prefix: Path, installed: InstalledToolchain) -> None:
+        (prefix / PROVENANCE_FILE).write_text(
+            json.dumps(installed.provenance(), indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
 
     def remove(self, profile_name: str) -> bool:
         """Remove an installed profile from the store; returns whether it existed."""
@@ -448,53 +683,120 @@ class ToolchainStore:
     # Acquisition helpers
     # ------------------------------------------------------------------
 
-    def _install_local(self, source: ToolchainSource, dest: Path) -> None:
+    def _install_local(
+        self, source: ToolchainSource, dest: Path, profile: ToolchainProfile
+    ) -> None:
         if not source.path:
-            raise ValueError("Local source has no 'path'")
+            raise _install_error(profile.name, "Local source has no 'path'", "local_path_missing")
         origin = Path(source.path)
         if not origin.exists():
-            raise FileNotFoundError(f"Local toolchain path not found: {origin}")
+            raise _source_error(
+                profile.name, f"Local toolchain path not found: {origin}", "source_missing"
+            )
         if origin.is_dir():
             shutil.copytree(origin, dest, dirs_exist_ok=True)
         else:
-            self._extract(origin, dest)
+            self._extract(origin, dest, profile)
 
     def _fetch_or_resolve(self, source: ToolchainSource, profile: ToolchainProfile) -> Path:
-        version = profile.version or ""
-        filename = source.archive_filename or Path(source.url or "").name
-        filename = filename.replace("{version}", version)
+        """Resolve a source archive and verify its declared SHA-256 before use.
+
+        The mirror is not trusted merely because it is local: the same checksum
+        path covers mirror and downloaded archives. Raises ``BuildError`` with
+        category ``project_source`` when the archive is absent or corrupt.
+        """
+        filename = _archive_filename(source, profile)
         if not filename:
-            raise ValueError(f"Toolchain {profile.name!r} source has no archive filename or url")
+            raise _source_error(
+                profile.name, "source declares no archive filename or url", "source_unresolvable"
+            )
 
         if self.source_archives_dir is not None:
             candidate = self.source_archives_dir / filename
             if candidate.exists():
+                self._verify_archive(candidate, source, profile)
                 return candidate
 
+        version = profile.version or ""
         if not self.allow_network_downloads or not source.url:
-            raise FileNotFoundError(
+            raise _source_error(
+                profile.name,
                 f"Archive {filename!r} not found in the local sources "
-                f"({self.source_archives_dir}); network downloads are disabled"
+                f"({self.source_archives_dir}); network downloads are disabled",
+                "source_missing",
             )
         dest = self.archives_dir / filename
-        self._download(source.url.replace("{version}", version), dest, source.sha256)
+        self._download(source.url.replace("{version}", version), dest, source, profile)
         return dest
 
-    def _download(self, url: str, dest: Path, sha256: Optional[str]) -> None:
+    def _verify_archive(
+        self, path: Path, source: ToolchainSource, profile: ToolchainProfile
+    ) -> None:
+        """Stream-hash ``path`` against the declared checksum (mirror and download)."""
+        expected = (source.sha256 or "").lower()
+        if not expected:
+            raise _source_error(
+                profile.name,
+                f"source for {path.name} declares no sha256; refusing to use it",
+                "checksum_missing",
+            )
+        try:
+            actual = _sha256(path)
+        except OSError as exc:
+            raise _source_error(
+                profile.name, f"cannot read archive {path}: {exc}", "source_unreadable", exc
+            ) from exc
+        if actual != expected:
+            raise _source_error(
+                profile.name,
+                f"checksum mismatch for archive {path}: expected sha256 {expected}, "
+                f"got {actual} (the archive was not modified or extracted)",
+                "checksum_mismatch",
+            )
+
+    def _download(
+        self, url: str, dest: Path, source: ToolchainSource, profile: ToolchainProfile
+    ) -> None:
         dest.parent.mkdir(parents=True, exist_ok=True)
         partial = dest.with_suffix(dest.suffix + ".part")
-        with urllib.request.urlopen(url) as response, open(partial, "wb") as out:
-            shutil.copyfileobj(response, out)
-        if sha256 is not None and _sha256(partial) != sha256.lower():
+        try:
+            with urllib.request.urlopen(url) as response, open(partial, "wb") as out:
+                shutil.copyfileobj(response, out)
+        except (OSError, ValueError) as exc:
             partial.unlink(missing_ok=True)
-            raise ValueError(f"Checksum mismatch for {url}")
+            raise _source_error(
+                profile.name, f"download of {url} failed: {exc}", "download_failed", exc
+            ) from exc
+        try:
+            self._verify_archive(partial, source, profile)
+        except BuildError:
+            partial.unlink(missing_ok=True)
+            raise
         os.replace(partial, dest)
 
-    def _extract(self, archive: Path, dest: Path) -> None:
+    def _extract(self, archive: Path, dest: Path, profile: ToolchainProfile) -> None:
         dest.mkdir(parents=True, exist_ok=True)
-        with tarfile.open(archive, "r:*") as tar:
-            tar.extractall(dest, filter="data")
+        try:
+            with tarfile.open(archive, "r:*") as tar:
+                tar.extractall(dest, filter="data")
+        except (tarfile.TarError, OSError, EOFError) as exc:
+            raise _install_error(
+                profile.name, f"extracting {archive} failed: {exc}", "extract_failed", exc
+            ) from exc
         _flatten_single_top_dir(dest)
+
+    def _build_in_place(
+        self,
+        registry: ToolchainRegistry,
+        profile: ToolchainProfile,
+        source: ToolchainSource,
+        archive: Path,
+        dest: Path,
+        runner: Runner,
+        jobs: int,
+        verifier: Optional[Verifier],
+    ) -> None:
+        self._build(registry, profile, source, dest, runner, jobs, verifier, archive)
 
     def _build(
         self,
@@ -504,13 +806,13 @@ class ToolchainStore:
         dest: Path,
         runner: Runner,
         jobs: int,
-        verifier: Verifier,
+        verifier: Optional[Verifier],
+        archive: Path,
     ) -> None:
-        archive = self._fetch_or_resolve(source, profile)
         work = self.build_dir / f"{_safe_name(profile.name)}-{profile.version or 'unversioned'}"
         if work.exists():
             shutil.rmtree(work)
-        self._extract(archive, work)
+        self._extract(archive, work, profile)
 
         prerequisites: Dict[str, Path] = {}
         bootstrap = source.bootstrap

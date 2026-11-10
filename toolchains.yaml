@@ -3,7 +3,8 @@
 # Three sections:
 #   toolchains:         named toolchain profiles (one logical entity per pinned
 #                       toolchain, e.g. gcc12 -> a concrete gcc release)
-#   platform_profiles:  upper-level profiles keyed by (ffmpeg_version, platform);
+#   platform_profiles:  upper-level profiles keyed by (ffmpeg_version, platform,
+#                       optional backend);
 #                       the FFmpeg target resolves its effective toolchain here
 #   cuda:               explicit CUDA Toolkit version -> toolchain profile mapping
 #
@@ -138,6 +139,62 @@ toolchains:
         url: "https://static.rust-lang.org/dist/rust-{version}-x86_64-unknown-linux-gnu.tar.gz"
         archive_filename: "rust-{version}-x86_64-unknown-linux-gnu.tar.gz"
         sha256: de0581ca9d732295a6474cfbd02461db27d69acd5050a8206523a8d6fa1599db
+  llvm-mingw:
+    # Official prebuilt LLVM-MinGW (UCRT) cross toolchain for the WSL-Mingw
+    # backend (linux-cross-mingw). `version` is the upstream release tag; the
+    # bundled LLVM/Clang/LLD version is pinned in the verify block. The archive
+    # is a managed offline input in third_party/sources (Git LFS). The tool
+    # names below are the real archive layout (x86_64-w64-mingw32-* are wrapper
+    # scripts / symlinks inside bin/).
+    kind: cross_compiler
+    version: "20261104"
+    platforms: [linux]
+    provides: [x86_64-w64-mingw32-clang, x86_64-w64-mingw32-clang++]
+    target:
+      triple: x86_64-w64-mingw32
+      arch: x86_64
+      family: mingw-w64
+      runtime: ucrt
+    materialize:
+      bin_subdir: bin
+      cc: bin/x86_64-w64-mingw32-clang
+      cxx: bin/x86_64-w64-mingw32-clang++
+      ar: bin/x86_64-w64-mingw32-ar
+      ranlib: bin/x86_64-w64-mingw32-ranlib
+      ld: bin/x86_64-w64-mingw32-ld
+      strip: bin/x86_64-w64-mingw32-strip
+      windres: bin/x86_64-w64-mingw32-windres
+      dlltool: bin/x86_64-w64-mingw32-dlltool
+      nm: bin/x86_64-w64-mingw32-nm
+      objdump: bin/x86_64-w64-mingw32-objdump
+      readobj: bin/llvm-readobj
+    verify:
+      required_tools:
+        - bin/x86_64-w64-mingw32-clang
+        - bin/x86_64-w64-mingw32-clang++
+        - bin/x86_64-w64-mingw32-ar
+        - bin/x86_64-w64-mingw32-ranlib
+        - bin/x86_64-w64-mingw32-ld
+        - bin/x86_64-w64-mingw32-strip
+        - bin/x86_64-w64-mingw32-windres
+        - bin/x86_64-w64-mingw32-dlltool
+        - bin/x86_64-w64-mingw32-nm
+        - bin/x86_64-w64-mingw32-objdump
+        - bin/llvm-readobj
+      version_checks:
+        - {tool: bin/x86_64-w64-mingw32-clang, pattern: 'clang version 23\.1\.5\b'}
+        - {tool: bin/x86_64-w64-mingw32-ld, pattern: 'LLD 23\.1\.5\b'}
+      compile_probe:
+        cc: bin/x86_64-w64-mingw32-clang
+        cxx: bin/x86_64-w64-mingw32-clang++
+        inspector: bin/llvm-readobj
+    source:
+      default: binary
+      binary:
+        type: binary
+        url: "https://github.com/mstorsjo/llvm-mingw/releases/download/{version}/llvm-mingw-{version}-ucrt-ubuntu-22.04-x86_64.tar.xz"
+        archive_filename: "llvm-mingw-{version}-ucrt-ubuntu-22.04-x86_64.tar.xz"
+        sha256: 919380403de87dca3c581c2053230cd298af5e891286628ba0613b7fed370926
   cargo-c:
     kind: rust_tool
     platforms: [linux]
@@ -176,6 +233,19 @@ platform_profiles:
     system_tool_range:
       clang: ">=17"
     fallback_toolchain: null
+
+  # Backend-bound profiles: the WSL-Mingw route (linux-cross-mingw) builds on
+  # a Linux host for a Windows target. They never match a native lookup.
+  wsl-mingw-ffmpeg-8.1:
+    ffmpeg_version: "8.1"
+    platform: linux
+    backend: linux-cross-mingw
+    required_toolchains: [llvm-mingw]
+  wsl-mingw-ffmpeg-9.0:
+    ffmpeg_version: "9.0"
+    platform: linux
+    backend: linux-cross-mingw
+    required_toolchains: [llvm-mingw]
 
 cuda:
   "12.2": gcc12

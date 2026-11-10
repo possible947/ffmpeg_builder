@@ -1,3 +1,28 @@
+### Added — G2.2: LLVM-MinGW managed toolchain and hardened ToolchainStore
+
+- `toolchains.yaml`: `llvm-mingw` (`cross_compiler`, x86_64-w64-mingw32, UCRT)
+  pinned by sha256 and shipped as an LFS archive in `third_party/sources`;
+  backend-bound platform profiles `wsl-mingw-ffmpeg-*` select it for
+  `linux-cross-mingw` only (native recommendations are unchanged).
+- `ToolchainStore`: every archive (mirror and download) is sha256-verified before
+  extraction; installs are staged, verified (declared tools, versions, and a
+  C/C++ compile+link probe that must produce a UCRT PE32+ binary), then activated
+  atomically with rollback; provenance (`.toolchain-install.json`, state schema 2)
+  makes version/hash/variant drift `stale`. Failures raise `BuildError` with
+  `project_source` / `toolchain_install` categories. Already-compatible installs are
+  reused.
+- Store root: `--store` > `$FFMPEG_BUILDER_TOOLCHAINS` > `<repo>/toolchains`;
+  `scripts/prepare_toolchains.py` gained `--sources` and `--backend`, enabling
+  isolated offline provisioning. Legacy installs without provenance are stale until
+  `--verify-only` backfills them.
+- Production checksum verification is unconditional (the placeholder-digest skip is
+  test-fixture only, with a regression test); legacy provenance backfill is tested.
+  Final acceptance included a live failed-replacement run proving the previous
+  install survives byte-identically.
+- Not done: Rust target std (G2.3), CUDA ccbin (G2.4), SDK prerequisites (G2.5),
+  target headers (G2.6), identity integration (G2.7; planned projection
+  `{version, sha256, variant}`), and the build backend (G3).
+
 ### Added — G1: Windows target probe and build/runtime identity guard
 
 - New `windows_probe.py`, `build_identity.py`, `target_guard.py`: fresh Windows

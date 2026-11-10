@@ -466,8 +466,14 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
   and configuration for selected LLVM-MinGW, Rust target std, project-managed
   GCC `-ccbin` if applicable, headers/interfaces, import-library recipes,
   shader/component inputs and dependency metadata.
-- **Status:** [IMPLEMENTATION] G2 checks external WSL SDK prerequisites; it does
-  not own or install those SDKs.
+- **Status:** [IMPLEMENTATION — in progress] G1 PASS; G2.1 audit complete; G2.2
+  complete (LLVM-MinGW managed toolchain + hardened `ToolchainStore`: checksum
+  enforcement, staged/atomic install, provenance/stale detection, isolated
+  `--store`/`--sources` offline provisioning). G2.3–G2.8 (Rust target std,
+  CUDA `-ccbin`, external SDK prerequisites, target headers/interfaces, identity
+  integration, final offline acceptance) are not done; G3 is not started. Full G2
+  offline closure is not claimed. G2 checks external WSL SDK prerequisites; it
+  does not own or install those SDKs.
 - **SDK ownership:** The CUDA SDK (example `/opt/cuda-12.4`) and Vulkan SDK
   (example `/opt/vulkan-sdk/1.4.363.1/x86_64`) are external prerequisites. Locate
   them from configured/documented paths or environment, verify presence and that
@@ -624,7 +630,7 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
 | G2 | Future CUDA toolkit coexistence and explicit SDK selection. | Resolve the configured SDK path; reject ambiguous ambient tools. |
 | G2/G3 | Exact generated Vulkan/OpenCL target import-interface strategy where dependencies require one. | Pin or generate appropriate target interfaces; do not build a loader without a demonstrated link need. |
 | G3 | Production implementation of CPU flag derivation and compatibility-workaround classification. | Derive from effective Windows capabilities and validate selected compiler; scope `_GNU_SOURCE` workaround narrowly. |
-| G4 | Remaining full software component cross-build issues and complete offline provisioning closure. | Resolve builder/registry/provisioning gaps component-by-component with target-isolation tests. |
+| G4 | Remaining full software component cross-build issues and complete offline provisioning closure (the LLVM-MinGW input itself is offline-provisionable since G2.2). | Resolve builder/registry/provisioning gaps component-by-component with target-isolation tests. |
 | G5 | Neural-network backend/API and complete D3D/QSV/AMF feature support. | Select required backend/API and prove target build/runtime; only an unavoidable MSVC-only ABI limitation can reopen Variant 2. |
 | G5 | Hardware capabilities absent or unsupported on the tested TITAN V host, including untested codec/profile combinations. | Retain build-presence assertions; record runtime acceptance as not validated where appropriate. |
 | G6 | Final runtime DLL closure and redistribution policy for all production dependencies. | Inspect built package; include LLVM-MinGW/C++ runtime DLLs where required and document external Windows/driver prerequisites. |

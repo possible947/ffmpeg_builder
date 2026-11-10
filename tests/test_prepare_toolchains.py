@@ -32,6 +32,8 @@ def _args(**overrides) -> SimpleNamespace:
         "platform": None,
         "jobs": None,
         "store": None,
+        "sources": None,
+        "backend": None,
         "allow_network": False,
         "dry_run": False,
     }

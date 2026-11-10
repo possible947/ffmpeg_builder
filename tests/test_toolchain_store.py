@@ -8,10 +8,24 @@ import pytest
 import yaml
 
 from ffmpeg_builder import toolchain_builders
+from ffmpeg_builder.build_types import BuildError
 from ffmpeg_builder.toolchain_registry import ToolchainRegistry
 from ffmpeg_builder.toolchain_store import ToolchainStore
 
 _SHA = "a" * 64
+_REAL_VERIFY = ToolchainStore._verify_archive
+
+
+@pytest.fixture(autouse=True)
+def _placeholder_sha_skips_archive_check(monkeypatch):
+    """Fixtures that use the placeholder digest skip hashing; real digests are enforced."""
+    real = ToolchainStore._verify_archive
+
+    def verify(self, path, source, profile):
+        if source.sha256 != _SHA:
+            real(self, path, source, profile)
+
+    monkeypatch.setattr(ToolchainStore, "_verify_archive", verify)
 
 
 def _make_tar(archive_path: Path, members: dict) -> None:
@@ -139,7 +153,7 @@ class TestAcquisition:
     def test_missing_archive_offline_rejected(self, tmp_path):
         registry = _write_registry(tmp_path, {"bootstrap": _binary_profile()})
         store = _store(tmp_path)
-        with pytest.raises(FileNotFoundError, match="network downloads are disabled"):
+        with pytest.raises(BuildError, match="network downloads are disabled"):
             store.acquire(registry, "bootstrap")
 
     def test_remove_installed_profile(self, tmp_path):
@@ -305,7 +319,7 @@ class TestBuildAcquisition:
         _make_tar(tmp_path / "sources" / "gcc-12.1.tar.gz", {"gcc-12.1/configure": "#!/bin/sh\n"})
         store = _store(tmp_path)
 
-        with pytest.raises(RuntimeError, match="verification failed"):
+        with pytest.raises(BuildError, match="verification failed"):
             store.acquire(
                 registry,
                 "gcc12",
@@ -635,6 +649,7 @@ class TestComponentEnv:
     def test_builds_path_and_compiler_overrides(self, tmp_path):
         local_dir = tmp_path / "tc"
         (local_dir / "bin").mkdir(parents=True)
+        (local_dir / "bin" / "gcc").write_text("#!/bin/sh\n")
         registry = _write_registry(
             tmp_path,
             {
@@ -710,3 +725,171 @@ class TestCudaHostCompiler:
         store = _store(tmp_path)
         registry = self._registry(tmp_path, {"12.2": "gcc12"})
         assert store.cuda_host_compiler(registry, "12.2") is None
+
+
+def _sha(path: Path) -> str:
+    import hashlib
+
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _real_sha_binary(tmp_path: Path, members=None, corrupt=False):
+    archive = tmp_path / "sources" / "bootstrap-1.0.tar.gz"
+    _make_tar(archive, members or {"bootstrap-1.0/bin/tool": "#!/bin/sh\n"})
+    profile = _binary_profile()
+    profile["source"]["binary"]["sha256"] = _sha(archive)
+    if corrupt:
+        archive.write_bytes(archive.read_bytes() + b"x")
+    return _write_registry(tmp_path, {"bootstrap": profile}), archive
+
+
+class TestHardenedInstall:
+    def test_corrupt_mirror_archive_rejected_before_extraction(self, tmp_path):
+        registry, archive = _real_sha_binary(tmp_path, corrupt=True)
+        before = archive.read_bytes()
+        store = _store(tmp_path)
+        with pytest.raises(BuildError) as info:
+            store.acquire(registry, "bootstrap")
+        assert info.value.category == "project_source"
+        assert info.value.code == "checksum_mismatch"
+        assert "expected sha256" in str(info.value) and str(archive) in str(info.value)
+        assert archive.read_bytes() == before
+        assert store.installed("bootstrap") is None
+        assert not list(store.installed_dir.glob(".staging-*"))
+
+    def test_placeholder_checksum_cannot_bypass_production_verification(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(ToolchainStore, "_verify_archive", _REAL_VERIFY)
+        registry = _write_registry(tmp_path, {"bootstrap": _binary_profile()})
+        archive = tmp_path / "sources" / "bootstrap-1.0.tar.gz"
+        _make_tar(archive, {"bootstrap-1.0/bin/tool": "#!/bin/sh\n"})
+        store = _store(tmp_path)
+        with pytest.raises(BuildError) as info:
+            store.acquire(registry, "bootstrap", verifier=_skip_verification)
+        assert info.value.code == "checksum_mismatch"
+        assert store.installed("bootstrap") is None
+        assert not list(store.installed_dir.glob(".staging-*"))
+
+    def test_valid_mirror_archive_installs_with_provenance_and_reuses(self, tmp_path):
+        registry, _ = _real_sha_binary(tmp_path)
+        store = _store(tmp_path)
+        entry = store.acquire(registry, "bootstrap", verifier=_skip_verification)
+        assert entry.source_sha256
+        assert store.installed_status(registry, "bootstrap")[0] == "compatible"
+        assert store.acquire(registry, "bootstrap") is not None  # reuse, no re-verify
+
+    def test_failed_verification_leaves_previous_install_intact(self, tmp_path):
+        registry, _ = _real_sha_binary(tmp_path)
+        store = _store(tmp_path)
+        store.acquire(registry, "bootstrap", verifier=_skip_verification)
+        dest = store.installed_dir / "bootstrap-1.0"
+        marker = dest / "marker"
+        marker.write_text("old")
+        state = store.load_state()
+        state.profiles["bootstrap"].source_sha256 = "0" * 64  # force a reinstall
+        store.save_state(state)
+        with pytest.raises(BuildError):
+            store.acquire(registry, "bootstrap", verifier=lambda r, p: ["boom"])
+        assert marker.read_text() == "old"
+        assert not list(store.installed_dir.glob(".staging-*"))
+
+    def test_interrupted_park_is_recovered(self, tmp_path):
+        registry, _ = _real_sha_binary(tmp_path)
+        store = _store(tmp_path)
+        store.acquire(registry, "bootstrap", verifier=_skip_verification)
+        dest = store.installed_dir / "bootstrap-1.0"
+        dest.rename(store.installed_dir / ".backup-bootstrap-1.0")
+        (store.installed_dir / ".staging-bootstrap-1.0").mkdir()
+        store.acquire(registry, "bootstrap", verifier=_skip_verification)
+        assert dest.exists()
+        assert not list(store.installed_dir.glob(".backup-*"))
+        assert not list(store.installed_dir.glob(".staging-*"))
+
+    def test_status_detects_stale_and_corrupt(self, tmp_path):
+        registry, _ = _real_sha_binary(tmp_path)
+        store = _store(tmp_path)
+        assert store.installed_status(registry, "bootstrap")[0] == "absent"
+        store.acquire(registry, "bootstrap", verifier=_skip_verification)
+        state = store.load_state()
+        state.profiles["bootstrap"].source_sha256 = "1" * 64
+        store.save_state(state)
+        assert store.installed_status(registry, "bootstrap")[0] == "stale"
+        assert store.installed("bootstrap", registry) is None
+        state.profiles["bootstrap"].source_sha256 = _sha(
+            tmp_path / "sources" / "bootstrap-1.0.tar.gz"
+        )
+        state.profiles["bootstrap"].schema_version = 1
+        store.save_state(state)
+        assert store.installed_status(registry, "bootstrap")[0] == "stale"
+        state.profiles["bootstrap"].schema_version = 2
+        store.save_state(state)
+        import shutil
+
+        shutil.rmtree(store.installed_dir / "bootstrap-1.0")
+        assert store.installed_status(registry, "bootstrap")[0] == "corrupt"
+
+    def test_reverify_backfills_legacy_provenance_only_when_registry_matches(self, tmp_path):
+        registry, _ = _real_sha_binary(tmp_path)
+        store = _store(tmp_path)
+        store.acquire(registry, "bootstrap", verifier=_skip_verification)
+        state = store.load_state()
+        entry = state.profiles["bootstrap"]
+        entry.schema_version, entry.source_sha256 = 1, ""
+        store.save_state(state)
+        assert store.installed_status(registry, "bootstrap")[0] == "stale"
+        assert store.reverify(registry) == []
+        assert store.installed_status(registry, "bootstrap")[0] == "compatible"
+        state = store.load_state()
+        entry = state.profiles["bootstrap"]
+        entry.schema_version, entry.source_sha256, entry.version = 1, "", "0.9"
+        store.save_state(state)
+        store.reverify(registry)
+        assert store.installed_status(registry, "bootstrap")[0] == "stale"
+
+    def test_store_root_precedence(self, tmp_path, monkeypatch):
+        from ffmpeg_builder.toolchain_store import resolve_store_root
+
+        monkeypatch.delenv("FFMPEG_BUILDER_TOOLCHAINS", raising=False)
+        assert resolve_store_root(tmp_path) == tmp_path / "toolchains"
+        monkeypatch.setenv("FFMPEG_BUILDER_TOOLCHAINS", str(tmp_path / "env"))
+        assert resolve_store_root(tmp_path) == tmp_path / "env"
+        assert resolve_store_root(tmp_path, tmp_path / "cli") == tmp_path / "cli"
+
+
+class TestLlvmMingwProfile:
+    def test_registry_declares_cross_compiler_and_backend_selection(self):
+        registry = ToolchainRegistry()
+        profile = registry.get_profile("llvm-mingw")
+        assert profile is not None and profile.kind == "cross_compiler"
+        assert profile.target.triple == "x86_64-w64-mingw32"
+        assert profile.sources["binary"].sha256
+        rec = registry.recommend_profiles(
+            "8.1", "linux", {}, components=[], installed=[], backend="linux-cross-mingw"
+        )
+        assert [n for n, _ in rec] == ["llvm-mingw"]
+        native = registry.recommend_profiles("8.1", "linux", {}, components=[], installed=[])
+        assert "llvm-mingw" not in [n for n, _ in native]
+
+    def test_cross_compiler_without_probe_is_rejected(self, tmp_path):
+        path = tmp_path / "t.yaml"
+        path.write_text(
+            yaml.safe_dump(
+                {
+                    "toolchains": {
+                        "x": {
+                            "kind": "cross_compiler",
+                            "platforms": ["linux"],
+                            "version": "1",
+                            "source": {
+                                "default": "local",
+                                "local": {"type": "local", "path": "/x"},
+                            },
+                        }
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError):
+            ToolchainRegistry(path)

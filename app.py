@@ -35,7 +35,7 @@ from .target_guard import (
 )
 from .system_report import SystemReportGenerator
 from .toolchain_registry import ToolchainRegistry
-from .toolchain_store import ToolchainStore
+from .toolchain_store import ToolchainStore, resolve_store_root
 from .windows_probe import probe_windows_target
 from .ui.dashboard import BuildDashboard
 from .ui.error_handler import ErrorHandler
@@ -316,12 +316,21 @@ class FFmpegBuilderApp:
 
     def _installed_toolchains(self) -> Dict[str, bool]:
         """Installed toolchain profiles mapped to their verification status."""
+        store = ToolchainStore(
+            resolve_store_root(PROJECT_ROOT),
+            workspace=self.workspace,
+        )
+        try:
+            registry = ToolchainRegistry()
+        except (OSError, ValueError):
+            registry = None
         return {
             item.profile: item.verified
-            for item in ToolchainStore(
-                PROJECT_ROOT / "toolchains",
-                workspace=self.workspace,
-            ).list_installed()
+            and (
+                registry is None
+                or store.installed_status(registry, item.profile)[0] == "compatible"
+            )
+            for item in store.list_installed()
         }
 
     def _component_toolchain_reasons(self, config: BuildConfig) -> Dict[str, str]:
@@ -397,7 +406,7 @@ class FFmpegBuilderApp:
             self.console.print(f"[red]Toolchain registry unavailable: {exc}[/red]")
             return
         store = ToolchainStore(
-            PROJECT_ROOT / "toolchains",
+            resolve_store_root(PROJECT_ROOT),
             workspace=self.workspace,
             source_archives_dir=PROJECT_ROOT / config.source_archives_dir,
             allow_network_downloads=config.allow_network_downloads,
@@ -409,6 +418,11 @@ class FFmpegBuilderApp:
             components=self.registry.get_all(),
             installed=[item.profile for item in store.list_installed()],
             cuda_version=self.platform_info.cuda_version,
+            backend=(
+                TARGET_BACKEND_CROSS_MINGW
+                if config.target_backend == TARGET_BACKEND_CROSS_MINGW
+                else None
+            ),
         )
         self.store_screen.show(store, toolchain_registry, recommended=recommended)
 
@@ -421,7 +435,7 @@ class FFmpegBuilderApp:
         except (OSError, ValueError):
             return {}
         store = ToolchainStore(
-            PROJECT_ROOT / "toolchains",
+            resolve_store_root(PROJECT_ROOT),
             workspace=self.workspace,
             source_archives_dir=PROJECT_ROOT / config.source_archives_dir,
             allow_network_downloads=config.allow_network_downloads,

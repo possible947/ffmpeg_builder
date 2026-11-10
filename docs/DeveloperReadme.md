@@ -206,6 +206,60 @@ prerequisites, component-declared toolchains, the CUDA table), and both the TUI
 store and `scripts/prepare_toolchains.py` consume it — the TUI's `p` action and
 the script's default selection are the same computation.
 
+#### LLVM-MinGW and the hardened store (G2.2)
+
+`llvm-mingw` (`kind: cross_compiler`, release `20261104`, UCRT,
+`x86_64-w64-mingw32`) is a project-managed **binary** toolchain for the WSL-Mingw
+backend (`linux-cross-mingw`). Its archive
+`llvm-mingw-20261104-ucrt-ubuntu-22.04-x86_64.tar.xz` ships in
+`third_party/sources` (Git LFS) and is pinned by sha256 in `toolchains.yaml`. The
+backend-bound `wsl-mingw-ffmpeg-*` platform profiles select it only when
+`recommend_profiles(..., backend="linux-cross-mingw")` is requested; native
+recommendations are unchanged. The G3 build backend that consumes it is not
+implemented.
+
+Store behaviour (all profiles, not just LLVM-MinGW):
+
+- **Integrity:** every archive, from the local mirror or a download, is
+  sha256-verified (streaming) before extraction. A declared checksum is always
+  enforced; a missing one is refused. A mismatch leaves the archive untouched and
+  extracts nothing. Test fixtures that declare a placeholder digest skip hashing
+  only via a test-only fixture; production code has no such bypass.
+- **Staged activation:** install = resolve source → verify archive → extract into
+  `installed/.staging-*` → run the declarative verifier on the staged prefix →
+  write provenance → activate atomically. The previous install is parked as
+  `.backup-*` and restored if activation fails; the active install is never
+  removed before the candidate verified. Leftover staging/backup dirs from an
+  interrupted run are recovered on the next `acquire`. Source `build` profiles
+  (GCC) bake the prefix into the build, so they build in place with backup and
+  rollback.
+- **Verification (`cross_compiler`):** declared tools exist, version checks match,
+  and a compile+link probe produces a PE32+ x86-64 executable importing the
+  UCRT (`api-ms-win-crt-*`); the output is never executed.
+- **Provenance:** `installed/<dir>/.toolchain-install.json` plus state schema 2
+  record profile, version, source variant, archive filename, declared source
+  sha256 and runtime. `ToolchainStore.installed_status()` returns `absent`,
+  `compatible`, `unverified`, `stale` (version/hash/variant/runtime/schema drift)
+  or `corrupt` (state lists a missing directory). Compatible installs are reused;
+  stale ones are re-acquired. Legacy installs without provenance are `stale`
+  until `prepare_toolchains.py --verify-only` re-verifies them and, if they match
+  the registry version, backfills provenance.
+- **Store root:** `--store` > `$FFMPEG_BUILDER_TOOLCHAINS` > `<repo>/toolchains`
+  (`resolve_store_root`, shared by the TUI and the script). `--sources` selects
+  the source mirror independently; with it given, no other mirror is consulted.
+- **Errors:** `BuildError(category=..., code=...)`. `project_source` covers
+  missing offline archive, checksum mismatch and unreadable archives;
+  `toolchain_install` covers extraction, layout, verifier and activation
+  failures. The underlying exception is chained.
+
+Isolated offline provisioning (does not touch the normal store):
+
+```bash
+python scripts/prepare_toolchains.py --backend linux-cross-mingw \
+    --store /tmp/clean-store --sources /tmp/mirror      # network disabled by default
+python scripts/prepare_toolchains.py --verify-only --store /tmp/clean-store
+```
+
 ### Build goal: host-tuned FFmpeg, not a portable release
 
 Release portability is explicitly out of scope. The build goal is an FFmpeg
