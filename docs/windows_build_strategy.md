@@ -1,10 +1,9 @@
 # Windows FFmpeg cross-build strategy
 
-**Status:** G0/G0A feasibility, G1 target preparation, and G2.1–G2.4 plus
-CUDA-specific prerequisite/PTX validation are complete for their scoped
-requirements. Vulkan prerequisite validation, later G2 work, the G3
-`linux-cross-mingw` cross-build backend and the full component stack remain
-unimplemented.
+**Status:** G0/G0A feasibility, G1 target preparation, and G2.1–G2.5
+prerequisite validation/isolation are complete for their scoped requirements.
+G2.6–G2.8, the G3 `linux-cross-mingw` cross-build backend, and the full
+component stack remain unimplemented.
 
 **Naming.** The user-facing Windows build route is **WSL-Mingw**: Windows host
 → WSL2 Ubuntu build environment → LLVM-MinGW/UCRT cross toolchain → Windows
@@ -493,7 +492,8 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
   Git LFS mirror, composite provenance, atomic activation, offline acceptance;
   no rustup). G2.4 CUDA resolution (#10), the external-prerequisite foundation
   and CUDA PTX probe (#12) are implemented and accepted for the scoped host.
-  Vulkan prerequisites and G2.6–G2.8 (target headers/interfaces, identity
+  G2.5 Vulkan prerequisites and host/target isolation (#14) are implemented and
+  accepted for the scoped host. G2.6–G2.8 (target headers/interfaces, identity
   integration, final offline acceptance) remain open; G3 is not started. Full
   G2 offline closure is not claimed. G2 checks external WSL SDK prerequisites;
   it does not own or install those SDKs.
@@ -515,6 +515,18 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
   Stale legacy GCC state requires successful scoped `--verify-only` before
   backfill, including matching compiler versions and existing source metadata.
   No Linux CUDA libraries are automatically added to target discovery.
+- **Host/target SDK isolation (G2.5):** CUDA NVCC and Vulkan shader/SPIR-V
+  executables are host tools, not Windows-target libraries or discovery
+  prefixes. `filter_wsl_mingw_target_environment()` filters a copy of the
+  parent environment: SDK selectors and Linux Vulkan loader variables are
+  omitted, SDK paths are classified in structured diagnostics, and discovery
+  paths are retained only under caller-supplied Windows-target roots. Host
+  `PATH` remains available for tools. The Linux Vulkan SDK is no longer wired
+  into the `linux-cross-mingw` builder or Linux platform-strategy environment;
+  native Linux/WSL and macOS behavior is unchanged. This establishes the
+  filtering contract only: G3 must still construct the actual target
+  pkg-config/CMake/Meson environment and must not treat preserved host or system
+  paths as target inputs.
 - **Tests:** Registry parsing, version resolution, checksums, target std
   compatibility, `-ccbin` version check, SDK path/tool usability checks,
   actionable missing-prerequisite/source errors, offline provisioning with

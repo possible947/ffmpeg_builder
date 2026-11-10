@@ -656,7 +656,11 @@ class FFmpegBuilder:
         # system loader/driver install.
         vulkan_info = self.platform_detector.platform_info
         vulkan_sdk_path = getattr(vulkan_info, "vulkan_sdk_path", None)
-        if getattr(vulkan_info, "vulkan_sdk_available", False) and vulkan_sdk_path:
+        if (
+            self.config.target_backend != TARGET_BACKEND_CROSS_MINGW
+            and getattr(vulkan_info, "vulkan_sdk_available", False)
+            and vulkan_sdk_path
+        ):
             sdk_root = Path(vulkan_sdk_path)
             sdk_include = sdk_root / "include"
             sdk_lib = sdk_root / "lib"

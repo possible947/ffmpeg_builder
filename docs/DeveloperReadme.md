@@ -345,8 +345,18 @@ Store behaviour (all profiles, not just LLVM-MinGW):
   compiler versions, effective flags, workaround state and diagnostics are
   recorded in the resolved inputs. Resolution and environment construction do
   not automatically add CUDA SDK libraries to Windows-target discovery.
-  Inherited variables and generic Linux pkg-config paths are not yet fully
-  sanitized; target environment isolation remains G3 work.
+  `wsl_mingw_environment.py` provides
+  `filter_wsl_mingw_target_environment()`: it returns a child-environment copy,
+  drops host-only SDK selectors and Vulkan loader configuration, and retains
+  discovery paths only when they are under explicitly supplied Windows-target
+  input roots. It reports removed entries with their variable, prerequisite
+  classification, and reason; `PATH` remains available for host tools.
+  `FFmpegBuilder` and the Linux platform strategy also avoid injecting Linux
+  Vulkan SDK headers, libraries, pkg-config paths, or `VULKAN_SDK` into the
+  `linux-cross-mingw` environment.
+  The helper is not the final G3 environment: G3 must use it with explicit
+  target roots and construct compiler, pkg-config, CMake, and Meson inputs.
+  Native Linux/WSL and macOS SDK wiring is unchanged.
 
   Live acceptance on one host selected `/opt/cuda-12.4/bin/nvcc` (12.4.99),
   project `gcc12` (12.5.0), and Windows TITAN V capability 7.0. The scoped retry

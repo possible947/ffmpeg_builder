@@ -439,6 +439,9 @@ class _PlatformDetector:
     def get_platform_name(self):
         return self._platform
 
+    def get_multiarch_dir(self):
+        return None
+
 
 def _make_libplacebo_builder(tmp_path: Path, platform: str = "windows") -> FFmpegBuilder:
     config = BuildConfig(
@@ -502,6 +505,11 @@ def test_cross_mingw_build_env_does_not_add_linux_cuda_paths(tmp_path: Path):
     detector = PlatformDetector(config)
     detector.platform_info.cuda_available = True
     detector.platform_info.cuda_path = str(cuda_root / "bin" / "nvcc")
+    vulkan_root = tmp_path / "vulkan-sdk"
+    for relative in ("bin", "include", "lib", "lib/pkgconfig"):
+        (vulkan_root / relative).mkdir(parents=True, exist_ok=True)
+    detector.platform_info.vulkan_sdk_available = True
+    detector.platform_info.vulkan_sdk_path = str(vulkan_root)
     builder = FFmpegBuilder(
         config=config,
         workspace=tmp_path / "workspace",
@@ -521,7 +529,30 @@ def test_cross_mingw_build_env_does_not_add_linux_cuda_paths(tmp_path: Path):
         "LD_LIBRARY_PATH",
     ):
         assert str(cuda_root) not in builder.env.get(key, "")
+        assert str(vulkan_root) not in builder.env.get(key, "")
+    assert "VULKAN_SDK" not in builder.env
     assert builder.env["PATH"].split(os.pathsep)[1:] == os.environ.get("PATH", "").split(os.pathsep)
+
+
+def test_native_linux_builder_retains_vulkan_sdk_environment(tmp_path: Path):
+    sdk = tmp_path / "vulkan-sdk"
+    for relative in ("bin", "include", "lib", "lib/pkgconfig"):
+        (sdk / relative).mkdir(parents=True, exist_ok=True)
+    detector = _PlatformDetector("linux")
+    detector.platform_info.vulkan_sdk_available = True
+    detector.platform_info.vulkan_sdk_path = str(sdk)
+    builder = FFmpegBuilder(
+        config=BuildConfig(openmp=False),
+        workspace=tmp_path / "workspace",
+        packages=tmp_path / "packages",
+        state_manager=StateManager(tmp_path / "state.json"),
+        platform_detector=detector,
+    )
+
+    assert builder.env["VULKAN_SDK"] == str(sdk)
+    assert f"-I{sdk}/include" in builder.env["CFLAGS"]
+    assert f"-L{sdk}/lib" in builder.env["LDFLAGS"]
+    assert str(sdk / "lib/pkgconfig") in builder.env["PKG_CONFIG_PATH"]
 
 
 def test_relative_source_archives_dir_anchored_to_project_root(tmp_path: Path):

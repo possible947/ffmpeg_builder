@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 from typing import Dict, List
 
+from ..config import TARGET_BACKEND_CROSS_MINGW
 from .base import BasePlatformStrategy
 from .context import PlatformContext
 
@@ -54,7 +55,11 @@ class LinuxGcc13Platform(BasePlatformStrategy):
         }
 
         vulkan_sdk_path = getattr(context.platform_info, "vulkan_sdk_path", None)
-        if getattr(context.platform_info, "vulkan_sdk_available", False) and vulkan_sdk_path:
+        if (
+            context.config.target_backend != TARGET_BACKEND_CROSS_MINGW
+            and getattr(context.platform_info, "vulkan_sdk_available", False)
+            and vulkan_sdk_path
+        ):
             sdk_root = Path(vulkan_sdk_path)
             sdk_lib = sdk_root / "lib"
             sdk_include = sdk_root / "include"

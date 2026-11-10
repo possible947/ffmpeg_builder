@@ -1,3 +1,30 @@
+### Added — G2.5 WSL-Mingw host/target SDK isolation
+
+- Added `filter_wsl_mingw_target_environment()` to produce a child environment
+  filtered against known external CUDA/Vulkan roots and explicitly approved
+  Windows-target input roots. It removes host-only SDK selectors and Vulkan
+  loader/layer configuration, preserves host `PATH` for resolved tools, and
+  reports removed paths with structured variable, prerequisite, and reason data.
+  It does not mutate the parent environment.
+- Prevented `FFmpegBuilder` and the Linux platform strategy from injecting
+  Linux Vulkan SDK headers, libraries, pkg-config metadata, or `VULKAN_SDK`
+  into the `linux-cross-mingw` environment; native Linux/WSL and macOS behavior
+  remains unchanged. CUDA results already expose NVCC and its managed host
+  compiler without target library paths.
+- Added synthetic mixed-SDK contamination coverage for CUDA/Vulkan libraries,
+  pkg-config/CMake paths, loader variables, managed host-tool paths, duplicates,
+  symlinks, and an approved future target prefix. Explicit SDK selection and
+  the CUDA/Vulkan functional probes remain covered by their prerequisite tests.
+- Live acceptance selected CUDA `/opt/cuda-12.4` and Vulkan
+  `/opt/vulkan-sdk/1.4.363.1/x86_64`; NVCC passed the PTX compatibility probe
+  for `compute_70`, and `glslc` plus `spirv-val` compiled and validated the
+  Vulkan probe. A sourced-environment simulation removed 11 host discovery
+  entries while preserving `PATH`. Probes wrote only temporary outputs and
+  did not modify the external SDKs or Windows host.
+- This is not the G3 cross environment. G3 must supply explicit target roots and
+  construct target compiler and dependency discovery variables; no Windows
+  target interface, toolchain file, or FFmpeg cross-build was added.
+
 ### Added — G2.4 WSL-Mingw CUDA build-host input resolution
 
 - Added a CUDA-specific resolver on the #9 external-prerequisite abstraction:
