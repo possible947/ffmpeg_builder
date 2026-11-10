@@ -19,8 +19,9 @@ maintained alongside `docs/CHANGELOG.md`; each phase adds its own checklist here
    the FFmpeg 9.0 path.
 3. **Linux + GCC 12 via WSL** — validates the deployed/lower-profile path for
    FFmpeg 8.1 on a modern host.
-4. **Windows (MSYS2 UCRT64)** — deferred until hardware access is restored; only
-   the FFmpeg 8.1 path was exercised previously.
+4. **Windows (WSL-Mingw)** — planned with the `linux-cross-mingw` backend; acceptance
+   is defined in `windows_build_strategy.md` (G1–G7). The former MSYS2 route is
+   no longer a validation target.
 
 ## Automated tests (run on the target machine)
 
@@ -181,5 +182,7 @@ Portability:
       host-compiler docs rewritten to the store tiers.
 - [ ] CI green (pytest + black + mypy baseline).
 
-### Phase 6 — Windows (deferred)
-- [ ] Platform profile for `windows-msys2-ucrt64`; re-validate 8.1/9.0.
+### Phase 6 — Windows (WSL-Mingw, deferred)
+- [ ] Windows validation follows the `linux-cross-mingw` gates in
+  `windows_build_strategy.md`; the former `windows-msys2-ucrt64` profile is no
+  longer a validation target.

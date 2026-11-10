@@ -1,6 +1,6 @@
 # FFmpeg Builder 3.0
 
-Interactive Python-based build system for FFmpeg 8.1 (default) and 9.0 on macOS, Linux, and **Windows 11 + MSYS2 UCRT64**.
+Interactive Python-based build system for FFmpeg 8.1 (default) and 9.0 on macOS and Linux. Windows builds follow the **WSL-Mingw** route (WSL2 Ubuntu → LLVM-MinGW/UCRT cross toolchain), which is still in development — see [Windows (WSL-Mingw)](#windows-wsl-mingw).
 
 FFmpeg Builder replaces the traditional bash `build-ffmpeg` script with a modern, interactive interface featuring real-time progress tracking, configuration management, platform-aware hardware acceleration detection, and resumable builds.
 
@@ -31,7 +31,7 @@ guide.
 - **~60 Components** — All codecs, libraries, and tools built from source in correct dependency order
 - **macOS Support** — Macports clang detection, OpenMP, VideoToolbox, glibtool handling
 - **Linux Support** — GCC/Clang detection, C11/C++17 standards, host-tuned (`-march=native -mtune=native -fopenmp`) builds
-- **Windows 11 + MSYS2 UCRT64 Support** — Full FFmpeg 8.1 build with CUDA/NVENC, Vulkan, OpenCL; w32threads; static codec libraries
+- **Windows (WSL-Mingw) — in development** — Windows FFmpeg built from WSL2 Ubuntu with LLVM-MinGW/UCRT; the `linux-cross-mingw` backend is not implemented yet
 
 ## Requirements
 
@@ -114,41 +114,92 @@ Or use the environment check script:
 ./scripts/check_python_env.sh
 ```
 
-## Windows 11 + MSYS2 UCRT64
+## Windows (WSL-Mingw)
 
-Windows 11 + MSYS2 UCRT64 uses GCC 16 by default, so the current policy typically routes builds to FFmpeg 9.0.
-All codec libraries are compiled as static archives and linked into `ffmpeg.exe`.
+> **Status: in development.** The WSL-Mingw route is the only Windows build
+> route going forward, but its production backend (`linux-cross-mingw`) is
+> **not implemented yet**; there is no supported end-to-end Windows build
+> workflow today. Early feasibility experiments succeeded on one specific
+> host (see [`windows_build_strategy.md`](windows_build_strategy.md));
+> the implementation gates G1–G7 are still open. The previous MSYS2-based
+> Windows build path was replaced by this route and is no longer documented
+> or supported; any MSYS2 code still in the repository is legacy and is
+> being removed/migrated.
 
-From Windows PowerShell (repository root):
+Supported Windows build route:
 
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\setup_windows_msys2_ucrt64.ps1
+```
+Windows host
+  → WSL2 Ubuntu build environment
+  → LLVM-MinGW/UCRT cross toolchain
+  → Windows FFmpeg target
 ```
 
-What it does:
+**WSL-Mingw** is the user-facing name of this route; **`linux-cross-mingw`**
+is the internal backend identifier. The target is Windows/UCRT built through
+LLVM-MinGW from a WSL2 Ubuntu environment.
 
-- installs required MSYS2/UCRT64 toolchain and build packages,
-- installs hardware acceleration dependency packages (ffnvcodec, oneVPL/libvpl, Vulkan, OpenCL),
-- installs OpenMP runtime support package (`mingw-w64-ucrt-x86_64-llvm-openmp`),
-- installs Python runtime dependencies (`rich`, `tqdm`, `pyyaml`, `requests`) from MSYS2 packages,
-- creates `.venv-msys2-ucrt64` in the repository (with `--system-site-packages`) if missing,
-- installs project package in editable mode (`pip install -e . --no-deps`) into that venv,
-- runs `scripts/check_python_env.sh`,
-- detects CUDA/Vulkan/OpenCL/QSV readiness and generates `scripts/env_windows_msys2_ucrt64.sh`.
+### Build on the host, for the host
 
-Then start MSYS2 UCRT64 and run:
+The physical Windows machine running WSL is the target. Builds are
+intentionally host-specific (CPU features, GPU, drivers and runtimes are
+probed on Windows, not in WSL). Portability to materially different machines
+or configurations is not a project goal, and a relevant hardware or software
+change may require rebuilding.
 
-```bash
-cd /<drive>/<path>/ffmpeg_builder
-source ./scripts/env_windows_msys2_ucrt64.sh   # optional, if generated
-source ./.venv-msys2-ucrt64/bin/activate
-python -m ffmpeg_builder
-```
+### Required WSL environment
 
-OpenMP on Windows/UCRT64 is recommended: it improves performance in components that use OpenMP-parallel code paths.  
-For GCC builds, `-fopenmp` is provided by the installed UCRT64 toolchain (`libgomp` via GCC). The bootstrap additionally installs `llvm-openmp` to keep Clang/OpenMP runtime available as well.
+The WSL2 Ubuntu environment must provide the host tools needed by the
+configured components, such as a C/C++ build environment, CMake, Meson, Ninja,
+pkg-config, NASM/Yasm, Perl and Python, plus any other host tool a configured
+component requires. Project-managed inputs (LLVM-MinGW, Rust and its Windows
+target standard library, component sources) are provisioned by the project's
+toolchain store, not by the user.
 
-Implementation details are documented in `docs/DeveloperReadme.md`.
+### CUDA SDK prerequisite
+
+For configurations that need CUDA/NVCC, a CUDA SDK must already be present in
+WSL (current environment example: `/opt/cuda-12.4`).
+
+- The build system does not install, archive or manage the CUDA SDK; it only
+  locates and checks it.
+- Do not install a Linux NVIDIA driver for this workflow. The Windows NVIDIA
+  driver provides the Windows CUDA runtime.
+- The CUDA host compiler (`-ccbin`) is selected by the build configuration
+  and toolchain; do not change the system default compiler for it.
+
+### Vulkan SDK prerequisite
+
+For configurations that need Vulkan build/shader tools, a Vulkan SDK must
+already be present in WSL (current environment example:
+`/opt/vulkan-sdk/1.4.363.1`, effective Linux SDK root
+`/opt/vulkan-sdk/1.4.363.1/x86_64`).
+
+- The build system does not install or manage the Vulkan SDK.
+- The Linux Vulkan SDK is build-host tooling only, not the Windows Vulkan
+  runtime. At run time the Windows Vulkan loader and vendor ICD are used.
+
+### Environment variables
+
+A lightweight setup is sufficient: `CUDA_HOME` and `CUDA_PATH` pointing to the
+CUDA SDK, `VULKAN_SDK` pointing to the Linux SDK root, and PATH additions for
+the selected SDK tool directories.
+
+Do **not** globally inject Linux SDK library, pkg-config or CMake paths into
+the Windows cross-build environment. In particular, sourcing the complete
+LunarG `setup-env.sh` globally sets Linux-native `LD_LIBRARY_PATH`,
+`PKG_CONFIG_PATH`, `CMAKE_PREFIX_PATH` and Vulkan layer paths; these must not
+reach Windows target dependency discovery.
+
+### Windows runtime prerequisites
+
+GPU drivers and runtimes belong to Windows itself: the NVIDIA driver and CUDA
+driver runtime, the Windows Vulkan loader and vendor ICD, the Windows OpenCL
+dispatcher and vendor implementations, and the Windows UCRT/system runtime.
+Do not copy Windows system or driver DLLs into WSL.
+
+Architecture, gates and verified results: [`windows_build_strategy.md`](windows_build_strategy.md).
+Implementation notes: [`DeveloperReadme.md`](DeveloperReadme.md).
 
 ## Linux (native)
 
@@ -380,13 +431,10 @@ macos:
 linux:
   c_standard: "gnu11"
   cxx_standard: "c++17"
-
-windows:
-  backend: "msys2-ucrt64"
-  command_mode: "posix"
-  msys2_root: "C:\msys64"
-  prefer_system_packages: true
 ```
+
+There is no supported `windows:` configuration block; the WSL-Mingw backend
+(`linux-cross-mingw`) is not implemented yet.
 
 Supported `ffmpeg_version` values are `8.1` (the default) and `9.0`. Each version
 uses a separately verified source archive checksum. Add its archive to the local
@@ -521,7 +569,7 @@ libsdl, freetype, vapoursynth, libvmaf, srt (GPL), libzmq, giflib
 
 ### Hardware Acceleration
 
-vulkan-headers, glslang, fast-float (libplacebo dependency), libplacebo (always built, Vulkan GPU processing opt-in via `enable_libplacebo_vulkan`), nv-codec (Linux/Windows UCRT64), amf (Linux), opencl-headers (Linux/Windows UCRT64), opencl-icd-loader (Linux/Windows UCRT64), onevpl (Linux)
+vulkan-headers, glslang, fast-float (libplacebo dependency), libplacebo (always built, Vulkan GPU processing opt-in via `enable_libplacebo_vulkan`), nv-codec (Linux), amf (Linux), opencl-headers (Linux), opencl-icd-loader (Linux), onevpl (Linux)
 
 ### Target
 
@@ -533,20 +581,18 @@ The builder automatically detects available hardware acceleration and configures
 
 | Technology | Platform | Detection Method |
 |------------|----------|------------------|
-| **CUDA** | Linux/Windows | nvcc in PATH, then platform-specific default install paths |
-| **Vulkan** | Linux/macOS/Windows | pkg-config, headers, vulkaninfo |
-| **libplacebo** | Linux/macOS/Windows UCRT64/WSL2 | always built; `enable_libplacebo_vulkan` controls Vulkan GPU backend; disabled on `full_static` Linux |
+| **CUDA** | Linux | nvcc in PATH, then platform-specific default install paths |
+| **Vulkan** | Linux/macOS | pkg-config, headers, vulkaninfo |
+| **libplacebo** | Linux/macOS/WSL2 | always built; `enable_libplacebo_vulkan` controls Vulkan GPU backend; disabled on `full_static` Linux |
 | **VAAPI** | Linux | pkg-config libva |
-| **Intel QSV** | Linux/Windows UCRT64 | Linux: vainfo or PCI Intel GPU (requires VAAPI, disabled in WSL2). Windows UCRT64: Intel GPU + pkg-config oneVPL (`vpl`/`libvpl`) |
+| **Intel QSV** | Linux | vainfo or PCI Intel GPU (requires VAAPI, disabled in WSL2) |
 | **AMF** | Linux | AMD GPU detected via `lspci` or DRM sysfs; AMF headers are downloaded from GPUOpen |
-| **OpenCL** | Linux/macOS/Windows UCRT64 | Linux/Windows: headers + ICD vendor files. macOS: `OpenCL.framework` (always available) |
+| **OpenCL** | Linux/macOS | Linux: headers + ICD vendor files. macOS: `OpenCL.framework` (always available) |
 | **VideoToolbox** | macOS | Always available |
 
-Windows phase-3 policy:
+Windows hardware acceleration (CUDA/NVENC, Vulkan, OpenCL) is planned for the WSL-Mingw backend (`linux-cross-mingw`) and is not implemented yet; see `windows_build_strategy.md`.
 
-- enabled for UCRT64: CUDA/NVENC path (`nv-codec`), Vulkan (`vulkan-headers`/`glslang`), OpenCL (`opencl-headers`/`opencl-icd-loader`), Intel QSV (`onevpl`/`libvpl`) when Intel GPU + oneVPL pkg-config module are detected.
-- explicitly disabled for now: VAAPI, VideoToolbox.
-- build backend is explicit: `linux-wsl2` and `windows-msys2-ucrt64` are treated as separate modes with different component eligibility rules.
+Build backends are explicit: `linux-native` and `linux-wsl2` are distinct modes with different component eligibility rules (`linux-wsl2` builds Linux binaries for WSL itself, not Windows binaries).
 
 ### CUDA Notes
 
@@ -555,7 +601,6 @@ Windows phase-3 policy:
 - When CUDA is detected, the builder adds: `--enable-cuda-nvcc`, `--enable-cuvid`, `--enable-nvdec`, `--enable-nvenc`, `--enable-cuda-llvm`, `--enable-ffnvcodec`
 - Host-compiler compatibility (GCC vs the CUDA toolkit's max supported GCC version, e.g. CUDA 12.2 → GCC ≤ 12) is auto-detected via a real `nvcc` compile probe, with fallback to `CUDA_NVCC_CCBIN` or a store-deployed GCC from the `cuda` table — see "CUDA toolkit / GCC compatibility" above and `--nvccflags='-ccbin=...'` in the resulting configure line
 - `enable_libvmaf_cuda: true` enables libvmaf CUDA path only when backend is `linux-native` or `linux-wsl2` and an NVCC compile sanity-check passes
-- On `windows-msys2-ucrt64`, libvmaf CUDA path remains disabled by policy/toolchain limits; CPU `libvmaf` still works
 - For `libvmaf` CUDA builds with `openmp: true`, the builder forwards OpenMP to NVCC host compilation via `NVCC_PREPEND_FLAGS=-Xcompiler=-fopenmp` and removes raw `-fopenmp` from inherited compile/link flags to avoid `nvcc fatal: Unknown option '-fopenmp'`
 - CUDA compute capability is automatically detected via `nvidia-smi` (queries all GPUs and uses the minimum value for compatibility)
 - Priority: `CUDA_COMPUTE_CAPABILITY` environment variable → auto-detection via nvidia-smi → default value 52
@@ -575,22 +620,19 @@ Windows phase-3 policy:
 ### libplacebo Notes
 
 - GPU-accelerated video/image rendering and processing library (Vulkan backend)
-- **Always built** on all platforms (Linux, macOS, Windows UCRT64/WSL2) — no opt-in required
+- **Always built** on all platforms (Linux, macOS, WSL2) — no opt-in required
 - `enable_libplacebo_vulkan: true` in `build_config.yaml` enables Vulkan GPU acceleration inside libplacebo; software features (tone mapping, colour space conversion, scaling) are always available regardless
 - Disabled when `full_static: true` on Linux (system `libvulkan.so` cannot be bundled statically); on macOS `libvulkan.dylib` is linked normally
 - On macOS with Vulkan enabled, `LIBRARY_PATH` and `PKG_CONFIG_PATH` are extended with LunarG SDK paths (`/usr/local/lib`, `/usr/local/lib/pkgconfig`)
 - Enables FFmpeg's `libplacebo` filter (`N->V`) only when `enable_libplacebo_vulkan: true`; a software-only libplacebo build remains available for other consumers
 - Built with: `-Dopengl=disabled -Dd3d11=disabled -Dshaderc=disabled -Dlibdovi=disabled -Dlcms=disabled`
 - Requires Python `jinja2` for GLSL preprocessing; installed with project dependencies (`pip install -e .`) or via distro package `python3-jinja2`
-- Requires `mingw-w64-ucrt-x86_64-python-jinja` on MSYS2 UCRT64 (GLSL preprocessor); installed by the bootstrap script automatically
 - Depends on `fast-float` v6.1.6 headers (GitHub release tarballs omit this git submodule; the builder provides it as a separate `HEADERS_ONLY` component)
 - Version: 7.360.1
 
 ### Intel QSV Notes
 
 - Linux: Intel QSV uses VAAPI backend (`libva`) and is disabled in WSL2.
-- Windows UCRT64: Intel QSV uses oneVPL (`vpl`/`libvpl`) and does not require VAAPI.
-- Detection is backend-aware: Intel GPU presence + pkg-config oneVPL module check on UCRT64.
 - Adds `--enable-libvpl` when QSV is available.
 
 ## Build Output
@@ -630,7 +672,6 @@ The following environments have been verified to complete a full FFmpeg build:
 | 2026-08-10 | Fedora Linux 44 | x86_64, GCC 16, Python 3.14 (system), full HW acceleration stack | GPL + non-free, native build, openmp, full HW accel, `make_release: true` | Successful full build of FFmpeg 8.1 (`58/58` components) in **20.5 minutes**. Fresh Python venv, fresh config, full HW acceleration stack (CUDA, Vulkan, OpenCL, AMF, libplacebo). |
 | 2026-08-02 | macOS 15.5 (Sequoia) | x86_64, Intel Core i7-6950X, AMD Radeon RX Vega 64 8 GB, LunarG Vulkan SDK 1.4.350.1, MacPorts clang-17 | GPL + non-free, native build, openmp, **libplacebo + Vulkan** (`enable_libplacebo_vulkan: true`) | Successful full build of FFmpeg 8.1 (`56/56` components). HW accels: `videotoolbox`, `opencl`, `vulkan`. libplacebo 7.360.1 with Vulkan GPU backend compiled in. VideoToolbox encode/decode, OpenCL filters, Vulkan filters, libplacebo filter all confirmed present. |
 | 2026-08-01 | macOS 15.5 (Sequoia) | x86_64, Intel Core i7-6950X, AMD Radeon RX Vega 64, LunarG Vulkan SDK 1.4.350.1, MacPorts clang-17 | GPL + non-free, native build, openmp, `make_release: false` | Successful full build of FFmpeg 8.1 (`52/52` buildable components without libplacebo/Vulkan). HW accels confirmed: `videotoolbox`, `opencl`, `vulkan`. |
-| 2026-07-25 | Windows 11 + MSYS2 UCRT64 | x86_64, GCC 16.1.0, Intel Arc A750 + NVIDIA TITAN V (CUDA 12.2) | GPL + non-free, native build, openmp, **libplacebo**, `make_release: true` | Successful full build of FFmpeg 8.1 (`59/59` components) with all configured components including libplacebo 7.360.1; release bundle generated in `workspace/release` (`ffmpeg.exe`, `ffprobe.exe`, `ffplay.exe`, runtime DLL set, `manifest.json`) |
 | 2026-07-19 | Ubuntu 24.04 (WSL2) | x86_64, NVIDIA CUDA | GPL + non-free, native build | Successful build of FFmpeg 8.1 with all configured components enabled |
 | 2026-07-19 | Fedora Linux 44 | x86_64, dual AMD Instinct MI50, dual Intel Xeon Broadwell, GCC 16.1.1, glibc 2.43 | GPL + non-free, native build | Successful build of FFmpeg 8.1 (45/57 components; 12 LV2/OpenCL/Vulkan/AMF/VapourSynth items not built because the corresponding runtime libraries are not present on this system) |
 

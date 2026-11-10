@@ -1,3 +1,22 @@
+### Changed — Windows documentation direction: WSL-Mingw replaces MSYS2-UCRT64 (2026-11-10)
+
+- **Architectural/documentation decision only; no production code changed.** The
+  `windows-msys2-ucrt64` / MSYS2-UCRT64 build variant is no longer a supported or
+  documented Windows build route. The Windows route is **WSL-Mingw**: Windows host →
+  WSL2 Ubuntu → LLVM-MinGW/UCRT cross toolchain → Windows FFmpeg target, with
+  `linux-cross-mingw` as the backend identifier.
+- `README.md`, `docs/README.md`, `docs/DeveloperReadme.md`, `docs/testing_plan.md`,
+  `docs/windows_build_strategy.md` and related guides were updated: MSYS2 setup,
+  troubleshooting and configuration instructions were removed; MSYS2 preservation,
+  parity and deprecation requirements were dropped from the G1-G7 plan.
+- CUDA SDK and Vulkan SDK are documented as external prerequisites of the prepared
+  WSL environment, not project-managed dependencies.
+- **Not implemented yet:** the `linux-cross-mingw` backend (gates G1-G7). **Legacy MSYS2
+  code (platform strategy, executor sh-wrapping, bootstrap scripts, registry overrides,
+  tests) has not been removed** and is tracked as future migration work.
+- All older entries below that mention MSYS2/UCRT64 are historical records of the
+  superseded route, not current guidance.
+
 ### Fixed — zimg `autoreconf` could not find `libtoolize` (2026-11-08)
 
 - **Cause:** `_setup_environment` added `<workspace>/bin` to `PATH` only if the directory already

@@ -265,7 +265,7 @@ Notes for the version-refresh batches (Phase B):
 2. macOS validation completed on 2026-08-31: the default non-GPL FFmpeg 9.0 build completed all 49 selected components (37 source components and 12 system components) with no failures or skips. The generated `ffmpeg`, `ffprobe`, and `ffplay` binaries report FFmpeg 9.0.
 3. Remaining backend validation before stable 2.0:
   - Linux
-  - Windows MSYS2 UCRT64
+  - Windows via WSL-Mingw (`linux-cross-mingw`; planned, see `windows_build_strategy.md`)
 
 ---
 

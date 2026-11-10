@@ -275,6 +275,7 @@ Detects the full system environment in a single `detect_all()` call.
 | `PlatformInfo` | platform, build_backend, is_macos, is_linux, is_windows, is_arm64, is_wsl2, is_msys2, is_ucrt64, msystem, macports_clang, cuda_available, cuda_path, cuda_compute_capability, nvenc_api_version, nvenc_reason, vaapi_available, vaapi_reason, vaapi_detected_via, vaapi_detected_header_paths, vaapi_detected_loader_paths, vaapi_render_nodes, qsv_available, amf_available, amf_reason, amf_gpu_names, amf_headers_detected_paths, vulkan_available, vulkan_dev_available, vulkan_runtime_available, vulkan_reason, vulkan_detected_via, vulkan_detected_header_paths, vulkan_detected_icd_files, opencl_available, opencl_runtime_available, opencl_dev_available, opencl_effective_available, opencl_runtime_reason, opencl_dev_reason, opencl_effective_reason, opencl_detected_header_paths, opencl_detected_loader_paths, opencl_detected_icd_files, opencl_pkg_config_name, rocm_available, rocm_path, vulkan_sdk_available, vulkan_sdk_path |
 | `ToolInfo` | name, path, version, available |
 
+`is_msys2`, `is_ucrt64` and `msystem` are legacy fields of the unsupported MSYS2 Windows path; they remain only until migration to `linux-cross-mingw`.
 **Detection methods:**
 
 | Method | What it detects |
@@ -283,7 +284,7 @@ Detects the full system environment in a single `detect_all()` call.
 | `_detect_platform_info()` | Platform flags, HW acceleration |
 | `_detect_cuda()` | nvcc in PATH, then `/usr/local/cuda*/bin/nvcc` |
 | `_check_wsl2()` | WSL2 environment via `/proc/version` (Microsoft/WSL) |
-| `_check_qsv()` | Linux: QSV via vainfo/PCI Intel GPU with VAAPI. Windows UCRT64: Intel GPU + pkg-config oneVPL (`vpl`/`libvpl`) |
+| `_check_qsv()` | Linux: QSV via vainfo/PCI Intel GPU with VAAPI (legacy code also has a Windows UCRT64 oneVPL branch, slated for removal) |
 | `_check_vulkan()` | Dev/runtime split: pkg-config or headers (incl. `VULKAN_SDK` on *every* platform, not just Windows) gate `vulkan_dev_available`/the returned bool; ICD JSON files and a real `vulkaninfo --summary` run are runtime-only diagnostics (`vulkan_runtime_available`) and no longer grant dev-availability by themselves |
 | `_check_opencl()` | Runtime+dev readiness model (`opencl_runtime_available` + `opencl_dev_available`), including ROCm/CUDA non-standard include/lib paths, WSL-aware runtime checks, and a functional `clinfo -l` probe (PATH or `<ROCM_PATH>/bin/clinfo`) as the strongest runtime signal |
 | `_check_vaapi()` | pkg-config libva, falling back to header (`va/va.h`) + loader (`libva.so`, multiarch-aware) presence when pkg-config/`.pc` indexing is unavailable; always records `vaapi_reason` on failure |
@@ -329,7 +330,7 @@ class Component:
     non_gpl_only: bool
     linux_only: bool
     macos_only: bool
-    windows_ucrt64_supported: bool
+    windows_ucrt64_supported: bool  # legacy MSYS2 override; to be removed
     system_component: bool
     custom_build_fn: str
     ffmpeg_configure_flag: str
@@ -361,12 +362,14 @@ class Component:
 
 **NVENC driver API version detection** (`PlatformDetector._detect_nvenc_api_version()`): queries `NvEncodeAPIGetMaxSupportedVersion()` from the installed NVIDIA driver's NVENC library (`nvEncodeAPI64.dll` on Windows, `libnvidia-encode.so.1` on Linux) via `ctypes`. This is independent of `cuda_available` (which only checks for `nvcc`), so it reflects the driver's real NVENC capability even without a CUDA toolkit install. `components.yaml`'s `nv-codec` component declares `versions` for both `13.0.19.0` (default, requires NVENC API >= 13.0) and `12.2.72.0` (fallback for older drivers); `get_nv_codec_component()` picks the newest one the detected driver supports.
 
-Windows/UCRT64 policy in current implementation:
+Legacy Windows/UCRT64 policy in the current code (to be removed/migrated; not a supported backend, and not to be extended):
 
 - only `nv-codec`, `vulkan-headers`, `glslang`, `opencl-headers`, `opencl-icd-loader` are eligible in `HW_ACCEL`,
 - these are enabled only in `MSYSTEM=UCRT64`,
 - Linux-only acceleration paths (`VAAPI`, `onevpl`) are excluded on Windows,
-- `nv-codec`, `opencl-headers`, `opencl-icd-loader` remain `linux_only` and are allowed on Windows only through explicit `windows_ucrt64_supported` override, keeping WSL2 and MSYS2-UCRT64 paths separated.
+- `nv-codec`, `opencl-headers`, `opencl-icd-loader` remain `linux_only` and are allowed on Windows only through the legacy `windows_ucrt64_supported` override.
+
+The WSL-Mingw (`linux-cross-mingw`) backend will replace this with registry-declared target eligibility; see `windows_build_strategy.md` (G3–G5).
 
 ### `builder.py` — Build Engine
 
@@ -473,12 +476,10 @@ Packaging rule (final):
 | `execute_make()` | `make -j<N>` |
 | `execute_install()` | `make install` |
 
-**UCRT64 sh-wrapping rule**: on `MSYSTEM=UCRT64`, commands that begin with `./` are
-automatically wrapped through `sh.exe` so that autotools scripts and shell bootstraps
-run inside the MSYS2 environment. All other commands — including `cmake`, `ninja`,
-`make`, `meson` — are native Windows PE binaries and are invoked directly. Never add
-MSYS2-installed tools (cmake, ninja, etc.) to the sh-wrapping path: `sh.exe` cannot
-execute Windows PE binaries and will fail with exit code 126 (`cannot execute binary file`).
+**Legacy MSYS2 sh-wrapping (to be removed/migrated, not a supported backend)**: the
+current `executor.py` still contains a branch that, on `MSYSTEM=UCRT64`, wraps commands
+beginning with `./` through `sh.exe`. It belongs to the legacy MSYS2 Windows path being
+replaced by WSL-Mingw (`linux-cross-mingw`), which must not reuse it. Do not extend it.
 
 ### `downloader.py` — Download Management
 
@@ -526,53 +527,57 @@ Built with the `rich` library. Static screens use `Table`, `Panel`, and `Prompt`
 
 ## Platform-Specific Notes
 
-### Windows MSYS2 UCRT64
+### Windows (WSL-Mingw) — implementation direction
 
-#### Environment setup
+The Windows build route is **WSL-Mingw**: a Windows host runs a WSL2 Ubuntu
+build environment, which uses the LLVM-MinGW/UCRT cross toolchain to produce
+a Windows FFmpeg target. **WSL-Mingw** is the user-facing name; the backend
+identifier is **`linux-cross-mingw`**. It is **not implemented yet**; the
+gates G1–G7, verified early-PoC results and open issues are in
+[`windows_build_strategy.md`](windows_build_strategy.md), which is the
+authoritative plan. The previous MSYS2-based Windows build path was replaced
+by this route.
 
-The UCRT64 backend requires a complete MSYS2 installation with all build tools
-installed via pacman. Use `scripts/setup_windows_msys2_ucrt64.ps1` to set up the
-environment. The script:
+Implementer rules:
 
-1. Runs `pacman -Syu --noconfirm` — **full system upgrade first** (not just DB sync).
-   This is required because MSYS2 packages depend on runtime libs that must be
-   consistent with the installed compiler toolchain. Using `pacman -Sy` + `pacman -S`
-   without the upgrade step can leave cmake and other tools missing or broken.
-2. Installs all project packages with `pacman -S --needed --noconfirm`.
-3. **Verifies** that all critical tools are available (`gcc`, `cmake`, `ninja`, `meson`,
-   `nasm`, `python`, `pkg-config`) and prints their versions. Throws if any are absent.
+- **Legacy MSYS2 code is migration/removal work, not a supported backend.**
+  `platforms/windows_ucrt64.py`, the `is_msys2`/`is_ucrt64`/`msystem` fields,
+  `windows_ucrt64_supported` registry overrides, the `./` sh.exe wrapping in
+  `executor.py`, MSYS path rewriting in `builder.py`, and the MSYS2 bootstrap
+  scripts still exist temporarily. Do not add features to them and do not
+  require their behavior to be preserved; remove or migrate them when the
+  relevant production gate reaches them.
+- **Host tools and target inputs are separate.** Linux host tools (compilers,
+  CMake, Meson, Ninja, pkg-config, NASM, Perl/Python, NVCC, shader tools) are
+  distinct from Windows target inputs (headers, import libraries, target
+  libraries, target pkg-config metadata). Never reuse MSYS path rewriting or
+  `windows-ucrt64` path conventions in the Linux cross backend.
+- **External SDKs belong to the prepared WSL environment.** The CUDA SDK
+  (example `/opt/cuda-12.4`) and Vulkan SDK (example
+  `/opt/vulkan-sdk/1.4.363.1`, Linux root `.../x86_64`) are prerequisites the
+  project locates and checks for presence and usability. The project does not
+  install, archive, hash or version-manage them, and ordinary SDK tool
+  version changes must not require registry edits.
+- **Project-managed inputs stay project responsibilities:** LLVM-MinGW, the
+  Rust compiler and its Windows target standard library, component sources and
+  patches, target headers (e.g. `nv-codec`), import-library recipes.
+- **Target discovery must not consume Linux SDK libraries.** Target
+  pkg-config, CMake and Meson lookups use target-only paths and explicit cross
+  files; `/usr/lib`, WSL CUDA libraries and Vulkan SDK native libraries must
+  never satisfy a Windows target link. Do not globally source LunarG
+  `setup-env.sh` for cross-builds.
+- **Windows runtime probing goes through Windows interop** (fresh probe of CPU
+  features, GPU, drivers, Vulkan/OpenCL runtimes), never through WSL's Linux
+  view. Drivers/runtimes (NVIDIA driver, Windows Vulkan loader/ICD, OpenCL
+  dispatcher, UCRT) are owned by Windows and are not copied into WSL.
+- **Host-specific rebuild behavior is intentional.** Builds target the
+  physical host; state and artifacts must not be reused across materially
+  different host/build conditions (see build identity in the strategy).
 
-#### Incomplete environment symptoms
-
-If the MSYS2 environment was not fully upgraded before starting the build, cmake-based
-components (e.g. `svtav1`, `dav1d`, `x265`) may fail at configure with:
-
-- Return code `3221225781` (0xC0000135, `STATUS_DLL_NOT_FOUND`) — cmake binary not
-  found or unable to load its DLLs
-- Empty stdout and stderr in the `workspace/logs/<component>_configure.log`
-
-**Recovery**: open an MSYS2 UCRT64 shell and run `pacman -Syu`, then re-run the
-setup script or manually install the missing packages.
-
-#### PKG_CONFIG_PATH formats
-
-UCRT64 has two execution contexts that require different path formats:
-
-| Context | Format | Separator | Example |
-|---------|--------|-----------|---------|
-| POSIX shell (autotools `./configure` via sh.exe) | MSYS-style `/e/…` | `:` | `/e/Projects/…/lib/pkgconfig` |
-| Direct Python subprocess (Meson, CMake) | Windows-style `E:/…` | `;` | `E:/Projects/…/lib/pkgconfig` |
-
-`builder.py` stores the POSIX variant in `self.env` (for autotools). `_build_meson()`
-overrides it with the Windows variant. `_build_cmake()` overrides it with a
-semicolon-separated Windows path for components that need CMake's pkg-config integration.
-
-#### sh.exe wrapping scope
-
-Only commands starting with `./` are wrapped through `sh.exe` in `executor.py`.
-All MSYS2 build tools (`cmake`, `ninja`, `make`, `meson`) are native Windows PE
-executables that work correctly as direct `subprocess.run()` calls. Wrapping them
-through `sh.exe` will fail with exit code 126 (`cannot execute binary file`).
+Legacy MSYS2 behavior is retained here only so that implementers recognize
+the code to be removed. Its former setup, troubleshooting and path-format
+documentation has been removed; for the historical record see
+`docs/CHANGELOG.md`.
 
 ### Linux (native) — verified hwaccel reference build
 
@@ -892,10 +897,10 @@ runs without it. The OpenMP runtime is Intel `libiomp5` (no `libgomp`).
 **Windows (future).** ICX has no Linux-to-Windows cross-compilation. Native
 Windows ICX uses the MSVC ABI (Visual Studio, Windows SDK, `lib.exe`, FFmpeg
 `--toolchain=msvc`), not MinGW; MinGW-built static libraries cannot be mixed in.
-Moving the Windows backend off MSYS2-UCRT64 GCC therefore means moving the whole
-dependency stack to MSVC-ABI, which is a separate project. The release
-relocation logic above is ELF/Linux only; Windows needs DLL bundling next to the
-executables (already handled generically by `release_bundle.py` for MSYS2).
+It is therefore not part of the WSL-Mingw (`linux-cross-mingw`) route; it
+would mean moving the whole Windows dependency stack to MSVC-ABI, which is a
+separate project (Variant 3 in `windows_build_strategy.md`, not selected).
+The release relocation logic above is ELF/Linux only.
 
 ## Data Flow
 
