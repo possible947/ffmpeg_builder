@@ -65,8 +65,8 @@ class BuildConfig:
     ffmpeg_version: str = "8.1"
     # "native": build for the machine running the builder (Linux/WSL/macOS).
     # "linux-cross-mingw": WSL-Mingw route; the physical Windows host running
-    # WSL is the target. Backend implementation arrives in a later gate; this
-    # setting currently selects the target probe + identity guard.
+    # WSL is the target. The setting selects target probing, identity guards,
+    # and WSL-specific external host-prerequisite resolution.
     target_backend: str = TARGET_BACKEND_NATIVE
     gpl_enabled: bool = False
     make_release: bool = False
@@ -87,6 +87,10 @@ class BuildConfig:
     allow_network_downloads: bool = False
     # H1 integrity policy: refuse network downloads that have no sha256.
     require_sha256_for_network: bool = True
+    # Roots for externally managed host prerequisites. The prerequisite name
+    # is intentionally generic; SDK-specific environment variables are supplied
+    # by the corresponding resolver.
+    external_prerequisite_paths: Dict[str, str] = field(default_factory=dict)
     macos: MacOSConfig = field(default_factory=MacOSConfig)
     linux: LinuxConfig = field(default_factory=LinuxConfig)
     windows: WindowsConfig = field(default_factory=WindowsConfig)
@@ -142,6 +146,14 @@ class BuildConfig:
             raise ValueError("Expected 'linux' to be a mapping")
         if not isinstance(windows_data, dict):
             raise ValueError("Expected 'windows' to be a mapping")
+        prerequisite_paths = data.get("external_prerequisite_paths")
+        if prerequisite_paths is None:
+            prerequisite_paths = {}
+        if not isinstance(prerequisite_paths, dict) or not all(
+            isinstance(name, str) and isinstance(path, str)
+            for name, path in prerequisite_paths.items()
+        ):
+            raise ValueError("Expected 'external_prerequisite_paths' to map names to paths")
 
         # Filter out nested config dicts before passing to constructor
         nested_keys = {"macos", "linux", "windows"}

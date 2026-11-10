@@ -103,6 +103,18 @@ class TestBuildConfigRoundTrip:
         assert cfg.gpl_enabled is True
         assert cfg.full_static is False  # default
 
+    def test_external_prerequisite_paths_roundtrip(self):
+        cfg = BuildConfig.from_dict(
+            {"external_prerequisite_paths": {"example_sdk": "/opt/example-sdk"}}
+        )
+        assert cfg.external_prerequisite_paths == {"example_sdk": "/opt/example-sdk"}
+        assert cfg.to_dict()["external_prerequisite_paths"] == {"example_sdk": "/opt/example-sdk"}
+
+    @pytest.mark.parametrize("value", [[], {"sdk": None}, {1: "/sdk"}])
+    def test_external_prerequisite_paths_reject_malformed_mapping(self, value):
+        with pytest.raises(ValueError, match="external_prerequisite_paths"):
+            BuildConfig.from_dict({"external_prerequisite_paths": value})
+
     def test_from_dict_ignores_unknown_keys(self):
         cfg = BuildConfig.from_dict(
             {

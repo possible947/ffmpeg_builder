@@ -3,9 +3,13 @@
 from pathlib import Path
 from typing import Optional
 
-# Failure categories for project-managed inputs (see ``BuildError.category``).
+# Failure categories for managed inputs and external build prerequisites
+# (see ``BuildError.category``).
 CATEGORY_PROJECT_SOURCE = "project_source"
 CATEGORY_TOOLCHAIN_INSTALL = "toolchain_install"
+CATEGORY_EXTERNAL_PREREQUISITE = "external_prerequisite"
+CATEGORY_TARGET_DATA = "target_data"
+CATEGORY_CUDA_COMPATIBILITY = "cuda_compatibility"
 
 
 class BuildError(Exception):
