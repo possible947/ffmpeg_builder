@@ -321,3 +321,88 @@ def test_headless_and_tui_entry_points_are_blocked_by_guard(tmp_path, monkeypatc
     )
     app_module.FFmpegBuilderApp._run_build(tui, config, resume=False)
     assert any("identity guard" in line for line in printed)
+
+
+def test_cuda_preparation_reuses_single_g1_probe_for_ptx_validation(tmp_path, monkeypatch):
+    import ffmpeg_builder.app as app_module
+    from ffmpeg_builder.config import BuildConfig, TARGET_BACKEND_CROSS_MINGW
+    from ffmpeg_builder.cuda_prerequisites import ResolvedCudaBuildHostInputs
+    from ffmpeg_builder.platform_detect import PlatformInfo
+    from dataclasses import replace
+
+    override = copy.deepcopy(OVERRIDE)
+    override["nvidia"] = {
+        "state": "present",
+        "devices": [
+            {
+                "name": "NVIDIA TITAN V",
+                "uuid": "GPU-test",
+                "driver_version": "test",
+                "compute_capability": "7.0",
+            }
+        ],
+    }
+    target_state = probe_windows_target(override)
+    prefix = tmp_path / "toolchains" / "gcc12"
+    inputs = ResolvedCudaBuildHostInputs(
+        cuda_root=tmp_path / "cuda",
+        nvcc_path=tmp_path / "cuda" / "bin" / "nvcc",
+        detected_cuda_version="12.4",
+        ccbin_path=prefix / "bin" / "gcc",
+        ccbin_profile="gcc12",
+        ccbin_profile_version="12.5.0",
+        ccbin_provenance={"prefix": str(prefix)},
+        resolution_source="CUDA_HOME",
+        diagnostics=(),
+    )
+
+    class _Detector:
+        def __init__(self):
+            self.platform_info = PlatformInfo(
+                build_backend=TARGET_BACKEND_CROSS_MINGW,
+                cuda_available=True,
+                cuda_build_host_inputs=inputs,
+            )
+
+        def get_build_backend_name(self):
+            return TARGET_BACKEND_CROSS_MINGW
+
+    app = app_module.FFmpegBuilderApp.__new__(app_module.FFmpegBuilderApp)
+    app.base_workspace = tmp_path
+    app.platform_detector = _Detector()
+    app.windows_target_state = None
+    probe_calls = []
+
+    def windows_probe(override_arg, *, timeout, **kwargs):
+        probe_calls.append((override_arg, timeout))
+        return target_state
+
+    app.windows_probe = windows_probe
+    app._get_buildable_components = lambda config: []
+    validated_states = []
+
+    def validate(resolved, state):
+        assert resolved is inputs
+        validated_states.append(state)
+        return replace(
+            resolved,
+            compute_architecture="compute_70",
+            probe_status="passed",
+            effective_flags=("--ptx", "--gpu-architecture=compute_70"),
+        )
+
+    monkeypatch.setattr(app_module, "validate_cuda_ptx_compatibility", validate)
+    config = BuildConfig(
+        target_backend=TARGET_BACKEND_CROSS_MINGW,
+        enable_libvmaf=True,
+        enable_libvmaf_cuda=True,
+    )
+
+    session = app.prepare_target(config, resume=False)
+
+    assert len(probe_calls) == 1
+    assert validated_states == [target_state]
+    assert app.platform_detector.platform_info.cuda_build_host_inputs.probe_status == "passed"
+    assert app.platform_detector.platform_info.cuda_nvcc_supported is True
+    assert app.platform_detector.platform_info.libvmaf_cuda_supported is False
+    assert session.identity.backend == TARGET_BACKEND_CROSS_MINGW

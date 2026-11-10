@@ -1,3 +1,53 @@
+### Added — G2.4 WSL-Mingw CUDA build-host input resolution
+
+- Added a CUDA-specific resolver on the #9 external-prerequisite abstraction:
+  config > `CUDA_HOME` > `CUDA_PATH`, selected-root-only executable NVCC,
+  reported toolkit version, and verified ToolchainStore host compiler. CUDA
+  12.4 maps to the existing `gcc12` profile. The resolved result preserves SDK
+  provenance and GCC profile/install provenance separately.
+- `CUDA_NVCC_CCBIN` is ignored for WSL-Mingw; native behavior is unchanged.
+  Cross-target environment construction no longer adds Linux CUDA
+  include/library paths automatically.
+- Target preparation captures the Windows state from the existing G1 probe and,
+  when CUDA is enabled, compiles a minimal PTX kernel with the selected NVCC and
+  project-managed `-ccbin`. Architecture comes from G1 NVIDIA compute capability;
+  all capabilities must be valid and mixed GPUs select the numeric minimum.
+  There is no separate per-GPU selector; a G1 override can supply an inventory.
+  Only the CUDA 12.4 glibc `mathcalls.h` / CUDA `math_functions.h` conflict for
+  `cospi`, `sinpi`, `rsqrt` or their float variants gets a scoped
+  `-Xcompiler=-U_GNU_SOURCE` retry; unrelated or mixed errors are not retried.
+  PTX directives are validated and the result records compiler versions,
+  architecture, effective flags, workaround state, and diagnostics. Temporary
+  outputs are removed; PTX is never executed.
+- Live #10/#12 acceptance selected CUDA from `CUDA_HOME` at `/opt/cuda-12.4`,
+  NVCC 12.4.99, project-managed gcc12 12.5.0, and a fresh G1 NVIDIA TITAN V
+  capability 7.0. The initial compile failed on the known conflict; the scoped
+  retry succeeded with `compute_70`, producing 758 bytes of PTX with
+  `.version 8.4` and `.target sm_70`. This is compile validation, not runtime
+  acceptance.
+- Corrected `--verify-only --profiles` to verify only selected installations and
+  reject missing/incompatible profiles. Legacy provenance is backfilled only
+  after verification with matching recorded registry/source metadata; GCC and
+  G++ must also report the registry version. The existing gcc12 installation
+  was verified and backfilled without reinstalling it. Legacy provenance is
+  an inferred registry association, not proof of the binary's historical source.
+- CUDA paths are not automatically introduced into target discovery, but
+  inherited variables and generic Linux pkg-config paths are not yet fully
+  sanitized. Vulkan and G3 remain out of scope.
+
+### Added — External WSL prerequisite resolution foundation
+
+- Added a generic `external_prerequisite_paths` configuration map and a
+  read-only resolver with explicit-config > named-environment-variable
+  precedence, structured provenance/results, and technology-specific
+  validation hooks. Invalid explicit roots do not fall back to environment or
+  `PATH`; failures use the distinct `external_prerequisite` `BuildError`
+  category. The resolver does not manage SDK lifecycle or mutate build
+  environment paths.
+- At this foundation stage, CUDA/Vulkan-specific resolution, G1 identity
+  integration and G3 were out of scope. CUDA integration was added above;
+  Vulkan and G3 remain open.
+
 ### Added — G2.3: Rust `x86_64-pc-windows-gnullvm` target std as an additive artifact
 
 - `toolchains.yaml`: the `rust` profile (1.99.0, unchanged) gains an `extras:`

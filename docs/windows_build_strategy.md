@@ -1,9 +1,10 @@
 # Windows FFmpeg cross-build strategy
 
-**Status:** implementation plan for G1-G7. G0/G0A feasibility is complete for
-the scoped host and early-PoC feature set. This consolidation does not start G1
-or any later implementation gate. The production `linux-cross-mingw` backend
-and full component stack are not implemented.
+**Status:** G0/G0A feasibility, G1 target preparation, and G2.1–G2.4 plus
+CUDA-specific prerequisite/PTX validation are complete for their scoped
+requirements. Vulkan prerequisite validation, later G2 work, the G3
+`linux-cross-mingw` cross-build backend and the full component stack remain
+unimplemented.
 
 **Naming.** The user-facing Windows build route is **WSL-Mingw**: Windows host
 → WSL2 Ubuntu build environment → LLVM-MinGW/UCRT cross toolchain → Windows
@@ -219,13 +220,30 @@ reconstructed archive is not a project artifact, and no project mechanism
 stores, hashes or recreates it. This is not evidence that CUDA 12.4 is
 vendor-supported on Ubuntu 26.04.
 
-The tested CUDA 12.4.99 PTX compile failed on a glibc declaration conflict
-without a workaround and passed with
-`-Xcompiler=-U_GNU_SOURCE`. Production must reproduce/classify the condition
-and apply a narrowly scoped validated workaround only to an affected
-configuration, or select another coherent supported environment/toolchain.
-Keep an effective workaround in build identity. Preserve original diagnostics.
-`--allow-unsupported-compiler` is not a compatibility test or a substitute.
+When WSL-Mingw CUDA is enabled, target preparation compiles a minimal PTX
+kernel with resolved NVCC and ToolchainStore `-ccbin`, using NVIDIA capability
+from the same fresh G1 Windows probe used to form target identity. Every
+reported NVIDIA capability must be valid; for multiple devices the numeric
+minimum is the PTX baseline. There is no separate per-GPU selector: a G1 target
+override can supply an inventory. This does not prove runtime compatibility
+with every device.
+
+Live production preparation selected `/opt/cuda-12.4/bin/nvcc` (12.4.99),
+project `gcc12` (12.5.0), and the physical Windows TITAN V (7.0), requesting
+`compute_70`. The first compile failed on the glibc declaration conflict;
+the scoped `-Xcompiler=-U_GNU_SOURCE` retry exited successfully and produced
+758 bytes of PTX containing `.version 8.4`, `.target sm_70`, and an entry.
+Temporary files were removed. This check did not load or execute the PTX; the
+earlier G0A runtime experiments are separate evidence.
+
+The retry is restricted to CUDA 12.4 `bits/mathcalls.h` versus
+`crt/math_functions.h` exception-specification conflicts for `cospi`, `sinpi`,
+or `rsqrt` and their float variants. Unrelated or mixed errors are not retried;
+failed retries retain both diagnostics. Effective flags and workaround state
+are recorded for later identity projection. `--allow-unsupported-compiler`
+is not a compatibility test or a substitute. CUDA Linux libraries are not
+automatically added by this prerequisite flow; inherited variables and generic
+Linux pkg-config paths are not yet fully sanitized (G3).
 
 ### Layer B — project-managed/versioned tools and inputs
 
@@ -473,10 +491,12 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
   `x86_64-pc-windows-gnullvm` std as a project-managed additive `extras`
   artifact of the same Rust prefix, required only for `linux-cross-mingw`;
   Git LFS mirror, composite provenance, atomic activation, offline acceptance;
-  no rustup). G2.4–G2.8 (CUDA `-ccbin`, external SDK prerequisites, target headers/interfaces, identity
-  integration, final offline acceptance) are not done; G3 is not started. Full G2
-  offline closure is not claimed. G2 checks external WSL SDK prerequisites; it
-  does not own or install those SDKs.
+  no rustup). G2.4 CUDA resolution (#10), the external-prerequisite foundation
+  and CUDA PTX probe (#12) are implemented and accepted for the scoped host.
+  Vulkan prerequisites and G2.6–G2.8 (target headers/interfaces, identity
+  integration, final offline acceptance) remain open; G3 is not started. Full
+  G2 offline closure is not claimed. G2 checks external WSL SDK prerequisites;
+  it does not own or install those SDKs.
 - **SDK ownership:** The CUDA SDK (example `/opt/cuda-12.4`) and Vulkan SDK
   (example `/opt/vulkan-sdk/1.4.363.1/x86_64`) are external prerequisites. Locate
   them from configured/documented paths or environment, verify presence and that
@@ -485,6 +505,16 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
   them, or add registry entries for their tool versions. Keep explicit
   overrides. Distinguish a missing environment prerequisite from an absent
   offline project source.
+- **CUDA host inputs (G2.4):** WSL-Mingw resolves
+  `external_prerequisite_paths.cuda` > `CUDA_HOME` > `CUDA_PATH`; it takes NVCC
+  only from the selected root. CUDA 12.4 maps to the existing ToolchainStore
+  `gcc12` profile, whose verified `CC` is selected as `-ccbin`. The ambient
+  `CUDA_NVCC_CCBIN` is ignored on this backend; native CUDA detection retains
+  its prior policy. The resolution result keeps external SDK and project
+  compiler provenance separate; the functional PTX probe consumes that result.
+  Stale legacy GCC state requires successful scoped `--verify-only` before
+  backfill, including matching compiler versions and existing source metadata.
+  No Linux CUDA libraries are automatically added to target discovery.
 - **Tests:** Registry parsing, version resolution, checksums, target std
   compatibility, `-ccbin` version check, SDK path/tool usability checks,
   actionable missing-prerequisite/source errors, offline provisioning with

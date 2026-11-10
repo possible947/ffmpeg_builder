@@ -184,21 +184,22 @@ Two portability rules apply to every recipe:
   `gmp`/`mpfr`/`mpc`, whose configure probes GCC 15+ rejects under its `gnu23`
   default) is declared as registry data, not hardcoded in Python.
 
-After every source build, `acquire()` runs `toolchain_builders.verify_profile()`
+After every source build, `acquire()` runs `toolchain_builders.verify_installation()`
 and records `InstalledToolchain.verified` in `state.json`. Verification is
-capability-based, not file-presence-based: GCC must report a version and compile
-and link C and C++ probes, Rust must report `rustc`/`cargo` versions, bootstrap
-libraries must provide headers plus an archive. A failure raises and the profile
-is not recorded; `profile_paths()`/`component_env()` return nothing for an
-unverified entry, and the app's gate distinguishes "not installed" from "failed
-verification".
+capability-based, not file-presence-based: GCC and G++ must match the registry
+version and compile and link C and C++ probes, Rust must report `rustc`/`cargo`
+versions, and bootstrap libraries must provide headers plus an archive. A failure
+raises and the profile is not recorded; `profile_paths()`/`component_env()` return
+nothing for an unverified entry, and the app's gate distinguishes "not installed"
+from "failed verification".
 
 Portability constraint: an installed GCC bakes its `--prefix` into header and
 library search paths, and GCC 12.5.0's configure has no `--enable-relocatable`,
 so a store root must stay where it was built unless relocation is implemented
 (prefix rewriting/RPATH fixups). `scripts/prepare_toolchains.py --verify-only`
-re-runs verification for everything installed and is the acceptance tool for
-relocation tests (move the store, re-verify).
+re-runs verification for everything installed by default, or only named entries
+with `--profiles`, and is the acceptance tool for relocation tests (move the
+store, re-verify). It never installs or rebuilds a toolchain.
 
 `ToolchainRegistry.recommend_profiles()` derives the profiles to deploy from the
 current system analysis (fallback for an out-of-range host tool, bootstrap
@@ -272,14 +273,20 @@ Store behaviour (all profiles, not just LLVM-MinGW):
 - **Verification (`cross_compiler`):** declared tools exist, version checks match,
   and a compile+link probe produces a PE32+ x86-64 executable importing the
   UCRT (`api-ms-win-crt-*`); the output is never executed.
-- **Provenance:** `installed/<dir>/.toolchain-install.json` plus state schema 2
-  record profile, version, source variant, archive filename, declared source
-  sha256 and runtime. `ToolchainStore.installed_status()` returns `absent`,
+- **Provenance:** New installations record profile, version, source variant,
+  archive filename, declared source sha256 and runtime in
+  `installed/<dir>/.toolchain-install.json` and state schema 2.
+  `ToolchainStore.installed_status()` returns `absent`,
   `compatible`, `unverified`, `stale` (version/hash/variant/runtime/schema drift)
   or `corrupt` (state lists a missing directory). Compatible installs are reused;
   stale ones are re-acquired. Legacy installs without provenance are `stale`
-  until `prepare_toolchains.py --verify-only` re-verifies them and, if they match
-  the registry version, backfills provenance.
+  until `prepare_toolchains.py --verify-only` re-verifies them and, if the
+  recorded version and any existing source metadata agree with the registry,
+  backfills state provenance. GCC verification also checks both actual compiler
+  versions against the registry. A selected missing or incompatible profile
+  fails verification. Legacy backfill does not write a marker into the prefix,
+  and the recorded registry source hash is not proof of the historical binary's
+  origin.
 - **Store root:** `--store` > `$FFMPEG_BUILDER_TOOLCHAINS` > `<repo>/toolchains`
   (`resolve_store_root`, shared by the TUI and the script). `--sources` selects
   the source mirror independently; with it given, no other mirror is consulted.
@@ -287,6 +294,44 @@ Store behaviour (all profiles, not just LLVM-MinGW):
   missing offline archive, checksum mismatch and unreadable archives;
   `toolchain_install` covers extraction, layout, verifier and activation
   failures. The underlying exception is chained.
+- **External host prerequisites:** `BuildConfig.external_prerequisite_paths`
+  holds optional named roots independently of `ToolchainStore`. Use
+  `resolve_external_prerequisite()` with a documented environment-variable name
+  and an optional technology-specific validator. Resolution is explicit config
+  > that environment variable; an invalid configured root fails rather than
+  falling back. The result records its canonical root, resolution source,
+  host tools, diagnostics and effective values. Failures use the
+  `external_prerequisite` `BuildError` category. The resolver does not search
+  `PATH`, install or hash SDKs, or modify build/target environment variables.
+  SDK-specific root names, tools and validation remain the responsibility of
+  later technology-specific resolvers.
+- **WSL-Mingw CUDA inputs:** `resolve_wsl_mingw_cuda_inputs()` resolves the
+  optional `external_prerequisite_paths.cuda` root, then `CUDA_HOME`, then
+  `CUDA_PATH`. It accepts NVCC only from `<root>/bin/nvcc`, checks that the
+  executable stays under the selected SDK root, and reads its reported toolkit
+  version. The registry maps CUDA 12.4 to the existing `gcc12` profile; the
+  selected compatible ToolchainStore `CC` is the authoritative `-ccbin`.
+  `CUDA_NVCC_CCBIN` is ignored for `linux-cross-mingw` (native behavior is
+  unchanged). When CUDA is enabled, target preparation reuses the fresh G1
+  Windows state and runs `validate_cuda_ptx_compatibility()` with that resolved
+  NVCC/`-ccbin`. All reported NVIDIA capabilities must be valid; their numeric
+  minimum is the PTX baseline for the reported devices. There is no separate
+  per-GPU selector: a G1 target override can supply an inventory. The probe
+  validates PTX directives in an isolated temporary directory and never executes
+  PTX. It retries only the CUDA 12.4 conflict between glibc `bits/mathcalls.h`
+  and CUDA `crt/math_functions.h` for `cospi`, `sinpi`, or `rsqrt` (including
+  float variants) with `-Xcompiler=-U_GNU_SOURCE`; unrelated errors are not
+  retried and failed retries retain the original diagnostic. Architecture,
+  compiler versions, effective flags, workaround state and diagnostics are
+  recorded in the resolved inputs. Resolution and environment construction do
+  not automatically add CUDA SDK libraries to Windows-target discovery.
+  Inherited variables and generic Linux pkg-config paths are not yet fully
+  sanitized; target environment isolation remains G3 work.
+
+  Live acceptance on one host selected `/opt/cuda-12.4/bin/nvcc` (12.4.99),
+  project `gcc12` (12.5.0), and Windows TITAN V capability 7.0. The scoped retry
+  produced 758 bytes of PTX with `.version 8.4` and `.target sm_70`; temporary
+  files were removed. This is not a Windows runtime or GPU portability claim.
 
 Isolated offline provisioning (does not touch the normal store):
 
@@ -294,6 +339,8 @@ Isolated offline provisioning (does not touch the normal store):
 python scripts/prepare_toolchains.py --backend linux-cross-mingw \
     --store /tmp/clean-store --sources /tmp/mirror      # network disabled by default
 python scripts/prepare_toolchains.py --verify-only --store /tmp/clean-store
+python scripts/prepare_toolchains.py --verify-only --profiles gcc12 \
+    --backend linux-cross-mingw
 ```
 
 ### Build goal: host-tuned FFmpeg, not a portable release
@@ -628,8 +675,10 @@ Built with the `rich` library. Static screens use `Table`, `Panel`, and `Prompt`
 The Windows build route is **WSL-Mingw**: a Windows host runs a WSL2 Ubuntu
 build environment, which uses the LLVM-MinGW/UCRT cross toolchain to produce
 a Windows FFmpeg target. **WSL-Mingw** is the user-facing name; the backend
-identifier is **`linux-cross-mingw`**. It is **not implemented yet**; the
-gates G1–G7, verified early-PoC results and open issues are in
+identifier is **`linux-cross-mingw`**. Target preparation and CUDA prerequisite
+checks exist, but the G3 cross-build backend and full component stack are
+**not implemented yet**. The gates
+G1–G7, verified early-PoC results and open issues are in
 [`windows_build_strategy.md`](windows_build_strategy.md), which is the
 authoritative plan. The previous MSYS2-based Windows build path was replaced
 by this route.

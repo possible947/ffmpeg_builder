@@ -10,11 +10,12 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Type
 from rich.console import Console
 from rich.live import Live
 
-from .build_types import BuildError, SkipComponent
+from .build_types import CATEGORY_TARGET_DATA, BuildError, SkipComponent
 from .builder import FFmpegBuilder
 from .components import Component, ComponentRegistry
 from .build_identity import build_native_identity
 from .config import TARGET_BACKEND_CROSS_MINGW, BuildConfig, ConfigManager
+from .cuda_prerequisites import validate_cuda_ptx_compatibility
 from .ffmpeg_policy import (
     FfmpegPolicy,
     detected_system_tool_versions,
@@ -36,7 +37,7 @@ from .target_guard import (
 from .system_report import SystemReportGenerator
 from .toolchain_registry import ToolchainRegistry
 from .toolchain_store import ToolchainStore, resolve_store_root
-from .windows_probe import probe_windows_target
+from .windows_probe import WindowsTargetState, probe_windows_target
 from .ui.dashboard import BuildDashboard
 from .ui.error_handler import ErrorHandler
 from .ui.screens import (
@@ -68,12 +69,13 @@ class FFmpegBuilderApp:
         # Injectable for tests; the real probe talks to the physical Windows
         # host through WSL interop.
         self.windows_probe = probe_windows_target
+        self.windows_target_state: Optional[WindowsTargetState] = None
 
         self.config_manager = ConfigManager(PROJECT_ROOT / "build_config.yaml")
         config = self.config_manager.load()
         self._sync_workspace(config)
 
-        self.platform_detector = PlatformDetector()
+        self.platform_detector = PlatformDetector(config=config)
         self.system_info, self.platform_info, self.tools = self.platform_detector.detect_all()
 
         report_gen = SystemReportGenerator(
@@ -116,7 +118,10 @@ class FFmpegBuilderApp:
         probe = self.windows_probe
 
         def _probe(override: Any, **kwargs: Any) -> Any:
-            return probe(override, timeout=windows.probe_timeout_seconds, **kwargs)
+            self.windows_target_state = probe(
+                override, timeout=windows.probe_timeout_seconds, **kwargs
+            )
+            return self.windows_target_state
 
         return probe_current_identity(
             config.to_dict(),
@@ -128,14 +133,41 @@ class FFmpegBuilderApp:
         )
 
     def prepare_target(self, config: BuildConfig, resume: bool) -> TargetSession:
-        """Run the identity guard; must precede any reset/resume/state overwrite.
+        """Validate prerequisites and target identity before any state mutation.
 
         Switches ``workspace``/``packages``/``state_manager`` to the identity
-        workspace on the WSL-Mingw route. Raises ``IdentityError`` when reuse is
-        unsafe, leaving saved state and artifacts untouched.
+        workspace on the WSL-Mingw route. Raises ``BuildError`` or
+        ``IdentityError`` when prerequisites or reuse are unsafe, leaving saved
+        state and artifacts untouched.
         """
         if self._is_cross_mingw(config):
+            self.windows_target_state = None
             current = self.current_windows_identity(config)
+            platform_info = self.platform_detector.platform_info
+            cuda_inputs = platform_info.cuda_build_host_inputs
+            if cuda_inputs is not None and config.enable_libvmaf and config.enable_libvmaf_cuda:
+                target_state = self.windows_target_state
+                if target_state is None:
+                    raise BuildError(
+                        "Windows CUDA target",
+                        "The G1 Windows target probe returned no target state for the CUDA "
+                        "PTX compatibility check.",
+                        category=CATEGORY_TARGET_DATA,
+                        code="cuda_target_probe_missing",
+                    )
+                cuda_inputs = validate_cuda_ptx_compatibility(cuda_inputs, target_state)
+                platform_info.cuda_build_host_inputs = cuda_inputs
+                platform_info.cuda_nvcc_supported = True
+                platform_info.cuda_nvcc_reason = "Production PTX compatibility probe passed"
+                platform_info.cuda_compute_capability = (
+                    cuda_inputs.compute_architecture.removeprefix("compute_")
+                    if cuda_inputs.compute_architecture
+                    else None
+                )
+                platform_info.nvcc_ccbin_reason = (
+                    "Production PTX compatibility probe passed with the selected "
+                    "ToolchainStore compiler."
+                )
             session = prepare_windows_target(self.base_workspace, current, resume)
             self.workspace = session.workspace
             self.packages = self.workspace / "packages"
@@ -478,7 +510,9 @@ class FFmpegBuilderApp:
         try:
             session = self.prepare_target(config, resume)
         except BuildError as e:
-            self.console.print(f"[red]Build blocked by identity guard:[/red] {e}")
+            self.console.print(
+                f"[red]Build preparation blocked (identity guard/prerequisite validation):[/red] {e}"
+            )
             return
         for note in session.notes:
             self.console.print(f"[yellow]{note}[/yellow]")
