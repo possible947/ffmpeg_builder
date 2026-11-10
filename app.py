@@ -10,12 +10,22 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Type
 from rich.console import Console
 from rich.live import Live
 
-from .build_types import CATEGORY_TARGET_DATA, BuildError, SkipComponent
+from .build_types import (
+    CATEGORY_EXTERNAL_PREREQUISITE,
+    CATEGORY_TARGET_DATA,
+    CATEGORY_TOOLCHAIN_INSTALL,
+    BuildError,
+    SkipComponent,
+)
 from .builder import FFmpegBuilder
 from .components import Component, ComponentRegistry
 from .build_identity import build_native_identity
 from .config import TARGET_BACKEND_CROSS_MINGW, BuildConfig, ConfigManager
-from .cuda_prerequisites import validate_cuda_ptx_compatibility
+from .cuda_prerequisites import (
+    ResolvedCudaBuildHostInputs,
+    resolve_wsl_mingw_cuda_inputs,
+    validate_cuda_ptx_compatibility,
+)
 from .ffmpeg_policy import (
     FfmpegPolicy,
     detected_system_tool_versions,
@@ -38,6 +48,16 @@ from .system_report import SystemReportGenerator
 from .toolchain_registry import ToolchainRegistry
 from .toolchain_store import ToolchainStore, resolve_store_root
 from .windows_probe import WindowsTargetState, probe_windows_target
+from .vulkan_prerequisites import (
+    CAPABILITY_SHADER_COMPILATION,
+    CAPABILITY_SPIRV_VALIDATION,
+    ResolvedVulkanSdk,
+    resolve_wsl_mingw_vulkan_sdk,
+)
+from .wsl_mingw_preparation import (
+    WslMingwPreparation,
+    resolve_wsl_mingw_project_toolchains,
+)
 from .ui.dashboard import BuildDashboard
 from .ui.error_handler import ErrorHandler
 from .ui.screens import (
@@ -70,6 +90,7 @@ class FFmpegBuilderApp:
         # host through WSL interop.
         self.windows_probe = probe_windows_target
         self.windows_target_state: Optional[WindowsTargetState] = None
+        self.wsl_mingw_preparation: Optional[WslMingwPreparation] = None
 
         self.config_manager = ConfigManager(PROJECT_ROOT / "build_config.yaml")
         config = self.config_manager.load()
@@ -142,21 +163,65 @@ class FFmpegBuilderApp:
         """
         if self._is_cross_mingw(config):
             self.windows_target_state = None
+            self.wsl_mingw_preparation = None
             current = self.current_windows_identity(config)
+            session = prepare_windows_target(self.base_workspace, current, resume)
+            self.workspace = session.workspace
+            self.packages = self.workspace / "packages"
+            self.state_manager = StateManager(self.workspace / "build_state.json")
+            self.state_manager.require_verified_identity = True
+
+            target_state = self.windows_target_state
+            if target_state is None:
+                raise BuildError(
+                    "Windows target",
+                    "The G1 target probe returned no structured Windows target state.",
+                    category=CATEGORY_TARGET_DATA,
+                    code="windows_target_state_missing",
+                )
             platform_info = self.platform_detector.platform_info
-            cuda_inputs = platform_info.cuda_build_host_inputs
-            if cuda_inputs is not None and config.enable_libvmaf and config.enable_libvmaf_cuda:
-                target_state = self.windows_target_state
-                if target_state is None:
+            try:
+                registry = ToolchainRegistry()
+            except (OSError, ValueError) as exc:
+                raise BuildError(
+                    "WSL-Mingw toolchain registry",
+                    f"Toolchain registry could not be loaded: {exc}",
+                    category=CATEGORY_TOOLCHAIN_INSTALL,
+                    code="wsl_mingw_toolchain_registry_unavailable",
+                ) from exc
+            store = ToolchainStore(
+                resolve_store_root(PROJECT_ROOT),
+                workspace=self.workspace,
+                source_archives_dir=PROJECT_ROOT / config.source_archives_dir,
+                allow_network_downloads=config.allow_network_downloads,
+                backend=TARGET_BACKEND_CROSS_MINGW,
+            )
+            project_toolchains = resolve_wsl_mingw_project_toolchains(
+                config.ffmpeg_version, registry, store
+            )
+            cuda_inputs: Optional[ResolvedCudaBuildHostInputs] = None
+            cuda_enabled = config.enable_libvmaf and config.enable_libvmaf_cuda
+            if cuda_enabled:
+                cuda_inputs = resolve_wsl_mingw_cuda_inputs(config, registry, store, required=True)
+                if cuda_inputs is None:
                     raise BuildError(
-                        "Windows CUDA target",
-                        "The G1 Windows target probe returned no target state for the CUDA "
-                        "PTX compatibility check.",
-                        category=CATEGORY_TARGET_DATA,
-                        code="cuda_target_probe_missing",
+                        "CUDA SDK",
+                        "Required CUDA resolution returned no prerequisite.",
+                        category=CATEGORY_EXTERNAL_PREREQUISITE,
+                        code="cuda_sdk_missing",
                     )
                 cuda_inputs = validate_cuda_ptx_compatibility(cuda_inputs, target_state)
-                platform_info.cuda_build_host_inputs = cuda_inputs
+            platform_info.cuda_build_host_inputs = cuda_inputs
+            platform_info.cuda_available = cuda_inputs is not None
+            if cuda_inputs is not None:
+                platform_info.cuda_path = str(cuda_inputs.nvcc_path)
+                platform_info.cuda_version = cuda_inputs.detected_cuda_version
+                platform_info.nvcc_ccbin = str(cuda_inputs.ccbin_path)
+                platform_info.nvcc_ccbin_reason = (
+                    f"Project-managed {cuda_inputs.ccbin_profile} "
+                    f"{cuda_inputs.ccbin_profile_version}; CUDA_NVCC_CCBIN is ignored "
+                    "for linux-cross-mingw"
+                )
                 platform_info.cuda_nvcc_supported = True
                 platform_info.cuda_nvcc_reason = "Production PTX compatibility probe passed"
                 platform_info.cuda_compute_capability = (
@@ -168,11 +233,70 @@ class FFmpegBuilderApp:
                     "Production PTX compatibility probe passed with the selected "
                     "ToolchainStore compiler."
                 )
-            session = prepare_windows_target(self.base_workspace, current, resume)
-            self.workspace = session.workspace
-            self.packages = self.workspace / "packages"
-            self.state_manager = StateManager(self.workspace / "build_state.json")
-            self.state_manager.require_verified_identity = True
+                platform_info.libvmaf_cuda_supported = True
+                platform_info.libvmaf_cuda_reason = "Production PTX compatibility probe passed"
+                session.notes.append(
+                    f"CUDA host SDK: {cuda_inputs.cuda_root} ({cuda_inputs.resolution_source}); "
+                    f"project ccbin: {cuda_inputs.ccbin_path}; "
+                    f"Windows-target architecture: {cuda_inputs.compute_architecture}; "
+                    "PTX probe passed."
+                )
+            else:
+                platform_info.cuda_path = None
+                platform_info.cuda_version = None
+                platform_info.nvcc_ccbin = None
+                platform_info.nvcc_ccbin_reason = ""
+                platform_info.cuda_compute_capability = None
+                platform_info.cuda_nvcc_supported = False
+                platform_info.cuda_nvcc_reason = "CUDA capability is disabled by configuration."
+                platform_info.libvmaf_cuda_supported = False
+                platform_info.libvmaf_cuda_reason = "CUDA capability is disabled by configuration."
+
+            vulkan: Optional[ResolvedVulkanSdk] = None
+            if config.enable_libplacebo_vulkan:
+                vulkan = resolve_wsl_mingw_vulkan_sdk(
+                    config,
+                    required=True,
+                    required_capabilities=(
+                        CAPABILITY_SHADER_COMPILATION,
+                        CAPABILITY_SPIRV_VALIDATION,
+                    ),
+                )
+                if vulkan is None:
+                    raise BuildError(
+                        "Vulkan SDK",
+                        "Required Vulkan SDK resolution returned no prerequisite.",
+                        category=CATEGORY_EXTERNAL_PREREQUISITE,
+                        code="vulkan_sdk_missing",
+                    )
+            platform_info.vulkan_available = vulkan is not None
+            platform_info.vulkan_dev_available = vulkan is not None
+            platform_info.vulkan_runtime_available = False
+            platform_info.vulkan_sdk_available = vulkan is not None
+            platform_info.vulkan_sdk_path = (
+                str(vulkan.effective_sdk_root) if vulkan is not None else None
+            )
+            platform_info.vulkan_reason = (
+                "External host SDK tools validated; Windows runtime facts remain from G1."
+                if vulkan is not None
+                else "Vulkan capability is disabled by configuration."
+            )
+            platform_info.vulkan_detected_via = (
+                vulkan.resolution_source if vulkan is not None else None
+            )
+            platform_info.vulkan_detected_header_paths = []
+            platform_info.vulkan_detected_icd_files = []
+            if vulkan is not None:
+                session.notes.append(
+                    f"Vulkan host SDK: {vulkan.effective_sdk_root} "
+                    f"({vulkan.resolution_source}); validated host capabilities: "
+                    f"{', '.join(sorted(vulkan.validated_capabilities))}. "
+                    "Windows runtime/device facts remain separate."
+                )
+            self.wsl_mingw_preparation = WslMingwPreparation.create(
+                target_state, cuda_inputs, vulkan, project_toolchains
+            )
+            self.system_report.wsl_mingw_preparation = self.wsl_mingw_preparation.to_dict()
             mark_state_verified(self.state_manager)
             return session
         identity = build_native_identity(

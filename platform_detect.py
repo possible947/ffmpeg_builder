@@ -620,8 +620,20 @@ class PlatformDetector:
                     "Windows target capabilities are supplied by the G1 target probe."
                 )
             self.platform_info.qsv_available = self._check_qsv()
-        # Vulkan and OpenCL are available on all platforms (including macOS via LunarG SDK / OpenCL.framework)
-        self.platform_info.vulkan_available = self._check_vulkan()
+        # WSL-Mingw Vulkan is an external host-tool prerequisite. Do not treat
+        # the WSL runtime or SDK presence as evidence about the Windows target.
+        if self._uses_cross_mingw_backend():
+            enabled = bool(self.config and self.config.enable_libplacebo_vulkan)
+            self.platform_info.vulkan_available = enabled
+            self.platform_info.vulkan_dev_available = enabled
+            self.platform_info.vulkan_reason = (
+                "Vulkan host SDK validation is deferred to WSL-Mingw target preparation."
+                if enabled
+                else "Vulkan capability is disabled by configuration."
+            )
+        else:
+            # Vulkan and OpenCL are available on all platforms (including macOS via LunarG SDK / OpenCL.framework)
+            self.platform_info.vulkan_available = self._check_vulkan()
         self.platform_info.opencl_available = self._check_opencl()
         self.platform_info.opencl_effective_available = self.platform_info.opencl_available
         if self.platform_info.opencl_available:
@@ -653,7 +665,7 @@ class PlatformDetector:
                 break
 
         vulkan_sdk = os.environ.get("VULKAN_SDK")
-        if vulkan_sdk and Path(vulkan_sdk).exists():
+        if not self._uses_cross_mingw_backend() and vulkan_sdk and Path(vulkan_sdk).exists():
             self.platform_info.vulkan_sdk_available = True
             self.platform_info.vulkan_sdk_path = vulkan_sdk
 
@@ -732,49 +744,16 @@ class PlatformDetector:
                 return
 
     def _detect_cross_mingw_cuda(self) -> None:
-        """Resolve only configured external CUDA and project-owned host tools."""
-        from .cuda_prerequisites import resolve_wsl_mingw_cuda_inputs
-        from .toolchain_registry import ToolchainRegistry
-        from .toolchain_store import ToolchainStore, resolve_store_root
-
-        config = self.config
-        if config is None:
-            raise RuntimeError("linux-cross-mingw CUDA resolution requires BuildConfig")
-        try:
-            registry = ToolchainRegistry()
-        except (OSError, ValueError) as exc:
-            raise BuildError(
-                "CUDA host compiler",
-                f"Toolchain registry could not be loaded: {exc}",
-                category=CATEGORY_TOOLCHAIN_INSTALL,
-                code="cuda_host_registry_unavailable",
-            ) from exc
-        store = ToolchainStore(
-            resolve_store_root(Path(__file__).resolve().parent),
-            backend=TARGET_BACKEND_CROSS_MINGW,
+        """Defer required host-input resolution until after the fresh G1 probe."""
+        enabled = bool(
+            self.config and self.config.enable_libvmaf and self.config.enable_libvmaf_cuda
         )
-        inputs = resolve_wsl_mingw_cuda_inputs(
-            config,
-            registry,
-            store,
-            required=config.enable_libvmaf and config.enable_libvmaf_cuda,
-        )
-        if inputs is None:
-            return
-
-        self.platform_info.cuda_build_host_inputs = inputs
-        self.platform_info.cuda_available = True
-        self.platform_info.cuda_path = str(inputs.nvcc_path)
-        self.platform_info.cuda_version = inputs.detected_cuda_version
-        self.platform_info.nvcc_ccbin = str(inputs.ccbin_path)
-        self.platform_info.nvcc_ccbin_reason = (
-            f"Project-managed {inputs.ccbin_profile} {inputs.ccbin_profile_version}; "
-            "CUDA_NVCC_CCBIN is ignored for linux-cross-mingw"
-        )
+        self.platform_info.cuda_available = enabled
         self.platform_info.cuda_nvcc_supported = False
         self.platform_info.cuda_nvcc_reason = (
-            "CUDA SDK and project host compiler are resolved; functional NVCC "
-            "compatibility validation is pending."
+            "CUDA host prerequisite validation is deferred to WSL-Mingw target preparation."
+            if enabled
+            else "CUDA capability is disabled by configuration."
         )
 
     def _detect_cuda_version(self, nvcc_path: str) -> None:

@@ -22,15 +22,19 @@ class SystemReport:
     # screen displays the compiler that will actually be used, not the highest
     # auto-detected one.
     configured_clang: Optional[str] = field(default=None)
+    wsl_mingw_preparation: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
-        return {
+        result = {
             "system_info": self.system_info.to_dict(),
             "platform_info": self.platform_info.to_dict(),
             "tools": {name: tool.to_dict() for name, tool in self.tools.items()},
             "build_environment": self.build_environment,
         }
+        if self.wsl_mingw_preparation is not None:
+            result["wsl_mingw_preparation"] = self.wsl_mingw_preparation
+        return result
 
     def get_available_tools_summary(self) -> Dict[str, bool]:
         """Get summary of available tools.

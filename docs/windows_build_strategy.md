@@ -527,6 +527,32 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
   filtering contract only: G3 must still construct the actual target
   pkg-config/CMake/Meson environment and must not treat preserved host or system
   paths as target inputs.
+- **G2.4/G2.5 preparation integration:** `prepare_target()` shares the same
+  WSL-Mingw preparation path between the TUI and headless runner. Fresh G1
+  target probing and the identity guard precede enabled external prerequisite
+  resolution. CUDA target architecture is derived from all Windows-probed
+  NVIDIA devices (minimum valid capability); it is not inferred from WSL GPU
+  state or enumeration order. The typed `WslMingwPreparation` keeps Windows
+  target facts, required project-store LLVM-MinGW/Rust (including target std),
+  project-managed CUDA ccbin/effective compatibility inputs, and external
+  CUDA/Vulkan SDK diagnostics in separate domains. Missing or incompatible
+  required project toolchains fail preparation. Vulkan host
+  shader/SPIR-V validation does not validate or replace Windows Vulkan runtime
+  facts. CUDA/Vulkan SDK paths are configurable with
+  `external_prerequisite_paths.cuda` and `.vulkan`; otherwise their documented
+  environment variables are used. Disabled capabilities skip their SDK
+  requirements, while enabled capabilities fail preparation when required
+  inputs are missing. This integration does not project fields into G1 identity
+  or implement G2.7/G3.
+  Live preparation passed with the working store's LLVM-MinGW 20261104,
+  Rust 1.99.0 plus Windows target std, and GCC 12.5.0. The fresh Windows probe
+  reported TITAN V compute capability 7.0; CUDA 12.4.99 produced validated
+  `compute_70` PTX with the scoped `-Xcompiler=-U_GNU_SOURCE` workaround, and
+  Vulkan SDK 1.4.363.1 `glslc`/`spirv-val` validated the host shader probe.
+  The isolation filter removed 11 simulated CUDA/Vulkan SDK entries while
+  preserving the parent environment. The native saved configuration was not
+  changed; acceptance used an in-memory WSL-Mingw selection and a temporary
+  identity workspace.
 - **Tests:** Registry parsing, version resolution, checksums, target std
   compatibility, `-ccbin` version check, SDK path/tool usability checks,
   actionable missing-prerequisite/source errors, offline provisioning with

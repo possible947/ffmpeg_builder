@@ -322,8 +322,9 @@ Store behaviour (all profiles, not just LLVM-MinGW):
   ToolchainRegistry inputs. The resolver does not source `setup-env.sh`, search
   `PATH`, touch Vulkan runtime/GPU state, or expose SDK libraries,
   pkg-config directories, or CMake prefixes to target discovery. It does not
-  provision, copy, hash, or otherwise own the external SDK. This API is for
-  later `linux-cross-mingw` consumers; existing native Linux/macOS Vulkan
+  provision, copy, hash, or otherwise own the external SDK. `linux-cross-mingw`
+  target preparation invokes this resolver when the configured Vulkan
+  capability is enabled; existing native Linux/macOS Vulkan
   detection and build behavior are unchanged.
 - **WSL-Mingw CUDA inputs:** `resolve_wsl_mingw_cuda_inputs()` resolves the
   optional `external_prerequisite_paths.cuda` root, then `CUDA_HOME`, then
@@ -357,6 +358,35 @@ Store behaviour (all profiles, not just LLVM-MinGW):
   The helper is not the final G3 environment: G3 must use it with explicit
   target roots and construct compiler, pkg-config, CMake, and Meson inputs.
   Native Linux/WSL and macOS SDK wiring is unchanged.
+
+- **WSL-Mingw preparation result:** TUI and `scripts/run_build.py` call the
+  same `FFmpegBuilderApp.prepare_target()` path. It performs the fresh G1
+  Windows probe and identity guard before resolving enabled CUDA/Vulkan
+  prerequisites. CUDA uses all reported NVIDIA devices and selects the
+  minimum valid compute capability, so enumeration order cannot pick a GPU.
+  It resolves the backend profile's required LLVM-MinGW and Rust toolchains
+  from the project store, including the Rust target-std extra, and fails on
+  missing or incompatible required profiles. `WslMingwPreparation` retains
+  the typed Windows target, project-toolchain metadata, validated CUDA inputs,
+  and validated Vulkan host tools in separate fields. Its effective
+  build-input projection contains the managed toolchain profiles and paths,
+  CUDA ccbin/profile, target
+  architecture, effective PTX flags/workaround, and validated Vulkan
+  capabilities; SDK roots, tool versions, resolution provenance and raw
+  diagnostics remain diagnostic-only. It does not define the G3 compiler
+  environment or add Linux SDK libraries to Windows-target discovery.
+  Configure optional roots as:
+
+  ```yaml
+  target_backend: linux-cross-mingw
+  external_prerequisite_paths:
+    cuda: /path/to/cuda
+    vulkan: /path/to/vulkan-sdk
+  ```
+
+  When omitted, CUDA uses `CUDA_HOME` then `CUDA_PATH`, and Vulkan uses
+  `VULKAN_SDK`; a configured invalid root fails without environment fallback.
+  Disabled CUDA/Vulkan capabilities do not resolve or require their SDKs.
 
   Live acceptance on one host selected `/opt/cuda-12.4/bin/nvcc` (12.4.99),
   project `gcc12` (12.5.0), and Windows TITAN V capability 7.0. The scoped retry

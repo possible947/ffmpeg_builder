@@ -1,3 +1,35 @@
+### Added — G2.4/G2.5 WSL-Mingw production prerequisite preparation
+
+- Deferred CUDA SDK and project-managed ccbin resolution until after the fresh
+  G1 Windows target probe and identity guard. CUDA architecture and PTX
+  compatibility are now resolved from that target state; the resulting
+  structured preparation projection distinguishes effective inputs from
+  diagnostic SDK metadata.
+- Integrated the Vulkan prerequisite resolver for the configured
+  `enable_libplacebo_vulkan` capability. It validates host shader/SPIR-V tools
+  without consulting WSL Vulkan runtime/device state or conflating them with
+  Windows runtime facts. Disabled CUDA/Vulkan capabilities do not require or
+  resolve SDKs.
+- TUI and headless builds use the same preparation path. The typed
+  `WslMingwPreparation` result includes the required project-store LLVM-MinGW
+  and Rust profiles (including target std), and fails on missing or
+  incompatible required profiles. The result is exposed on the system report,
+  and concise host/target-separated notes are included in build preparation
+  output. Validated LLVM-MinGW compiler entrypoints retain their symlink names,
+  which select the wrapper's target and C/C++ driver mode.
+- Live Issue #15 acceptance used the working store's verified LLVM-MinGW
+  20261104, Rust 1.99.0 with `x86_64-pc-windows-gnullvm` std, and GCC 12.5.0.
+  A fresh G1 probe reported a Windows TITAN V at compute capability 7.0; CUDA
+  12.4.99 passed the `compute_70` PTX probe with the scoped
+  `-Xcompiler=-U_GNU_SOURCE` workaround. Vulkan SDK 1.4.363.1 `glslc` and
+  `spirv-val` passed shader compilation and validation. Filtering a
+  contaminated environment removed 11 host SDK entries without changing the
+  parent environment. The saved configuration remained native; acceptance
+  selected WSL-Mingw in memory and used a temporary identity workspace.
+- Added focused CUDA/Vulkan orchestration tests and documented override keys
+  and precedence. G2.7 identity projection and G3 environment work remain
+  separate; this does not claim G2 is complete.
+
 ### Added — G2.5 WSL-Mingw host/target SDK isolation
 
 - Added `filter_wsl_mingw_target_environment()` to produce a child environment

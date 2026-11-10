@@ -370,6 +370,7 @@ def test_cuda_preparation_reuses_single_g1_probe_for_ptx_validation(tmp_path, mo
     app = app_module.FFmpegBuilderApp.__new__(app_module.FFmpegBuilderApp)
     app.base_workspace = tmp_path
     app.platform_detector = _Detector()
+    app.system_report = SimpleNamespace(wsl_mingw_preparation=None)
     app.windows_target_state = None
     probe_calls = []
 
@@ -392,6 +393,26 @@ def test_cuda_preparation_reuses_single_g1_probe_for_ptx_validation(tmp_path, mo
         )
 
     monkeypatch.setattr(app_module, "validate_cuda_ptx_compatibility", validate)
+    monkeypatch.setattr(
+        app_module,
+        "resolve_wsl_mingw_cuda_inputs",
+        lambda *args, **kwargs: inputs,
+    )
+    monkeypatch.setattr(
+        app_module,
+        "resolve_wsl_mingw_project_toolchains",
+        lambda *args, **kwargs: {
+            name: {
+                "version": "test",
+                "prefix": str(tmp_path / name),
+                "paths": {},
+                "target": None,
+                "extras": [],
+                "provenance": {},
+            }
+            for name in ("llvm-mingw", "rust")
+        },
+    )
     config = BuildConfig(
         target_backend=TARGET_BACKEND_CROSS_MINGW,
         enable_libvmaf=True,
@@ -404,5 +425,85 @@ def test_cuda_preparation_reuses_single_g1_probe_for_ptx_validation(tmp_path, mo
     assert validated_states == [target_state]
     assert app.platform_detector.platform_info.cuda_build_host_inputs.probe_status == "passed"
     assert app.platform_detector.platform_info.cuda_nvcc_supported is True
-    assert app.platform_detector.platform_info.libvmaf_cuda_supported is False
+    assert app.platform_detector.platform_info.libvmaf_cuda_supported is True
+    assert app.wsl_mingw_preparation.cuda.compute_architecture == "compute_70"
+    assert app.wsl_mingw_preparation.effective_build_inputs["cuda"]["compute_architecture"] == (
+        "compute_70"
+    )
     assert session.identity.backend == TARGET_BACKEND_CROSS_MINGW
+
+
+def test_vulkan_preparation_keeps_host_sdk_separate_from_windows_runtime(tmp_path, monkeypatch):
+    import ffmpeg_builder.app as app_module
+    from ffmpeg_builder.config import BuildConfig, TARGET_BACKEND_CROSS_MINGW
+    from ffmpeg_builder.platform_detect import PlatformInfo
+    from ffmpeg_builder.vulkan_prerequisites import (
+        CAPABILITY_SHADER_COMPILATION,
+        CAPABILITY_SPIRV_VALIDATION,
+        ResolvedVulkanSdk,
+    )
+
+    target_state = probe_windows_target(copy.deepcopy(OVERRIDE))
+    sdk = ResolvedVulkanSdk(
+        selected_root=tmp_path / "vulkan-sdk",
+        effective_sdk_root=tmp_path / "vulkan-sdk" / "x86_64",
+        resolution_source="VULKAN_SDK",
+        shader_compiler_path=tmp_path / "vulkan-sdk" / "x86_64" / "bin" / "glslc",
+        spirv_validator_path=tmp_path / "vulkan-sdk" / "x86_64" / "bin" / "spirv-val",
+        spirv_optimizer_path=None,
+        validated_capabilities=frozenset(
+            {CAPABILITY_SHADER_COMPILATION, CAPABILITY_SPIRV_VALIDATION}
+        ),
+        tool_diagnostics={},
+        diagnostics=(),
+        diagnostic_metadata={},
+    )
+    app = app_module.FFmpegBuilderApp.__new__(app_module.FFmpegBuilderApp)
+    app.base_workspace = tmp_path
+    app.platform_detector = SimpleNamespace(
+        platform_info=PlatformInfo(build_backend=TARGET_BACKEND_CROSS_MINGW),
+        get_build_backend_name=lambda: TARGET_BACKEND_CROSS_MINGW,
+    )
+    app.system_report = SimpleNamespace(wsl_mingw_preparation=None)
+    app.windows_target_state = None
+    app.windows_probe = lambda override, *, timeout, **kwargs: target_state
+    app._get_buildable_components = lambda config: []
+    monkeypatch.setattr(
+        app_module,
+        "resolve_wsl_mingw_vulkan_sdk",
+        lambda config, **kwargs: sdk,
+    )
+    monkeypatch.setattr(
+        app_module,
+        "resolve_wsl_mingw_project_toolchains",
+        lambda *args, **kwargs: {
+            name: {
+                "version": "test",
+                "prefix": str(tmp_path / name),
+                "paths": {},
+                "target": None,
+                "extras": [],
+                "provenance": {},
+            }
+            for name in ("llvm-mingw", "rust")
+        },
+    )
+    config = BuildConfig(
+        target_backend=TARGET_BACKEND_CROSS_MINGW,
+        enable_libvmaf_cuda=False,
+        enable_libplacebo_vulkan=True,
+    )
+
+    app.prepare_target(config, resume=False)
+
+    preparation = app.wsl_mingw_preparation
+    assert preparation.vulkan is sdk
+    assert preparation.target is target_state
+    assert preparation.effective_build_inputs["vulkan"]["validated_capabilities"] == [
+        CAPABILITY_SHADER_COMPILATION,
+        CAPABILITY_SPIRV_VALIDATION,
+    ]
+    assert preparation.diagnostic_only["vulkan"]["resolution_source"] == "VULKAN_SDK"
+    json.dumps(preparation.to_dict())
+    assert app.platform_detector.platform_info.vulkan_runtime_available is False
+    assert preparation.to_dict()["target"]["vulkan"]["state"] == "absent"

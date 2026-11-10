@@ -427,6 +427,12 @@ openmp: true
 enable_libvmaf: true
 enable_libvmaf_cuda: true
 enable_libplacebo_vulkan: false
+target_backend: native
+# WSL-Mingw only (omit to use CUDA_HOME/CUDA_PATH and VULKAN_SDK):
+# target_backend: linux-cross-mingw
+# external_prerequisite_paths:
+#   cuda: /opt/cuda-12.4
+#   vulkan: /opt/vulkan-sdk/1.4.363.1
 disable_lv2: false
 num_jobs: "auto"
 make_timeout_seconds: 0

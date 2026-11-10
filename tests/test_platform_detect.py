@@ -504,35 +504,22 @@ def test_cross_mingw_cuda_uses_deterministic_resolver_not_ambient_nvcc(monkeypat
     assert detector.platform_info.cuda_path is None
 
 
-def test_cross_mingw_detection_records_selection_without_compile_probe(monkeypatch):
+def test_cross_mingw_cuda_resolution_is_deferred_until_g1_target_preparation(monkeypatch):
     config = BuildConfig(target_backend=TARGET_BACKEND_CROSS_MINGW)
     detector = PlatformDetector(config)
-    cuda_inputs = ResolvedCudaBuildHostInputs(
-        cuda_root=Path("/fixture/cuda"),
-        nvcc_path=Path("/fixture/cuda/bin/nvcc"),
-        detected_cuda_version="12.4",
-        ccbin_path=Path("/fixture/gcc12/bin/gcc"),
-        ccbin_profile="gcc12",
-        ccbin_profile_version="12.5.0",
-        ccbin_provenance={"base_sha256": "fixture"},
-        resolution_source="config",
-        diagnostics=("selected fixture",),
-    )
     monkeypatch.setattr(
         "ffmpeg_builder.cuda_prerequisites.resolve_wsl_mingw_cuda_inputs",
-        lambda *args, **kwargs: cuda_inputs,
+        lambda *args, **kwargs: pytest.fail("CUDA resolution must wait for G1 preparation"),
     )
-    monkeypatch.setattr(detector, "_probe_nvcc_compile", lambda *args, **kwargs: pytest.fail())
 
     detector._detect_cross_mingw_cuda()
 
-    assert detector.platform_info.cuda_path == str(cuda_inputs.nvcc_path)
-    assert detector.platform_info.cuda_version == "12.4"
-    assert detector.platform_info.nvcc_ccbin == str(cuda_inputs.ccbin_path)
+    assert detector.platform_info.cuda_available is True
+    assert detector.platform_info.cuda_path is None
     assert detector.platform_info.cuda_nvcc_supported is False
-    assert detector.platform_info.cuda_build_host_inputs is cuda_inputs
+    assert detector.platform_info.cuda_build_host_inputs is None
     assert detector.platform_info.cuda_compute_capability is None
-    assert detector.platform_info.to_dict()["cuda_build_host_inputs"]["ccbin_profile"] == "gcc12"
+    assert "deferred" in detector.platform_info.cuda_nvcc_reason
 
 
 def test_native_cuda_path_remains_ambient_path_based(monkeypatch):
