@@ -19,7 +19,7 @@ Motivation:
 
 Scope: Linux native build on this host (Intel Xeon Gold 6248, Fedora).
 No CUDA/NVENC on this machine, so the nvcc host-compiler question is out of
-scope for this run. Windows (native ICX vs MSYS2-UCRT GCC, cross-build) is
+scope for this run. Windows (native ICX; the project's Windows route is WSL-Mingw, see `windows_build_strategy.md`) is
 discussed separately below and was not built here.
 
 ## Environment
@@ -248,10 +248,11 @@ Not built in this work. For the record, from the earlier analysis phase:
   means CPU/GPU targets within one OS, not cross-OS). Scenario "WSL host →
   Windows target via ICX" does not exist.
 - Native Windows ICX is MSVC-ABI (Visual Studio + Windows SDK + Ninja), not
-  MinGW; MinGW-built static libraries cannot be mixed in safely. Moving the
-  Windows backend off MSYS2-UCRT64 GCC to native ICX therefore means moving
+  MinGW; MinGW-built static libraries cannot be mixed in safely. Native
+  Windows ICX would therefore mean moving
   the whole stack to MSVC-ABI (`msvc` toolchain mode in FFmpeg configure,
-  `lib.exe`, MSVC flags) — a separate project from the Linux work above.
+  `lib.exe`, MSVC flags) — a separate project from the Linux work above, and
+  not part of the WSL-Mingw (`linux-cross-mingw`) route.
 
 ## Verdict
 
