@@ -2,7 +2,9 @@
 
 import os
 import platform as _platform
+import shutil
 import sys
+from dataclasses import replace
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Callable, Dict, List, Optional, Tuple, Type
@@ -23,8 +25,13 @@ from .build_identity import build_native_identity
 from .config import TARGET_BACKEND_CROSS_MINGW, BuildConfig, ConfigManager
 from .cuda_prerequisites import (
     ResolvedCudaBuildHostInputs,
+    cuda_nv_codec_identity,
+    cuda_profile_identity,
+    invalidate_cuda_resume,
     resolve_wsl_mingw_cuda_inputs,
+    validate_cuda_output_modes,
     validate_cuda_ptx_compatibility,
+    validate_required_cuda_components,
 )
 from .ffmpeg_policy import (
     FfmpegPolicy,
@@ -161,6 +168,14 @@ class FFmpegBuilderApp:
         ``IdentityError`` when prerequisites or reuse are unsafe, leaving saved
         state and artifacts untouched.
         """
+        if config.cuda_build_mode == "required" and not (
+            config.gpl_enabled or config.allow_nonfree_cuda
+        ):
+            raise BuildError(
+                "CUDA",
+                "FFmpeg CUDA/NVCC requires nonfree code; set allow_nonfree_cuda "
+                "to accept an unredistributable build.",
+            )
         if self._is_cross_mingw(config):
             self.windows_target_state = None
             self.wsl_mingw_preparation = None
@@ -200,7 +215,10 @@ class FFmpegBuilderApp:
                 config.ffmpeg_version, registry, store
             )
             cuda_inputs: Optional[ResolvedCudaBuildHostInputs] = None
-            cuda_enabled = config.enable_libvmaf and config.enable_libvmaf_cuda
+            cuda_enabled = config.cuda_build_mode != "disabled" and (
+                config.cuda_build_mode == "required"
+                or (config.enable_libvmaf and config.enable_libvmaf_cuda)
+            )
             if cuda_enabled:
                 cuda_inputs = resolve_wsl_mingw_cuda_inputs(config, registry, store, required=True)
                 if cuda_inputs is None:
@@ -210,7 +228,15 @@ class FFmpegBuilderApp:
                         category=CATEGORY_EXTERNAL_PREREQUISITE,
                         code="cuda_sdk_missing",
                     )
-                cuda_inputs = validate_cuda_ptx_compatibility(cuda_inputs, target_state)
+                architecture = config.cuda_compute_capability or os.environ.get(
+                    "CUDA_COMPUTE_CAPABILITY"
+                )
+                if architecture:
+                    cuda_inputs = validate_cuda_ptx_compatibility(
+                        cuda_inputs, target_state, architecture=architecture
+                    )
+                else:
+                    cuda_inputs = validate_cuda_ptx_compatibility(cuda_inputs, target_state)
             platform_info.cuda_build_host_inputs = cuda_inputs
             platform_info.cuda_available = cuda_inputs is not None
             if cuda_inputs is not None:
@@ -305,7 +331,175 @@ class FFmpegBuilderApp:
             sys.platform,
             _platform.machine(),
         )
-        return prepare_native_target(self.base_workspace, self.state_manager, identity, resume)
+        session = prepare_native_target(self.base_workspace, self.state_manager, identity, resume)
+        self._prepare_native_cuda(config, session)
+        return session
+
+    def _prepare_native_cuda(self, config: BuildConfig, session: TargetSession) -> None:
+        """Resolve and probe one NVCC profile before trusting saved consumers."""
+        pi = self.platform_detector.platform_info
+        pi.cuda_build_host_inputs = None
+        if config.cuda_build_mode == "disabled":
+            pi.cuda_nvcc_supported = False
+            pi.libvmaf_cuda_supported = False
+            pi.libvmaf_cuda_reason = "CUDA compilation disabled by configuration."
+            session.notes.append(pi.libvmaf_cuda_reason)
+            return
+        if not pi.is_linux:
+            if config.cuda_build_mode == "required":
+                raise BuildError(
+                    "CUDA", "Required CUDA compilation is not supported on this backend."
+                )
+            return
+        configured = config.external_prerequisite_paths.get("cuda")
+        detected = pi.cuda_path
+        available = bool(
+            configured or os.environ.get("CUDA_HOME") or os.environ.get("CUDA_PATH") or detected
+        )
+        if not available:
+            message = "CUDA Toolkit not found; configure external_prerequisite_paths.cuda."
+            if config.cuda_build_mode == "required":
+                raise BuildError("CUDA", message)
+            pi.cuda_nvcc_supported = False
+            pi.libvmaf_cuda_supported = False
+            pi.libvmaf_cuda_reason = message
+            session.notes.append(message)
+            return
+        try:
+            selected_config = config
+            if (
+                not configured
+                and not os.environ.get("CUDA_HOME")
+                and not os.environ.get("CUDA_PATH")
+            ):
+                assert detected is not None
+                root = Path(detected).resolve().parent.parent
+                selected_config = replace(
+                    config,
+                    external_prerequisite_paths={
+                        **config.external_prerequisite_paths,
+                        "cuda": str(root),
+                    },
+                )
+            try:
+                registry = ToolchainRegistry()
+            except (OSError, ValueError) as exc:
+                raise BuildError(
+                    "CUDA host compiler",
+                    f"Toolchain registry could not be loaded: {exc}",
+                    category=CATEGORY_TOOLCHAIN_INSTALL,
+                    code="cuda_host_registry_unavailable",
+                ) from exc
+            store = ToolchainStore(
+                resolve_store_root(PROJECT_ROOT),
+                workspace=self.workspace,
+                source_archives_dir=PROJECT_ROOT / config.source_archives_dir,
+                allow_network_downloads=config.allow_network_downloads,
+            )
+            architecture = (
+                config.cuda_compute_capability
+                or os.environ.get("CUDA_COMPUTE_CAPABILITY")
+                or pi.cuda_compute_capability
+            )
+
+            def resolve_and_probe(
+                environment: Dict[str, str], source: str
+            ) -> ResolvedCudaBuildHostInputs:
+                selected = resolve_wsl_mingw_cuda_inputs(
+                    selected_config,
+                    registry,
+                    store,
+                    required=True,
+                    environment=environment,
+                    allow_host_override=True,
+                    host_override_source=source,
+                )
+                assert selected is not None
+                selected = validate_cuda_ptx_compatibility(
+                    selected, None, architecture=architecture
+                )
+                return validate_cuda_output_modes(selected)
+
+            environment = dict(os.environ)
+            try:
+                inputs = resolve_and_probe(environment, "CUDA_NVCC_CCBIN")
+            except BuildError as first:
+                system_cc = shutil.which("gcc")
+                if (
+                    environment.get("CUDA_NVCC_CCBIN")
+                    or not system_cc
+                    or first.code
+                    not in {
+                        "cuda_host_mapping_missing",
+                        "cuda_host_toolchain_not_installed",
+                        "cuda_ptx_probe_failed",
+                        "cuda_output_probe_failed",
+                    }
+                ):
+                    raise
+                environment["CUDA_NVCC_CCBIN"] = system_cc
+                try:
+                    inputs = resolve_and_probe(environment, "system gcc")
+                except BuildError as second:
+                    raise BuildError(
+                        "CUDA",
+                        f"Managed compiler attempt failed:\n{first}\n"
+                        f"System compiler attempt failed:\n{second}",
+                        category=second.category,
+                        code=second.code,
+                    ) from second
+                session.notes.append(
+                    f"Managed CUDA compiler unavailable; using verified system gcc: {first}"
+                )
+            if any(
+                character.isspace()
+                for path in (inputs.nvcc_path, inputs.ccbin_path)
+                for character in str(path)
+            ):
+                raise BuildError(
+                    "CUDA",
+                    "FFmpeg's configure cannot safely use NVCC or host compiler paths "
+                    "containing whitespace; select paths without whitespace.",
+                )
+            if config.enable_libvmaf and config.enable_libvmaf_cuda:
+                bin2c = inputs.cuda_root / "bin" / "bin2c"
+                if not bin2c.is_file() or not os.access(bin2c, os.X_OK):
+                    raise BuildError("CUDA", f"Selected CUDA Toolkit has no executable {bin2c}.")
+        except BuildError as exc:
+            pi.cuda_nvcc_supported = False
+            pi.libvmaf_cuda_supported = False
+            pi.libvmaf_cuda_reason = str(exc)
+            pi.cuda_nvcc_reason = str(exc)
+            explicit_root = configured or os.environ.get("CUDA_HOME") or os.environ.get("CUDA_PATH")
+            if explicit_root and detected:
+                root = Path(explicit_root).expanduser().resolve()
+                if root != Path(detected).resolve().parent.parent:
+                    pi.cuda_available = False
+                    pi.cuda_path = None
+            if config.cuda_build_mode == "required":
+                raise
+            session.notes.append(f"CUDA auto mode: CUDA compilation disabled: {exc}")
+            return
+        pi.cuda_build_host_inputs = inputs
+        pi.cuda_available = True
+        pi.cuda_path = str(inputs.nvcc_path)
+        pi.cuda_version = inputs.detected_cuda_version
+        assert inputs.compute_architecture is not None
+        pi.cuda_compute_capability = inputs.compute_architecture.removeprefix("compute_")
+        pi.nvcc_ccbin = str(inputs.ccbin_path)
+        pi.cuda_nvcc_supported = True
+        pi.libvmaf_cuda_supported = True
+        pi.cuda_nvcc_reason = pi.libvmaf_cuda_reason = "CUDA profile probes passed."
+        session.notes.append(
+            f"CUDA profile: NVCC {inputs.nvcc_path} ({inputs.nvcc_version}), "
+            f"host {inputs.ccbin_path}, {inputs.compute_architecture}, "
+            f"flags {' '.join(inputs.common_flags())}."
+        )
+        if not (config.gpl_enabled or config.allow_nonfree_cuda):
+            session.notes.append(
+                "FFmpeg CUDA/NVCC disabled: enable allow_nonfree_cuda to accept an "
+                "unredistributable build. libvmaf CUDA remains available."
+            )
 
     def recheck_target_runtime(self, config: BuildConfig, session: TargetSession) -> Optional[str]:
         """Re-probe before runtime acceptance; return a warning message if drifted.
@@ -628,11 +822,12 @@ class FFmpegBuilderApp:
             config: Build configuration.
             resume: Whether to resume from previous state.
         """
-        all_components = self._get_buildable_components(config)
-        components = list(all_components)
-
         try:
             session = self.prepare_target(config, resume)
+            all_components = self._get_buildable_components(config)
+            validate_required_cuda_components(
+                config, all_components, self.platform_info.cuda_build_host_inputs
+            )
         except BuildError as e:
             self.console.print(
                 f"[red]Build preparation blocked (identity guard/prerequisite validation):[/red] {e}"
@@ -641,7 +836,28 @@ class FFmpegBuilderApp:
         for note in session.notes:
             self.console.print(f"[yellow]{note}[/yellow]")
 
+        components = list(all_components)
+        nv_codec_identity = cuda_nv_codec_identity(
+            all_components,
+            vmaf_headers=(
+                self.registry.get_nv_codec_component()
+                if self.platform_info.cuda_build_host_inputs
+                and config.enable_libvmaf
+                and config.enable_libvmaf_cuda
+                else None
+            ),
+        )
         if resume:
+            from .builders.graphics.vulkan_headers import invalidate_vulkan_resume
+
+            invalidate_vulkan_resume(self.state_manager, self.workspace, all_components)
+            invalidate_cuda_resume(
+                self.state_manager,
+                self.platform_info.cuda_build_host_inputs,
+                libvmaf_cuda=config.enable_libvmaf and config.enable_libvmaf_cuda,
+                ffmpeg_cuda=config.gpl_enabled or config.allow_nonfree_cuda,
+                nv_codec=nv_codec_identity,
+            )
             resume_point = self.state_manager.get_resume_point()
             if resume_point:
                 idx = next((i for i, c in enumerate(components) if c.name == resume_point), 0)
@@ -689,6 +905,12 @@ class FFmpegBuilderApp:
         state = self.state_manager.get()
         state.config = config.to_dict()
         state.total_steps = len(all_components)
+        state.cuda_profile = cuda_profile_identity(
+            self.platform_info.cuda_build_host_inputs,
+            libvmaf_cuda=config.enable_libvmaf and config.enable_libvmaf_cuda,
+            ffmpeg_cuda=config.gpl_enabled or config.allow_nonfree_cuda,
+            nv_codec=nv_codec_identity,
+        )
         self.state_manager.save()
         session.stamp(self.state_manager)
 

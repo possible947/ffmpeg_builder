@@ -629,6 +629,7 @@ class TestNvCodecVersionSelection:
 
     def test_get_buildable_uses_detected_nvenc_version(self, mock_tools, mock_platform_info):
         mock_platform_info.nvenc_api_version = "12.2"
+        mock_platform_info.cuda_available = False
         components = self.registry.get_buildable(
             gpl_enabled=False,
             platform="linux",

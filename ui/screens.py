@@ -765,6 +765,21 @@ class ConfigScreen(UIScreen):
             "Enable CUDA path for libvmaf when supported?",
             default=config.enable_libvmaf_cuda,
         )
+        config.cuda_build_mode = Prompt.ask(
+            "CUDA compilation mode",
+            choices=["auto", "required", "disabled"],
+            default=config.cuda_build_mode,
+        )
+        if not config.gpl_enabled:
+            config.allow_nonfree_cuda = Confirm.ask(
+                "Allow nonfree FFmpeg CUDA/NVCC (result cannot be redistributed)?",
+                default=config.allow_nonfree_cuda,
+            )
+        capability = Prompt.ask(
+            "CUDA compute capability (auto or e.g. 70)",
+            default=config.cuda_compute_capability or "auto",
+        )
+        config.cuda_compute_capability = None if capability == "auto" else capability
         config.libvmaf_debug_build = Confirm.ask(
             "Build libvmaf without optimizations (meson debug buildtype, for memory debugging)?",
             default=config.libvmaf_debug_build,

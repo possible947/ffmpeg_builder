@@ -74,6 +74,9 @@ class BuildConfig:
     full_static: bool = False
     enable_libvmaf: bool = True
     enable_libvmaf_cuda: bool = True
+    cuda_build_mode: str = "auto"
+    cuda_compute_capability: Optional[str] = None
+    allow_nonfree_cuda: bool = False
     libvmaf_debug_build: bool = False
     enable_libplacebo_vulkan: bool = False
     disable_lv2: bool = False
@@ -107,6 +110,8 @@ class BuildConfig:
             raise ValueError(
                 f"Unsupported target_backend {self.target_backend!r}; supported: {backends}"
             )
+        if self.cuda_build_mode not in ("auto", "required", "disabled"):
+            raise ValueError("cuda_build_mode must be auto, required, or disabled")
 
     @property
     def workspace_dir_name(self) -> str:

@@ -121,6 +121,10 @@ class BuildConfig:
     full_static: bool = False
     enable_libvmaf: bool = True
     enable_libvmaf_cuda: bool = True
+    cuda_build_mode: str = "auto"
+    cuda_compute_capability: Optional[str] = None
+    allow_nonfree_cuda: bool = False
+    enable_libplacebo_vulkan: bool = False
     disable_lv2: bool = False
     num_jobs: str = "auto"
     async_downloads: bool = True
@@ -136,13 +140,15 @@ completed profile and validation results under `Unreleased` in `docs/CHANGELOG.m
 Run tests through the project virtual environment and commit each discrete version
 profile step atomically after its focused validation.
 
-Version availability is policy-gated at runtime by detected toolchain:
+Version-specific toolchain ranges and fallbacks are defined in
+`toolchains.yaml`:
 
-- FFmpeg 8.1 is blocked when system GCC > 13 or system Clang > 25.
-- Linux GCC15+ policy allows only FFmpeg 9.0.
+- On Linux, FFmpeg 8.1 uses system GCC `>=12,<14` or Clang `<=25` when
+  compatible, otherwise the `gcc12` store fallback.
+- Linux FFmpeg 9.0 requires GCC `>=15`; no fallback is currently defined.
 - macOS allows FFmpeg 8.1 only with configured and available `macports-clang-17`.
-- CUDA keeps its own host-compiler compatibility path via `nvcc -ccbin` and does not
-  re-enable blocked FFmpeg 8.1 builds.
+- CUDA resolves and probes its own host compiler via `nvcc -ccbin`, which may
+  differ from the compiler used for FFmpeg itself.
 
 Existing configurations without an `ffmpeg_version` field retain the `8.1` default.
 Set `ffmpeg_version: "9.0"` explicitly to select the FFmpeg 9.0 source profile.
@@ -515,6 +521,7 @@ Detects the full system environment in a single `detect_all()` call.
 | `_detect_system_info()` | OS (reads `/etc/os-release` on Linux), CPU (`/proc/cpuinfo` or `sysctl`), RAM |
 | `_detect_platform_info()` | Platform flags, HW acceleration |
 | `_detect_cuda()` | nvcc in PATH, then `/usr/local/cuda*/bin/nvcc` |
+| `_detect_nvenc_api_version()` | Query the NVIDIA driver independently of NVCC, to select compatible nv-codec headers |
 | `_check_wsl2()` | WSL2 environment via `/proc/version` (Microsoft/WSL) |
 | `_check_qsv()` | Linux: QSV via vainfo/PCI Intel GPU with VAAPI (legacy code also has a Windows UCRT64 oneVPL branch, slated for removal) |
 | `_check_vulkan()` | Dev/runtime split: pkg-config or headers (incl. `VULKAN_SDK` on *every* platform, not just Windows) gate `vulkan_dev_available`/the returned bool; ICD JSON files and a real `vulkaninfo --summary` run are runtime-only diagnostics (`vulkan_runtime_available`) and no longer grant dev-availability by themselves |
@@ -671,7 +678,7 @@ The existing `FFmpegBuilder` methods remain the implementation target during thi
 | Condition | Flags |
 |-----------|-------|
 | `gpl_enabled` | `--enable-gpl`, `--enable-nonfree` |
-| CUDA available | `--enable-cuda-nvcc`, `--enable-cuvid`, `--enable-nvenc`, `--cuda-sdk=<path>` |
+| CUDA/NVIDIA | Verified and permitted NVCC profile enables `--enable-cuda-nvcc`; NVENC/NVDEC use the driver and nv-codec headers independently. |
 | Per built component | `--enable-libdav1d`, `--enable-libx264`, etc. |
 | macOS | `--enable-videotoolbox` |
 | OpenCL ready (`opencl_available` or runtime+dev ready, or OpenCL components built) | `--enable-opencl` |
@@ -839,9 +846,25 @@ side: the distro-packaged loader/drivers (e.g. `mesa-vulkan-drivers` +
 `VULKAN_SDK` on **every** platform (previously Windows-only — see CHANGELOG), and
 `builder.py::_setup_environment()` propagates `$VULKAN_SDK/include`,
 `$VULKAN_SDK/lib`, and `$VULKAN_SDK/lib/pkgconfig` into the build environment
-when a LunarG SDK is active, in addition to (not instead of) the system
-Vulkan-Loader/mesa install path. If both are present, `VULKAN_SDK` takes
-precedence for header/lib resolution since its paths are prepended.
+when a LunarG SDK is active, in addition to the system Vulkan loader.
+
+Vulkan-Headers is installed from the registry component with CMake, including
+`include/vulkan`, `include/vk_video`, and `share/vulkan/registry/vk.xml`.
+`builders/graphics/vulkan_headers.py` verifies these files against their
+source and records a version, archive checksum, and content digest in
+`share/vulkan/headers-manifest.json`. libplacebo stages that verified pair in
+its supported bundled Vulkan-Headers dependency and passes the workspace XML
+through Meson's `-Dvulkan-registry` option. Thus an active SDK cannot supply a
+different XML for those headers. The loader and driver remain external.
+
+On resume, when Vulkan-Headers is selected, a missing or invalid manifest
+marks completed Vulkan-Headers, libplacebo, and FFmpeg for rebuilding before
+the resume point is chosen.
+An existing, conflicting bundled header tree produces a build error rather
+than silently mixing versions. This check does not pin the system loader or
+guarantee compatibility with every future SDK or driver. The existing
+glslang-search adjustment and pkg-config normalization remain separate
+builder adaptations; the header/registry fix does not eliminate them.
 
 #### AMD hwaccel detection specifics (VAAPI / AMF / OpenCL via ROCm)
 
@@ -861,159 +884,76 @@ precedence for header/lib resolution since its paths are prepended.
 
 ### Fedora 44+ / modern GCC (≥15) + CUDA 12.2 — nvcc host-compiler compatibility
 
-**Annotation**: `LinuxGcc15Platform` is the strategy class resolved whenever
-`PlatformDetector.gcc_major_version >= 15` (`platforms/resolver.py`) — the
-name is historical shorthand for "modern GCC toolchain", not literally GCC
-15; it is also the strategy resolved on a real GCC 16.2.1 system (Fedora 44),
-which is the environment this chapter documents.
+The original failure was observed on Fedora 44. The profile below applies to
+native Linux and Linux builds inside WSL2, regardless of the selected
+platform strategy; it does not describe the experimental WSL-Mingw backend.
 
-**Description of the problem**: every CUDA toolkit release pins a maximum
-supported host-compiler major version — CUDA 12.2 supports up to GCC 12.
-Rolling-release distros routinely ship a GCC major version far ahead of that
-(Fedora 44 ships GCC 16), and older GCC series frequently disappear from the
-distro's own repositories once superseded (Fedora 44 has no `gcc12` package).
-Without a compatible host compiler, `nvcc` rejects every `.cu` compile with a
-version-mismatch error before any project code is involved, breaking
-`--enable-cuda-nvcc`/`--enable-cuvid`/`--enable-nvdec`/`--enable-nvenc` FFmpeg
-builds and the `libvmaf` CUDA path alike.
+Native build preparation resolves a CUDA Toolkit and host compiler before
+selecting a resume point. An explicit `CUDA_NVCC_CCBIN` is authoritative;
+otherwise it tries the verified store profile mapped to the CUDA release and
+then system GCC for eligible mapping or probe failures. The architecture
+comes from `cuda_compute_capability`, `CUDA_COMPUTE_CAPABILITY`, or detected
+GPUs, in that order; there is no fixed fallback. PTX, object, and fatbin
+probes verify the selected compute architecture. A narrowly
+recognized CUDA 12.4/glibc declaration conflict permits one retry with
+`-Xcompiler=-U_GNU_SOURCE`; other errors are preserved.
 
-**Solution implemented**: `PlatformDetector._detect_cuda_nvcc_support()`
-(`platform_detect.py`) resolves a working host compiler for `nvcc` through a
-three-tier fallback, each tier verified with a real compile (not a version
-string comparison):
+The resulting `ResolvedCudaBuildHostInputs` supplies the exact NVCC path and
+common flags to libvmaf's Meson/Ninja targets and FFmpeg's `--nvccflags`.
+Output-mode flags such as `--ptx` are not forwarded to fatbin builds. CUDA
+probe and build environments discard inherited NVCC prepend/append flags so
+they cannot silently change the tested profile; libvmaf's `bin2c` is taken
+from the selected Toolkit. CUDA profile changes invalidate completed
+libvmaf/FFmpeg statuses; their mutable build trees are reconfigured or
+cleaned when the recorded profile differs.
+NVENC/NVDEC do not depend on NVCC; unverified LLVM compilation is disabled.
+When the driver selects an older nv-codec release, libvmaf reads CUDA driver
+headers from the registry's default, SHA-verified nv-codec archive in its
+own source tree. This leaves the installed driver-compatible NVENC headers
+unchanged. Both versions are included in resume identity.
 
-1. **System default** — probe `nvcc -c` on a minimal one-function `.cu` file
-   with no `-ccbin` override; if the system's default host compiler is within
-   the toolkit's supported range, nothing further is needed.
-2. **Explicit override** — the `CUDA_NVCC_CCBIN` environment variable, if
-   set, is probed with `-ccbin=$CUDA_NVCC_CCBIN`; this lets any compiler
-   install (a manually built GCC 12, a distro `gcc-12` package on distros
-   that still carry it, etc.) be forced regardless of auto-detection.
-3. **Toolchain store** — `_store_cuda_host_compiler()` resolves the
-   store-installed `CC` for the profile mapped to the detected CUDA Toolkit
-   version (`ToolchainStore.cuda_host_compiler()` over the registry's `cuda`
-   table, e.g. CUDA 12.2 → `gcc12`), probing it with `-ccbin=<candidate>`
-   when that profile is installed and verified.
-
-The winning path is stored in `platform_info.nvcc_ccbin` (with
-`nvcc_ccbin_reason`/`cuda_nvcc_reason` recording which tier matched, for the
-system report and log output); `platform_info.cuda_nvcc_supported` becomes
-`True` once any tier succeeds. The same `_probe_nvcc_compile()` sanity-check
-is shared by both the base CUDA readiness gate and the `libvmaf` CUDA-path
-gate (`_detect_libvmaf_cuda_support()`), so a resolved `nvcc_ccbin` benefits
-both consumers uniformly instead of only one.
-
-**Wiring into the build**:
-
-- `builders/ffmpeg/ffmpeg.py` forwards `nvcc_ccbin` to FFmpeg's own configure
-  via `--nvccflags='-ccbin=<path> ...'` whenever `cuda_nvcc_supported` is true.
-- `builders/graphics/vmaf.py`'s `build_libvmaf()` forwards the same path via
-  `NVCC_PREPEND_FLAGS=-ccbin=<path>` for libvmaf's independent Meson/Ninja
-  build (which does not read FFmpeg's `--nvccflags`).
-
-**Provisioning the mapped compiler** (validated on Fedora 44 + CUDA 12.2):
-
-```bash
-python scripts/prepare_toolchains.py   # deploys gcc12 when the analysis recommends it
-```
-
-No manual configuration is required afterward — tier 3 resolves the installed
-store profile on the next `detect_all()` run.
-Use `CUDA_NVCC_CCBIN=/path/to/gcc-12` instead if the compiler was installed
-some other way (e.g. a manually built toolchain, or a distro that still
-packages `gcc-12`).
-
-**Verification**: confirmed via `PlatformDetector.detect_all()` reporting
-`cuda_nvcc_supported=True` with `nvcc_ccbin` pointing at the store-installed
-GCC, and via a full end-to-end FFmpeg build whose `ffmpeg -version`
-configuration line includes `--nvccflags='-ccbin=<store-path> ...'`
-with working `h264_nvenc`/`hevc_nvenc`/`av1_nvenc` encoders in the resulting
-binary.
+`cuda_build_mode` is `auto`, `required`, or `disabled`; the latter two
+explicitly request or disable CUDA compilation. `cuda_compute_capability`
+overrides GPU detection for builds without a GPU. FFmpeg NVCC requires
+`allow_nonfree_cuda` or the existing `gpl_enabled` setting, both of which
+enable FFmpeg's nonfree mode. Without that permission, `auto` may build
+libvmaf with CUDA while leaving FFmpeg NVCC disabled. `auto` reports profile
+failures; `required` blocks preparation, including when nonfree permission is
+missing. WSL-Mingw cross preparation remains experimental and currently
+validates PTX only. The profile still uses the host libc rather than a pinned
+sysroot, so it cannot make arbitrary future Toolkit/libc combinations
+compatible.
 
 ### libvmaf + nv-codec-headers CUDA compatibility
 
-**Annotation**: all fixes in this chapter live in
-`builders/graphics/vmaf.py` and are scoped to `LinuxGcc15Platform` (see
-above); they were discovered end-to-end on Fedora 44 + CUDA 12.2 while
-building `libvmaf` 3.2.0 with `enable_libvmaf_cuda: true`.
+libvmaf's CUDA feature extractors use `ffnvcodec` driver headers, as does
+FFmpeg's NVENC/NVDEC support. `components.yaml` declares `nv-codec` before
+`libvmaf` because the registry preserves declaration order. The default
+`nv-codec` 13.0.19.1 includes CUDA functions needed by libvmaf while retaining
+the NVENC 13.0 interface required by FFmpeg 8.1. The registry can select an
+older release for an older detected NVENC driver.
 
-libvmaf's CUDA feature extractors depend on the `ffnvcodec`
-(`nv-codec-headers`) package, which this project also builds as its own
-`nv-codec` component for FFmpeg's NVENC/NVDEC/CUVID support. Because
-`nv-codec` is pinned to the *oldest* release compatible with FFmpeg 8.1's
-`nvenc.c` (see `components.yaml` and the "nv-codec-headers 13.1.x breaks
-FFmpeg 8.1 NVENC build" entry in `docs/CHANGELOG.md`), three independent
-problems surfaced only once both `libvmaf`'s CUDA path and this pinning
-policy were exercised together:
+That older release can lack CUDA driver functions required by libvmaf.
+`_libvmaf_cuda_headers()` therefore uses the installed workspace headers
+when the selected release matches the default; otherwise it obtains the
+default registry archive with its checksum and extracts the CUDA headers
+into libvmaf's private `.ffmpeg-builder-cuda-headers` directory. Offline-first
+download policy still applies. FFmpeg keeps the driver-compatible workspace
+headers; the two versions and checksums are recorded in CUDA resume identity.
 
-1. **Build-order problem**: `components.yaml` declares `nv-codec` *after*
-   `libvmaf`. `get_buildable()` preserves declaration order (no
-   dependency-based topological sort beyond the `requires_tools` gate), so
-   when `libvmaf`'s Meson configure runs with `-Denable_cuda=true` it needs
-   `ffnvcodec/dynlink_cuda.h`/`dynlink_loader.h`, but `nv-codec` has not been
-   built into the workspace `include/` yet.
-   **Solution**: `_ensure_nv_codec_headers()` inline-builds `nv-codec`
-   ahead of time from inside `build_libvmaf()` (download/extract/patch/
-   dispatch through the same builder internals `builder.build_component()`
-   would use) and marks it `ComponentStatus.COMPLETED`, so the main build
-   loop's later pass over `nv-codec` recognizes it as already done and skips
-   rebuilding it.
+The source archive omits libvmaf's `ffnvcodec` submodule. Its Meson fatbin
+custom target hardcodes `-I ../include` and does not inherit the workspace
+CFLAGS, so `_link_nv_codec_headers_into_source()` links the chosen headers
+at `<libvmaf_dir>/include/ffnvcodec`. For private headers, the builder also
+adds their parent to CFLAGS for Meson's header checks. An unrelated existing
+directory or link is not overwritten. The builder enables
+`-Denable_cuda=true` only when requested and the shared profile passed.
 
-2. **Symbol-compatibility problem**: `libvmaf`'s own `src/meson.build` only
-   probes header *existence* (`cc.has_header('ffnvcodec/dynlink_cuda.h')`),
-   not the specific `CudaFunctions` struct members its feature extractors
-   call. The FFmpeg-8.1-compatible `nv-codec-headers` release this project
-   pins is old enough to be missing six CUDA driver API symbols libvmaf 3.2.0
-   requires (`cuMemHostAlloc`, `cuMemFreeHost`, `cuMemFreeAsync`,
-   `cuCtxGetStreamPriorityRange`, `cuStreamCreateWithPriority`,
-   `cuCtxSynchronize` — added upstream in commit `876af32`, first shipped in
-   tag `n13.0.19.1`), so configure succeeds but compilation fails with
-   `CudaFunctions has no member named 'cuMemHostAlloc'` etc.
-   **Solution (compatibility bump)**: the project's default `nv-codec`
-   version was bumped from `13.0.19.0` to `13.0.19.1` — confirmed via a
-   direct upstream diff (`git diff n13.0.19.0..n13.0.19.1 --stat`) that this
-   patch release touches only `dynlink_cuda.h`/`dynlink_loader.h` (adding the
-   six symbols) and does **not** touch `nvEncodeAPI.h`, so FFmpeg 8.1's
-   NVENC-SDK-13.0 struct-layout assumptions in `nvenc.c` remain valid — this
-   preserves the exact rationale that pinned `nv-codec` away from `13.1.x` in
-   the first place.
-   **Solution (defensive fallback)**: `_libvmaf_cuda_headers_compatible()`
-   text-searches the installed `dynlink_loader.h` for all six required
-   symbols; if any are missing (e.g. a future re-pin, or the driver-version
-   fallback selects an older `12.2.x` header release — see
-   `ComponentRegistry.get_nv_codec_component()`), `libvmaf`'s CUDA path is
-   disabled with a clear logged reason and the build falls back to the
-   standard CPU-only `libvmaf`, instead of a hard build failure.
-
-3. **`.fatbin` include-path problem**: even with compatible headers
-   installed to the workspace, `libvmaf`'s device-code compilation
-   (`.fatbin` objects) failed with
-   `fatal error: ffnvcodec/dynlink_loader.h: No such file or directory`.
-   Root cause: `libvmaf/src/meson.build` builds these objects via a
-   `custom_target` whose `command:` is a **literal argv list** hardcoding
-   `-I ../include` (relative to `libvmaf/build`, i.e. `libvmaf/include`) —
-   unlike the `static_library()` target, a `custom_target`'s command array
-   does not inherit Meson's `c_args`/`cuda_args`/`include_directories`, so
-   this project's global `-I<workspace>/include` (which does satisfy
-   Meson's own `cc.has_header()` configure-time probe) never reaches `nvcc`
-   for this specific step. Upstream `libvmaf` expects the `ffnvcodec`
-   headers vendored via a git submodule at `libvmaf/include/ffnvcodec`; this
-   project acquires `libvmaf` as a GitHub release tarball
-   (`archive_filename: vmaf-{version}.tar.gz`), which — like all GitHub
-   auto-generated release tarballs — omits submodule content, so that
-   directory is simply absent.
-   **Solution**: `_link_nv_codec_headers_into_source()` symlinks
-   `<workspace>/include/ffnvcodec` → `<libvmaf_dir>/include/ffnvcodec`
-   before Meson configure runs, satisfying `libvmaf`'s own relative-path
-   assumption directly, without patching its `meson.build`.
-
-**Verification**: all three fixes were verified end-to-end (not via manual
-`/tmp` compilation) by invoking the real `FFmpegBuilder` + `build_libvmaf()`
-against the actual `vmaf-3.2.0.tar.gz` release tarball. The resulting
-`libvmaf.a` contains real compiled `.fatbin`-derived CUDA object files
-(confirmed via `nm` showing `cuda_common.c.o` and related symbols), and the
-final FFmpeg binary's `-filters` output lists both `libvmaf` and
-`libvmaf_cuda`.
+Native FFmpeg 8.1 and 9.0 builds have completed with CUDA-enabled libvmaf;
+their binaries list `libvmaf_cuda`. A separate test with forced older NVENC
+headers verified that libvmaf can use the default CUDA headers without
+replacing those installed for FFmpeg. This did not test a physical older
+NVIDIA driver.
 
 ### Known issue: libvmaf uncontrolled memory growth on GCC 16 (RESOLVED, 2026-09-11)
 
@@ -1278,7 +1218,7 @@ detected (auto-skips otherwise). Run with `pytest tests/test_platform_detect.py 
 - **Component versions**: Versions are defined in `components.yaml` (externalized from Python). A future improvement could fetch latest versions from an API or config file.
 - **No dependency graph**: Components are built in a fixed order defined in `components.yaml`. There is no automatic topological sort based on `depends_on`.
 - **Large builder surface still in one module** — `builder.py` remains the main integration point and still contains many component-specific build methods. Shared plumbing has already been split to `build_steps.py`, `component_builders.py`, and `release_bundle.py`; `platforms/` and `patches/` now carry the strategy and source-patch layers, and `builders/` provides the dispatch boundary. Further decomposition should continue in small, behavior-preserving steps.
-- **Intel QSV / NVIDIA CUDA-NVENC detection unverified on real hardware** — The 2026-08-20 hwaccel detection hardening pass (VAAPI/AMF/Vulkan/OpenCL, see CHANGELOG) was validated on an AMD-only/ROCm machine. `_check_qsv()` and `_detect_cuda()`/`nv-codec` gating still have the pre-existing gaps described in `docs/CHANGELOG.md` → "Planned — Intel/NVIDIA hwaccel detection hardening" (no `qsv_reason` diagnostics, no nvcc/gcc toolchain compile-sanity probe reused for base CUDA readiness) and are pending validation on a machine with an Intel Arc A750 + NVIDIA TITAN V.
+- **Hardware validation is not exhaustive** — Native Linux CUDA 12.4 with a TITAN V has been exercised, including CUDA-enabled libvmaf and FFmpeg builds. Other GPU, driver, Toolkit, libc, and cross-build combinations need their own validation; the checked CUDA profile is not a complete sysroot.
 
 ## Code Review & Refactoring Status (2026-08)
 

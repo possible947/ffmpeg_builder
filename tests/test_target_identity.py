@@ -433,6 +433,87 @@ def test_cuda_preparation_reuses_single_g1_probe_for_ptx_validation(tmp_path, mo
     assert session.identity.backend == TARGET_BACKEND_CROSS_MINGW
 
 
+def test_required_cuda_requires_nonfree_permission_before_preparation():
+    import ffmpeg_builder.app as app_module
+    from ffmpeg_builder.build_types import BuildError
+    from ffmpeg_builder.config import BuildConfig
+
+    app = app_module.FFmpegBuilderApp.__new__(app_module.FFmpegBuilderApp)
+    with pytest.raises(BuildError, match="allow_nonfree_cuda"):
+        app.prepare_target(BuildConfig(cuda_build_mode="required"), resume=False)
+
+
+def test_native_cuda_auto_and_required_handle_missing_toolkit(tmp_path, monkeypatch):
+    import ffmpeg_builder.app as app_module
+    from ffmpeg_builder.build_types import BuildError
+    from ffmpeg_builder.config import BuildConfig
+    from ffmpeg_builder.platform_detect import PlatformInfo
+
+    for name in ("CUDA_HOME", "CUDA_PATH", "CUDA_NVCC_CCBIN"):
+        monkeypatch.delenv(name, raising=False)
+    app = app_module.FFmpegBuilderApp.__new__(app_module.FFmpegBuilderApp)
+    app.platform_detector = SimpleNamespace(platform_info=PlatformInfo(is_linux=True))
+    session = SimpleNamespace(notes=[])
+    app._prepare_native_cuda(BuildConfig(), session)
+    assert not app.platform_detector.platform_info.libvmaf_cuda_supported
+    assert "Toolkit not found" in session.notes[0]
+    with pytest.raises(BuildError, match="Toolkit not found"):
+        app._prepare_native_cuda(BuildConfig(cuda_build_mode="required"), SimpleNamespace(notes=[]))
+
+
+def test_native_cuda_falls_back_to_probed_system_compiler_when_mapping_missing(
+    tmp_path, monkeypatch
+):
+    import ffmpeg_builder.app as app_module
+    from ffmpeg_builder.build_types import BuildError
+    from ffmpeg_builder.config import BuildConfig
+    from ffmpeg_builder.cuda_prerequisites import ResolvedCudaBuildHostInputs
+    from ffmpeg_builder.platform_detect import PlatformInfo
+
+    monkeypatch.delenv("CUDA_NVCC_CCBIN", raising=False)
+    inputs = ResolvedCudaBuildHostInputs(
+        cuda_root=tmp_path / "cuda",
+        nvcc_path=tmp_path / "cuda/bin/nvcc",
+        detected_cuda_version="14.0",
+        ccbin_path=tmp_path / "system/gcc",
+        ccbin_profile="external",
+        ccbin_profile_version="",
+        ccbin_provenance={"prefix": str(tmp_path / "system"), "source": "system gcc"},
+        resolution_source="config",
+        diagnostics=(),
+        compute_architecture="compute_70",
+        probe_status="passed",
+    )
+    attempts = []
+
+    def resolve(*args, **kwargs):
+        attempts.append(kwargs)
+        if len(attempts) == 1:
+            raise BuildError("CUDA", "no mapping", code="cuda_host_mapping_missing")
+        return inputs
+
+    monkeypatch.setattr(app_module, "ToolchainRegistry", lambda: None)
+    monkeypatch.setattr(app_module, "ToolchainStore", lambda *args, **kwargs: None)
+    monkeypatch.setattr(app_module.shutil, "which", lambda name: str(inputs.ccbin_path))
+    monkeypatch.setattr(app_module, "resolve_wsl_mingw_cuda_inputs", resolve)
+    monkeypatch.setattr(app_module, "validate_cuda_ptx_compatibility", lambda value, *a, **k: value)
+    monkeypatch.setattr(app_module, "validate_cuda_output_modes", lambda value: value)
+    app = app_module.FFmpegBuilderApp.__new__(app_module.FFmpegBuilderApp)
+    app.platform_detector = SimpleNamespace(platform_info=PlatformInfo(is_linux=True))
+    app.workspace = tmp_path
+    session = SimpleNamespace(notes=[])
+    config = BuildConfig(
+        enable_libvmaf=False,
+        cuda_compute_capability="70",
+        external_prerequisite_paths={"cuda": str(inputs.cuda_root)},
+    )
+    app._prepare_native_cuda(config, session)
+    assert len(attempts) == 2
+    assert attempts[1]["environment"]["CUDA_NVCC_CCBIN"] == str(inputs.ccbin_path)
+    assert attempts[1]["host_override_source"] == "system gcc"
+    assert app.platform_detector.platform_info.cuda_build_host_inputs is inputs
+
+
 def test_vulkan_preparation_keeps_host_sdk_separate_from_windows_runtime(tmp_path, monkeypatch):
     import ffmpeg_builder.app as app_module
     from ffmpeg_builder.config import BuildConfig, TARGET_BACKEND_CROSS_MINGW

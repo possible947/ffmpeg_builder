@@ -73,25 +73,53 @@ major version (e.g. **CUDA 12.2 supports GCC ≤ 12**). Rolling-release distros
 (Fedora, Arch, ...) routinely ship a much newer default GCC and often no
 longer carry the older `gccNN` package needed to match an installed CUDA SDK
 (for example, Fedora 44 ships GCC 16 and has no `gcc12` package). Without a
-compatible host compiler, `nvcc` rejects every CUDA compile before any
-project code is involved, breaking CUDA/NVENC/NVDEC and the `libvmaf` CUDA
-path.
+compatible host compiler, `nvcc` rejects CUDA kernel compilation before any
+project code is involved, blocking FFmpeg CUDA filters and the `libvmaf` CUDA
+path. NVENC/NVDEC do not depend on NVCC compilation.
 
-**Solution**: the builder auto-detects a compatible host compiler in three
-steps (real `nvcc` compile probes, not version-string comparisons): the
-system default compiler, then the `CUDA_NVCC_CCBIN` environment variable, then
-a store-deployed GCC matching the `cuda` table in `toolchains.yaml` (e.g.
-CUDA 12.2 → `gcc12`). If your distro no longer packages the GCC version your
-CUDA SDK needs, deploy it from the built-in toolchain store — no manual
-configuration required (see "Toolchain Store" in `docs/README.md`):
+On native Linux, build preparation selects one Toolkit and compiler and tests
+PTX, object, and fatbin compilation. `CUDA_NVCC_CCBIN` is authoritative when
+set; otherwise a verified store compiler mapped in `toolchains.yaml` is tried
+first, followed by system GCC for eligible mapping or probe failures.
+The same tested NVCC and flags are used by libvmaf and FFmpeg. A narrowly
+matched CUDA 12.4/glibc conflict is retried with `-U_GNU_SOURCE` only for
+NVCC. To provision a mapped compiler:
 
 ```bash
 python scripts/prepare_toolchains.py   # deploys what the system analysis recommends
 ```
 
-Alternatively, set `CUDA_NVCC_CCBIN=/path/to/gccNN` to force a specific
-compiler. See `docs/DeveloperReadme.md` → "Fedora 44+ / modern GCC (≥15) +
-CUDA 12.2 — nvcc host-compiler compatibility" for full detection details.
+Configure CUDA in the TUI or `build_config.yaml`:
+
+```yaml
+cuda_build_mode: auto          # auto, required, or disabled
+cuda_compute_capability: "70"  # optional; otherwise detect via nvidia-smi
+allow_nonfree_cuda: false      # opt in to an unredistributable FFmpeg build
+external_prerequisite_paths:
+  cuda: /opt/cuda-12.4         # optional; otherwise CUDA_HOME/CUDA_PATH or detected nvcc
+```
+
+On native Linux and Linux builds inside WSL2, `auto` reports why CUDA
+compilation is unavailable and continues without it; `required` stops before
+building; `disabled` disables CUDA compilation. Compute capability is chosen
+from `cuda_compute_capability`, then `CUDA_COMPUTE_CAPABILITY`, then detected
+GPUs. There is no fixed fallback: set a target capability when it cannot be
+detected.
+
+FFmpeg's NVCC backend is nonfree; it requires `allow_nonfree_cuda: true` or
+the existing `gpl_enabled: true` setting, which also enables nonfree code in
+this builder. Without that permission, `auto` can still build libvmaf with
+CUDA but disables FFmpeg's NVCC backend. NVENC/NVDEC do not require a working
+NVCC.
+If an older NVIDIA driver selects an older nv-codec release, libvmaf uses
+CUDA driver headers from the registry's default nv-codec archive separately;
+FFmpeg retains the driver-compatible NVENC headers.
+The WSL-Mingw cross backend remains experimental; its current preparation
+checks PTX and uses its separate target/compiler rules. Native NVCC and
+host-compiler paths must not contain whitespace because FFmpeg's configure
+script cannot safely pass such paths. The selected Toolkit, system libc,
+Vulkan loader, and GPU drivers remain external; the profile is not a
+hermetic sysroot and cannot guarantee compatibility with every future update.
 
 ### Python Dependencies
 
@@ -424,6 +452,13 @@ During a build, the live dashboard shows a compact header line (`FFmpeg Builder 
 
 On failure, type `r` to retry, `s` to skip, `a` to abort, or `l` to view the full log when available.
 
+On resume, changed CUDA inputs invalidate completed libvmaf and FFmpeg; a
+change in selected nv-codec headers also invalidates nv-codec. When
+Vulkan-Headers is selected, missing or changed header/registry provenance
+invalidates Vulkan-Headers, libplacebo, and FFmpeg. Unaffected completed
+components can be reused; there is no need to reset the entire workspace for
+these changes.
+
 ### Configuration
 
 Build configuration is stored in `build_config.yaml`:
@@ -437,9 +472,12 @@ full_static: false
 openmp: true
 enable_libvmaf: true
 enable_libvmaf_cuda: true
+cuda_build_mode: auto
+cuda_compute_capability: null  # auto-detect; or set e.g. "70"
+allow_nonfree_cuda: false
 enable_libplacebo_vulkan: false
 target_backend: native
-# WSL-Mingw only (omit to use CUDA_HOME/CUDA_PATH and VULKAN_SDK):
+# Optional SDK roots (vulkan is used by WSL-Mingw preparation):
 # target_backend: linux-cross-mingw
 # external_prerequisite_paths:
 #   cuda: /opt/cuda-12.4
@@ -544,26 +582,39 @@ Build backends are explicit: `linux-native` and `linux-wsl2` are distinct modes 
 
 ### CUDA Notes
 
-- CUDA toolkit must be installed (not just the driver)
+- CUDA kernel compilation requires a CUDA Toolkit; NVENC/NVDEC can also be detected through the installed NVIDIA driver without NVCC.
 - On WSL2, OpenCL is not available through the paravirtualized driver
-- When CUDA is detected, the builder adds: `--enable-cuda-nvcc`, `--enable-cuvid`, `--enable-nvdec`, `--enable-nvenc`, `--enable-cuda-llvm`, `--enable-ffnvcodec`
-- Host-compiler compatibility (GCC vs the CUDA toolkit's max supported GCC version, e.g. CUDA 12.2 → GCC ≤ 12) is auto-detected via a real `nvcc` compile probe, with fallback to `CUDA_NVCC_CCBIN` or a store-deployed GCC from the `cuda` table — see "CUDA toolkit / GCC compatibility" above and `--nvccflags='-ccbin=...'` in the resulting configure line
-- `enable_libvmaf_cuda: true` enables libvmaf CUDA path only when backend is `linux-native` or `linux-wsl2` and an NVCC compile sanity-check passes
+- NVENC/NVDEC use the selected nv-codec headers independently of NVCC. CUDA kernels use `--enable-cuda-nvcc` only with a verified profile and nonfree permission; unverified CUDA LLVM is disabled.
+- `enable_libvmaf_cuda: true` enables the libvmaf CUDA path on `linux-native` or `linux-wsl2` only when the shared CUDA profile passes its probes.
 - For `libvmaf` CUDA builds with `openmp: true`, the builder forwards OpenMP to NVCC host compilation via `NVCC_PREPEND_FLAGS=-Xcompiler=-fopenmp` and removes raw `-fopenmp` from inherited compile/link flags to avoid `nvcc fatal: Unknown option '-fopenmp'`
-- CUDA compute capability is automatically detected via `nvidia-smi` (queries all GPUs and uses the minimum value for compatibility)
-- Priority: `CUDA_COMPUTE_CAPABILITY` environment variable → auto-detection via nvidia-smi → default value 52
-- Example: `export CUDA_COMPUTE_CAPABILITY=75` to override for Turing GPUs
-- The builder passes `--nvccflags=-gencode arch=compute_XX,code=sm_XX -O2` to FFmpeg configure
-- When CUDA is not available, `--disable-ffnvcodec` is added to prevent build failures
-- CUDA include/lib paths are automatically added to the build environment
+- Compute capability priority is config → `CUDA_COMPUTE_CAPABILITY` → `nvidia-smi` detection (minimum across detected GPUs). If none is available, `auto` disables CUDA compilation and `required` fails.
+- FFmpeg receives the selected NVCC, host compiler, compatibility flags, and `compute_XX`/`sm_XX` architecture. The chosen Toolkit supplies include/lib paths and libvmaf's `bin2c`.
+- When neither CUDA nor the NVENC driver API is detected, `--disable-ffnvcodec` is added.
 
 ### Vulkan Notes
 
 - Requires Vulkan SDK or at minimum vulkan-headers and loader
-- The builder compiles vulkan-headers and glslang from source when Vulkan is available
+- The builder installs Vulkan-Headers with the matching `share/vulkan/registry/vk.xml` and builds glslang when Vulkan is available. The Vulkan loader remains external.
+- libplacebo uses the verified workspace headers and registry together, even when a different `VULKAN_SDK` is active. A missing or changed pair is detected on resume when Vulkan-Headers is selected.
 - Adds `--enable-vulkan` to FFmpeg configure. FFmpeg 8.1 also receives
   `--enable-libglslang`; FFmpeg 9.0 omits that removed configure option while retaining
   glslang as a libplacebo dependency
+
+### Checking built features
+
+For a CUDA-enabled build with libplacebo Vulkan enabled, inspect the installed
+binary and configure logs (replace `workspace_81` with `workspace_90` for
+FFmpeg 9.0):
+
+```bash
+workspace_81/bin/ffmpeg -hide_banner -filters | grep -E 'scale_cuda|libvmaf_cuda|libplacebo'
+workspace_81/bin/ffmpeg -hide_banner -encoders | grep h264_nvenc
+grep -F -- '-Denable_cuda=true' workspace_81/logs/libvmaf_configure.log
+grep -F -- '-Dvulkan-registry=' workspace_81/logs/libplacebo_configure.log
+```
+
+These checks confirm build configuration and feature presence, not successful
+execution on a particular GPU or driver.
 
 ### libplacebo Notes
 
@@ -617,6 +668,7 @@ The following environments have been verified to complete a full FFmpeg build:
 
 | Date | OS | Environment | Configuration | Result |
 |------|------|-------------|---------------|--------|
+| 2026-11-12 | Ubuntu 26.04.1 LTS | x86_64, CUDA 12.4.99, GCC 12.5 NVCC host, TITAN V (`compute_70`) | Native builds with CUDA and libplacebo Vulkan | FFmpeg 8.1 and 9.0 completed (44 built and 12 system components each). Both binaries list `scale_cuda`, `libvmaf_cuda`, `libplacebo`, and `h264_nvenc`; feature listing alone does not verify runtime execution. |
 | 2026-08-10 | Fedora Linux 44 | x86_64, GCC 16, Python 3.14 (system), full HW acceleration stack | GPL + non-free, native build, openmp, full HW accel, `make_release: true` | Successful full build of FFmpeg 8.1 (`58/58` components) in **20.5 minutes**. Fresh Python venv, fresh config, full HW acceleration stack (CUDA, Vulkan, OpenCL, AMF, libplacebo). |
 | 2026-08-06 | Fedora Linux 44 (Workstation Edition) | x86_64, Intel Xeon E5-2697A v4 @ 2.60 GHz (dual socket, 128 threads), GCC 16, 188 GiB RAM | GPL + non-free, native build, openmp, libplacebo, AMF, OpenCL, `make_release: true` | Successful full build of FFmpeg 8.1 (`58/58` components) in **~20 minutes** (new record; previous best ~24 min). All video/audio codecs, openssl, libsrt, libzmq, vulkan+glslang+libplacebo, amf, opencl verified. Static libx265.a multi-bitdepth merge confirmed. 28 lib-based encoders + 20 lib-based decoders enabled. |
 | 2026-08-02 | macOS 15.5 (Sequoia) | x86_64, Intel Core i7-6950X, AMD Radeon RX Vega 64 8 GB, LunarG Vulkan SDK 1.4.350.1, MacPorts clang-17 | GPL + non-free, native build, openmp, **libplacebo + Vulkan** (`enable_libplacebo_vulkan: true`) | Successful full build of FFmpeg 8.1 (`56/56` components). HW accels: `videotoolbox`, `opencl`, `vulkan`. libplacebo 7.360.1 with Vulkan GPU backend compiled in. VideoToolbox encode/decode, OpenCL filters, Vulkan filters, libplacebo filter all confirmed present. |
@@ -642,7 +694,7 @@ num_jobs: auto
 
 Verified FFmpeg capabilities included:
 
-- CUDA/NVENC/NVDEC: `--enable-cuda-nvcc`, `--enable-cuvid`, `--enable-nvdec`, `--enable-nvenc`, `--enable-cuda-llvm`, `--enable-ffnvcodec`
+- CUDA/NVENC/NVDEC: verified `--enable-cuda-nvcc` when permitted; `--enable-cuvid`, `--enable-nvdec`, `--enable-nvenc`, `--enable-ffnvcodec` independently.
 - Video codecs: `libx264`, `libx265`, `libvpx`, `libaom`, `libsvtav1`, `libdav1d`, `libxvid`, `libwebp`, `libjxl`, `libzimg`
 - Audio codecs: `libmp3lame`, `libopus`, `libvorbis`, `libtheora`, `libfdk-aac`, `libsoxr`, `libopencore_amrnb`, `libopencore_amrwb`
 - Streaming/protocols: `openssl`, `libsrt`, `libzmq`
@@ -710,7 +762,7 @@ If `libplacebo` was already built, FFmpeg can still fail this check when `libpla
 
 ### `nvcc` rejects the host compiler (Fedora 44+ / GCC ≥ 15 + CUDA 12.2)
 
-CUDA toolkits pin a maximum supported host-compiler major version (CUDA 12.2 → GCC ≤ 12); rolling-release distros like Fedora ship a much newer default GCC and often no longer package the older `gccNN` version needed. The builder auto-detects a compatible compiler (system default → `CUDA_NVCC_CCBIN` → store-deployed GCC from the `cuda` table) and forwards it via `-ccbin`; deploy the matching profile with `python scripts/prepare_toolchains.py` if it is not installed yet.
+CUDA toolkits pin a maximum supported host-compiler major version (CUDA 12.2 → GCC ≤ 12). The builder probes an explicit `CUDA_NVCC_CCBIN`, or a mapped store compiler followed by system GCC, and forwards the verified result via `-ccbin`. Deploy the mapped profile with `python scripts/prepare_toolchains.py` if needed.
 
 ### gettext fails with "expected identifier or '(' before '_Generic'" (GCC ≥ 15)
 

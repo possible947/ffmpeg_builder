@@ -36,9 +36,15 @@ if str(PROJECT_ROOT.parent) not in sys.path:
 from ffmpeg_builder.app import FFmpegBuilderApp, PROJECT_ROOT as APP_ROOT  # noqa: E402
 from ffmpeg_builder.build_types import BuildError, SkipComponent  # noqa: E402
 from ffmpeg_builder.builder import FFmpegBuilder  # noqa: E402
-from ffmpeg_builder.components import PlatformOverride  # noqa: E402
+from ffmpeg_builder.components import Component, PlatformOverride  # noqa: E402
 from ffmpeg_builder.config import BuildConfig  # noqa: E402
-from ffmpeg_builder.state import ComponentStatus  # noqa: E402
+from ffmpeg_builder.cuda_prerequisites import (  # noqa: E402
+    cuda_nv_codec_identity,
+    cuda_profile_identity,
+    invalidate_cuda_resume,
+    validate_required_cuda_components,
+)
+from ffmpeg_builder.state import ComponentState, ComponentStatus  # noqa: E402
 
 assert APP_ROOT == PROJECT_ROOT, "app package root mismatch"
 
@@ -169,6 +175,34 @@ def icx_toolchain_env(components) -> Dict[str, Dict[str, str]]:
 icx_paths: Dict[str, str] = {}
 
 
+def missing_required_cuda_dependencies(
+    config: BuildConfig,
+    selected: List[Component],
+    available: List[Component],
+    states: Dict[str, ComponentState],
+) -> List[str]:
+    """Keep partial ICX builds from omitting required CUDA dependencies."""
+    if config.cuda_build_mode != "required":
+        return []
+    selected_names = {component.name for component in selected}
+    needed = set()
+    if "ffmpeg" in selected_names or ("libvmaf" in selected_names and config.enable_libvmaf_cuda):
+        needed.add("nv-codec")
+    if "ffmpeg" in selected_names and config.enable_libvmaf and config.enable_libvmaf_cuda:
+        needed.add("libvmaf")
+    versions = {component.name: component.version for component in available}
+    missing = []
+    for name in sorted(needed - selected_names):
+        state = states.get(name)
+        if (
+            state is None
+            or state.status not in (ComponentStatus.COMPLETED, ComponentStatus.SYSTEM)
+            or state.version != versions.get(name)
+        ):
+            missing.append(name)
+    return missing
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     global icx_paths
     args = parse_args(argv)
@@ -190,7 +224,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     config.make_release = not args.no_release
     app._sync_workspace(config)
 
+    session = None
+    if not args.dry_run:
+        try:
+            session = app.prepare_target(config, args.resume)
+        except BuildError as exc:
+            print(f"Build preparation blocked: {exc}", file=sys.stderr)
+            return 2
+        for note in session.notes:
+            print(f"NOTE: {note}")
+
     components = app._get_buildable_components(config)
+    all_components = list(components)
     if args.components:
         wanted = {name.strip() for name in args.components.split(",") if name.strip()}
         components = [c for c in components if c.name in wanted]
@@ -206,14 +251,93 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"  {component.name:24s} {component.version:16s} cc=icx")
     if args.dry_run:
         return 0
+    assert session is not None
+    try:
+        validate_required_cuda_components(
+            config, all_components, app.platform_info.cuda_build_host_inputs
+        )
+    except BuildError as exc:
+        print(f"Build preparation blocked: {exc}", file=sys.stderr)
+        return 2
+    nv_codec_identity = cuda_nv_codec_identity(
+        all_components,
+        vmaf_headers=(
+            app.registry.get_nv_codec_component()
+            if app.platform_info.cuda_build_host_inputs
+            and config.enable_libvmaf
+            and config.enable_libvmaf_cuda
+            else None
+        ),
+    )
 
     if args.resume:
+        from ffmpeg_builder.builders.graphics.vulkan_headers import invalidate_vulkan_resume
+
+        prior_placebo = app.state_manager.get().components.get("libplacebo")
+        had_placebo = prior_placebo is not None and prior_placebo.status in (
+            ComponentStatus.COMPLETED,
+            ComponentStatus.SYSTEM,
+        )
+        invalidate_vulkan_resume(app.state_manager, app.workspace, all_components)
+        prior_vmaf = app.state_manager.get().components.get("libvmaf")
+        had_vmaf = prior_vmaf is not None and prior_vmaf.status in (
+            ComponentStatus.COMPLETED,
+            ComponentStatus.SYSTEM,
+        )
+        invalidate_cuda_resume(
+            app.state_manager,
+            app.platform_info.cuda_build_host_inputs,
+            libvmaf_cuda=config.enable_libvmaf and config.enable_libvmaf_cuda,
+            ffmpeg_cuda=config.gpl_enabled or config.allow_nonfree_cuda,
+            nv_codec=nv_codec_identity,
+        )
+        if (
+            args.components
+            and had_vmaf
+            and app.state_manager.get().components["libvmaf"].status == ComponentStatus.PENDING
+            and any(c.name == "ffmpeg" for c in components)
+            and not any(c.name == "libvmaf" for c in components)
+        ):
+            print("CUDA inputs changed: include libvmaf when rebuilding ffmpeg", file=sys.stderr)
+            return 1
+        nv_codec_state = app.state_manager.get().components.get("nv-codec")
+        if (
+            args.components
+            and nv_codec_state is not None
+            and nv_codec_state.status == ComponentStatus.PENDING
+            and any(c.name == "nv-codec" for c in all_components)
+            and any(c.name in ("libvmaf", "ffmpeg") for c in components)
+            and not any(c.name == "nv-codec" for c in components)
+        ):
+            print("CUDA inputs changed: include nv-codec in the rebuild", file=sys.stderr)
+            return 1
+        if (
+            args.components
+            and had_placebo
+            and app.state_manager.get().components["libplacebo"].status == ComponentStatus.PENDING
+            and any(c.name == "ffmpeg" for c in components)
+            and not any(c.name == "libplacebo" for c in components)
+        ):
+            print(
+                "Vulkan inputs changed: include libplacebo when rebuilding ffmpeg", file=sys.stderr
+            )
+            return 1
+        missing_cuda = missing_required_cuda_dependencies(
+            config, components, all_components, app.state_manager.get().components
+        )
+        if args.components and missing_cuda:
+            print(f"Include required CUDA dependencies: {', '.join(missing_cuda)}", file=sys.stderr)
+            return 1
         resume_point = app.state_manager.get_resume_point()
         if resume_point:
             idx = next((i for i, c in enumerate(components) if c.name == resume_point), 0)
             components = components[idx:]
             print(f"Resuming from {resume_point} ({len(components)} remaining)")
     else:
+        missing_cuda = missing_required_cuda_dependencies(config, components, all_components, {})
+        if args.components and missing_cuda:
+            print(f"Include required CUDA dependencies: {', '.join(missing_cuda)}", file=sys.stderr)
+            return 1
         app.state_manager.reset()
 
     builder = FFmpegBuilder(
@@ -229,7 +353,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     state = app.state_manager.get()
     state.config = config.to_dict()
     state.total_steps = len(components)
+    state.cuda_profile = cuda_profile_identity(
+        app.platform_info.cuda_build_host_inputs,
+        libvmaf_cuda=config.enable_libvmaf and config.enable_libvmaf_cuda,
+        ffmpeg_cuda=config.gpl_enabled or config.allow_nonfree_cuda,
+        nv_codec=nv_codec_identity,
+    )
     app.state_manager.save()
+    session.stamp(app.state_manager)
 
     completed = 0
     for position, component in enumerate(components, 1):

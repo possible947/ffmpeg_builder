@@ -6,7 +6,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -714,7 +713,9 @@ class PlatformDetector:
             self.platform_info.cuda_path = nvcc_path
             self._detect_cuda_version(nvcc_path)
             self._detect_cuda_compute_capability()
-            self._detect_cuda_nvcc_support(nvcc_path)
+            self.platform_info.cuda_nvcc_reason = (
+                "CUDA profile validation is deferred until build preparation."
+            )
             return
 
         # Try common Linux CUDA installation paths
@@ -740,7 +741,9 @@ class PlatformDetector:
                 self.platform_info.cuda_path = str(nvcc)
                 self._detect_cuda_version(str(nvcc))
                 self._detect_cuda_compute_capability()
-                self._detect_cuda_nvcc_support(str(nvcc))
+                self.platform_info.cuda_nvcc_reason = (
+                    "CUDA profile validation is deferred until build preparation."
+                )
                 return
 
     def _detect_cross_mingw_cuda(self) -> None:
@@ -880,126 +883,6 @@ class PlatformDetector:
 
         self.platform_info.libvmaf_cuda_supported = True
         self.platform_info.libvmaf_cuda_reason = "Supported"
-
-    def _detect_cuda_nvcc_support(self, nvcc_path: str) -> None:
-        """Detect whether nvcc can build CUDA sources on this host.
-
-        CUDA toolkits pin a maximum-supported host-compiler major version
-        (e.g. CUDA 12.2 supports gcc up to 12), which rolling-release distros
-        like Fedora routinely exceed. The system default compiler is probed
-        first, then an explicit ``CUDA_NVCC_CCBIN`` override is honoured. When
-        nvcc rejects the system compiler, the registry's ``cuda`` table is
-        consulted for the mapped host-compiler profile given the detected CUDA
-        Toolkit version (this requires the detector to know the
-        toolchain-store root; without a store the table cannot be applied).
-        The winning ``-ccbin`` path is stored in ``nvcc_ccbin`` for callers to
-        forward to nvcc invocations. There is no automatic discovery of
-        alternative host compilers.
-        """
-        self.platform_info.nvcc_ccbin = None
-        self.platform_info.nvcc_ccbin_reason = ""
-        self.platform_info.cuda_nvcc_supported = False
-        self.platform_info.cuda_nvcc_reason = ""
-
-        override = os.environ.get("CUDA_NVCC_CCBIN")
-        if override:
-            if self._probe_nvcc_compile(nvcc_path, ccbin=override):
-                self.platform_info.nvcc_ccbin = override
-                self.platform_info.nvcc_ccbin_reason = (
-                    "Overridden via CUDA_NVCC_CCBIN environment variable"
-                )
-                self.platform_info.cuda_nvcc_supported = True
-                self.platform_info.cuda_nvcc_reason = self.platform_info.nvcc_ccbin_reason
-            else:
-                self.platform_info.cuda_nvcc_reason = (
-                    f"CUDA_NVCC_CCBIN='{override}' failed the nvcc compile sanity-check"
-                )
-            return
-
-        if self._probe_nvcc_compile(nvcc_path):
-            self.platform_info.cuda_nvcc_supported = True
-            self.platform_info.cuda_nvcc_reason = "System default host compiler is nvcc-compatible"
-            return
-
-        store_ccbin = self._store_cuda_host_compiler()
-        if store_ccbin and self._probe_nvcc_compile(nvcc_path, ccbin=store_ccbin):
-            self.platform_info.nvcc_ccbin = store_ccbin
-            self.platform_info.nvcc_ccbin_reason = (
-                f"Resolved from toolchain store for CUDA {self.platform_info.cuda_version}"
-            )
-            self.platform_info.cuda_nvcc_supported = True
-            self.platform_info.cuda_nvcc_reason = self.platform_info.nvcc_ccbin_reason
-            return
-
-        self.platform_info.cuda_nvcc_reason = (
-            "nvcc rejected the system host compiler (likely too new for this CUDA "
-            "toolkit); set CUDA_NVCC_CCBIN to a compatible compiler (for example a "
-            "toolchain deployed into the toolchain store)"
-        )
-
-    def _store_cuda_host_compiler(self) -> Optional[str]:
-        """Resolve the CUDA host compiler via the registry ``cuda`` table.
-
-        Returns the store-installed ``CC`` for the profile mapped to the
-        detected CUDA Toolkit version, or ``None`` when no store root is
-        configured, the version is unmapped, or the profile is not installed.
-        """
-        from .toolchain_registry import ToolchainRegistry
-        from .toolchain_store import ToolchainStore
-
-        store_root = self._toolchain_store_root()
-        cuda_version = self.platform_info.cuda_version
-        if store_root is None or not cuda_version:
-            return None
-        try:
-            registry = ToolchainRegistry()
-        except (OSError, ValueError):
-            return None
-        return ToolchainStore(store_root).cuda_host_compiler(registry, cuda_version)
-
-    def _toolchain_store_root(self) -> Optional[Path]:
-        """Locate the persistent toolchain store, if configured.
-
-        The default layout is ``toolchains/`` next to the package root (flat
-        layout); ``FFMPEG_BUILDER_TOOLCHAINS`` overrides the location.
-        """
-        override = os.environ.get("FFMPEG_BUILDER_TOOLCHAINS")
-        if override:
-            candidate = Path(override)
-            return candidate if candidate.is_dir() else None
-        candidate = Path(__file__).resolve().parent / "toolchains"
-        return candidate if candidate.is_dir() else None
-
-    def _probe_nvcc_compile(self, nvcc_path: str, ccbin: Optional[str] = None) -> bool:
-        """Check whether nvcc can compile a minimal CUDA source file.
-
-        Args:
-            nvcc_path: Path to the nvcc executable.
-            ccbin: Optional host compiler path to pass via ``-ccbin``.
-        """
-        try:
-            with tempfile.TemporaryDirectory(prefix="nvcc-probe-") as temp_dir:
-                temp_path = Path(temp_dir)
-                source_file = temp_path / "probe.cu"
-                output_file = temp_path / "probe.o"
-                source_file.write_text(
-                    "__global__ void kernel() {}\nint main() { kernel<<<1,1>>>(); return 0; }\n",
-                    encoding="utf-8",
-                )
-
-                cmd = [nvcc_path]
-                if ccbin:
-                    cmd.append(f"-ccbin={ccbin}")
-                cmd += ["-c", str(source_file), "-o", str(output_file)]
-
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    timeout=20,
-                )
-                return result.returncode == 0
-        except Exception:
-            return False
 
     def _check_wsl2(self) -> bool:
         """Check if running in WSL2 environment.

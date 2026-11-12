@@ -1,8 +1,10 @@
 """Tests for builder module split compatibility."""
 
 import json
+import io
 import os
 import shutil
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -97,29 +99,126 @@ def test_standard_runners_module_exports():
     assert isinstance(CARGO_C_VERSION, str)
 
 
-def test_install_headers_only_copies_vulkan_headers(tmp_path: Path):
-    from ffmpeg_builder.builders.base import ComponentBuildContext, install_headers_only
+def _install_test_vulkan_headers(builder: FFmpegBuilder, tmp_path: Path) -> None:
+    from ffmpeg_builder.builders.graphics.vulkan_headers import record_vulkan_headers
+
+    source = tmp_path / "test-vulkan-source"
+    for relative in (
+        "include/vulkan/vulkan.h",
+        "include/vulkan/vulkan_core.h",
+        "include/vk_video/video.h",
+        "registry/vk.xml",
+    ):
+        path = source / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(relative, encoding="utf-8")
+    shutil.copytree(source / "include", builder.workspace / "include", dirs_exist_ok=True)
+    registry = builder.workspace / "share" / "vulkan" / "registry"
+    registry.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source / "registry" / "vk.xml", registry / "vk.xml")
+    component = builder.registry.get_by_name("vulkan-headers")
+    assert component is not None
+    record_vulkan_headers(builder.workspace, source, component)
+
+
+@pytest.mark.parametrize(
+    "relative", ["share/vulkan/registry/vk.xml", "include/vulkan/vulkan_core.h"]
+)
+def test_vulkan_manifest_detects_changed_registry_and_headers(tmp_path: Path, relative: str):
+    from ffmpeg_builder.builders.graphics.vulkan_headers import vulkan_headers_valid
 
     builder = _make_libplacebo_builder(tmp_path, platform="darwin")
-    component = Component(
-        name="vulkan-headers",
-        version="1.4.357.0",
-        url="https://example.invalid/vulkan.tar.gz",
-        category=ComponentCategory.HW_ACCEL,
-        build_system=BuildSystem.HEADERS_ONLY,
+    component = builder.registry.get_by_name("vulkan-headers")
+    assert component is not None
+    _install_test_vulkan_headers(builder, tmp_path)
+    assert vulkan_headers_valid(builder.workspace, component)
+    (builder.workspace / relative).write_text("different", encoding="utf-8")
+    assert not vulkan_headers_valid(builder.workspace, component)
+
+
+def test_vulkan_resume_invalidates_completed_dependents(tmp_path: Path):
+    from ffmpeg_builder.builders.graphics.vulkan_headers import invalidate_vulkan_resume
+
+    builder = _make_libplacebo_builder(tmp_path)
+    component = builder.registry.get_by_name("vulkan-headers")
+    assert component is not None
+    for name in ("vulkan-headers", "libplacebo", "ffmpeg", "glslang"):
+        builder.state_manager.mark_component_status(name, ComponentStatus.COMPLETED, "1")
+    invalidate_vulkan_resume(builder.state_manager, builder.workspace, [component])
+    states = builder.state_manager.get().components
+    assert all(
+        states[name].status == ComponentStatus.PENDING
+        for name in ("vulkan-headers", "libplacebo", "ffmpeg")
     )
-    source_dir = tmp_path / "Vulkan-Headers"
-    vulkan_dir = source_dir / "include" / "vulkan"
-    vk_video_dir = source_dir / "include" / "vk_video"
-    vulkan_dir.mkdir(parents=True)
-    vk_video_dir.mkdir(parents=True)
-    (vulkan_dir / "vulkan.h").write_text("#pragma once\n", encoding="utf-8")
-    (vk_video_dir / "vulkan_video_codecs_common.h").write_text("#pragma once\n", encoding="utf-8")
+    assert states["glslang"].status == ComponentStatus.COMPLETED
 
-    install_headers_only(ComponentBuildContext.from_builder(builder), component, source_dir)
 
-    assert (builder.workspace / "include" / "vulkan" / "vulkan.h").is_file()
-    assert (builder.workspace / "include" / "vk_video" / "vulkan_video_codecs_common.h").is_file()
+def test_vulkan_resume_keeps_verified_components(tmp_path: Path):
+    from ffmpeg_builder.builders.graphics.vulkan_headers import invalidate_vulkan_resume
+
+    builder = _make_libplacebo_builder(tmp_path)
+    component = builder.registry.get_by_name("vulkan-headers")
+    assert component is not None
+    _install_test_vulkan_headers(builder, tmp_path)
+    for name in ("vulkan-headers", "libplacebo", "ffmpeg"):
+        builder.state_manager.mark_component_status(name, ComponentStatus.COMPLETED, "1")
+    invalidate_vulkan_resume(builder.state_manager, builder.workspace, [component])
+    assert all(
+        builder.state_manager.get().components[name].status == ComponentStatus.COMPLETED
+        for name in ("vulkan-headers", "libplacebo", "ffmpeg")
+    )
+
+
+def test_headless_resume_rebuilds_incomplete_vulkan_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    import importlib.util
+    from types import SimpleNamespace
+
+    script_path = Path(__file__).resolve().parents[1] / "scripts" / "run_build.py"
+    spec = importlib.util.spec_from_file_location("run_build_vulkan_test", script_path)
+    assert spec and spec.loader
+    script = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(script)
+
+    builder = _make_libplacebo_builder(tmp_path, platform="linux")
+    components = [
+        builder.registry.get_by_name(name) for name in ("vulkan-headers", "libplacebo", "ffmpeg")
+    ]
+    assert all(components)
+    for component in components:
+        builder.state_manager.mark_component_status(
+            component.name, ComponentStatus.COMPLETED, component.version
+        )
+    builder.state_manager.mark_component_status("ffmpeg", ComponentStatus.FAILED)
+    built = []
+
+    class FakeBuilder:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def prefetch_downloads(self, components):
+            pass
+
+        def build_component(self, component):
+            built.append(component.name)
+
+        def shutdown_downloads(self, wait=False):
+            pass
+
+    monkeypatch.setattr(script, "FFmpegBuilder", FakeBuilder)
+    app = SimpleNamespace(
+        workspace=builder.workspace,
+        packages=builder.packages,
+        state_manager=builder.state_manager,
+        platform_detector=builder.platform_detector,
+        _get_buildable_components=lambda config: components,
+        _component_toolchain_env=lambda config, components: {},
+        prepare_target=lambda config, resume: SimpleNamespace(notes=[], stamp=lambda state: None),
+        recheck_target_runtime=lambda config, session: None,
+    )
+    assert script.run_build(app, builder.config, resume=True, no_release=True) == 0
+    assert built == ["vulkan-headers", "libplacebo", "ffmpeg"]
 
 
 def test_build_component_marks_headers_only_completed(
@@ -127,22 +226,39 @@ def test_build_component_marks_headers_only_completed(
 ):
     builder = _make_libplacebo_builder(tmp_path, platform="darwin")
     component = Component(
-        name="vulkan-headers",
+        name="fast-float",
         version="1.4.357.0",
         url="https://example.invalid/vulkan.tar.gz",
         category=ComponentCategory.HW_ACCEL,
         build_system=BuildSystem.HEADERS_ONLY,
     )
     source_dir = builder.packages / component.get_target_dir()
-    header_dir = source_dir / "include" / "vulkan"
+    header_dir = source_dir / "include" / "fast_float"
     header_dir.mkdir(parents=True)
-    (header_dir / "vulkan.h").write_text("#pragma once\n", encoding="utf-8")
+    (header_dir / "fast_float.h").write_text("#pragma once\n", encoding="utf-8")
     monkeypatch.setattr(builder, "_download_and_extract", lambda component: tmp_path / "archive")
 
     builder.build_component(component)
 
-    state = builder.state_manager.get().components["vulkan-headers"]
+    state = builder.state_manager.get().components["fast-float"]
     assert state.status == ComponentStatus.COMPLETED
+
+
+def test_vulkan_cmake_uses_native_workspace_path_on_windows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from ffmpeg_builder.builders import base
+
+    builder = _make_libplacebo_builder(tmp_path, platform="windows")
+    component = builder.registry.get_by_name("vulkan-headers")
+    assert component is not None
+    source = tmp_path / "source"
+    source.mkdir()
+    commands = []
+    monkeypatch.setattr(builder, "_ws_str", lambda: "/different/msys/path")
+    monkeypatch.setattr(base, "run_step", lambda *args: commands.append(args[5]))
+    base.build_cmake(base.ComponentBuildContext.from_builder(builder), component, source)
+    assert f"-DCMAKE_INSTALL_PREFIX={builder.workspace.as_posix()}" in commands[0]
 
 
 def test_release_bundle_wrapper_creates_manifest(tmp_path: Path):
@@ -754,6 +870,7 @@ def test_build_ffmpeg_links_libjxl_threads_with_darwin_cxx_runtime(
     builder = _make_libplacebo_builder(tmp_path, platform="darwin")
     component = _make_patch_component("ffmpeg")
     source_dir = tmp_path / "ffmpeg"
+    source_dir.mkdir()
     builder.state_manager.mark_component_status("libjxl", ComponentStatus.COMPLETED)
     builder.registry.get_ffmpeg_configure_flags = lambda *args: []
     monkeypatch.setattr(FFmpegBuilder, "_run_make", lambda *args: None)
@@ -784,6 +901,7 @@ def test_build_ffmpeg_omits_libplacebo_without_vulkan(
     builder.config.enable_libplacebo_vulkan = False
     component = _make_patch_component("ffmpeg")
     source_dir = tmp_path / "ffmpeg"
+    source_dir.mkdir()
     builder.state_manager.mark_component_status("libplacebo", ComponentStatus.COMPLETED)
     builder.registry.get_ffmpeg_configure_flags = lambda *args: [
         "--enable-vulkan",
@@ -813,9 +931,8 @@ def test_build_libplacebo_merges_windows_pkg_config_path_and_patches_glslang(
     builder = _make_libplacebo_builder(tmp_path, platform="windows")
     component = _make_libplacebo_component()
     source_dir = tmp_path / "src"
-    vulkan_header = builder.workspace / "include" / "vulkan" / "vulkan.h"
-    vulkan_header.parent.mkdir(parents=True, exist_ok=True)
-    vulkan_header.write_text("#pragma once\n", encoding="utf-8")
+    _install_test_vulkan_headers(builder, tmp_path)
+    monkeypatch.setattr(builder, "_ws_str", lambda: "/different/msys/path")
     glsl_meson = source_dir / "src" / "glsl" / "meson.build"
     glsl_meson.parent.mkdir(parents=True, exist_ok=True)
     glsl_meson.write_text(
@@ -844,6 +961,7 @@ def test_build_libplacebo_merges_windows_pkg_config_path_and_patches_glslang(
     ):
         if step_name == "configure":
             captured_env["value"] = dict(env)
+            captured_env["command"] = command
         return object(), tmp_path / f"{step_name}.log"
 
     monkeypatch.setattr(FFmpegBuilder, "_run_step", _run_step)
@@ -861,6 +979,14 @@ def test_build_libplacebo_merges_windows_pkg_config_path_and_patches_glslang(
     assert env["PKG_CONFIG_PATH"].startswith(expected_prefix)
     assert "C:/deps/pkgconfig" in env["PKG_CONFIG_PATH"]
     assert "dirs: vulkan_lib_dirs" in glsl_meson.read_text(encoding="utf-8")
+    assert (
+        f"-Dvulkan-registry={builder.workspace.as_posix()}/share/vulkan/registry/vk.xml"
+        in captured_env["command"]
+    )
+    assert f"--prefix={builder.workspace.as_posix()}" in captured_env["command"]
+    bundled = source_dir / "3rdparty/Vulkan-Headers"
+    assert (bundled / "include/vulkan/vulkan_core.h").is_file()
+    assert (bundled / "registry/vk.xml").read_text() == "registry/vk.xml"
 
 
 def test_build_libplacebo_installs_vulkan_headers_when_missing(
@@ -889,9 +1015,7 @@ def test_build_libplacebo_installs_vulkan_headers_when_missing(
 
     def _build_component(component):
         built.append(component.name)
-        header = builder.workspace / "include" / "vulkan" / "vulkan.h"
-        header.parent.mkdir(parents=True, exist_ok=True)
-        header.write_text("#pragma once\n", encoding="utf-8")
+        _install_test_vulkan_headers(builder, tmp_path)
 
     monkeypatch.setattr(builder, "build_component", _build_component)
     monkeypatch.setattr(FFmpegBuilder, "_run_step", lambda *args, **kwargs: None)
@@ -908,9 +1032,7 @@ def test_build_libplacebo_fails_when_glslang_patch_target_is_missing(
     builder = _make_libplacebo_builder(tmp_path, platform="windows")
     component = _make_libplacebo_component()
     source_dir = tmp_path / "src"
-    vulkan_header = builder.workspace / "include" / "vulkan" / "vulkan.h"
-    vulkan_header.parent.mkdir(parents=True, exist_ok=True)
-    vulkan_header.write_text("#pragma once\n", encoding="utf-8")
+    _install_test_vulkan_headers(builder, tmp_path)
     glsl_meson = source_dir / "src" / "glsl" / "meson.build"
     glsl_meson.parent.mkdir(parents=True, exist_ok=True)
     glsl_meson.write_text("project('libplacebo')\n", encoding="utf-8")
@@ -931,6 +1053,29 @@ def test_build_libplacebo_fails_when_glslang_patch_target_is_missing(
 
     with pytest.raises(BuildError, match="Expected glslang lookup pattern"):
         builder.build_libplacebo(component, source_dir)
+
+
+def test_build_libplacebo_rejects_conflicting_bundled_vulkan_headers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    builder = _make_libplacebo_builder(tmp_path, platform="windows")
+    _install_test_vulkan_headers(builder, tmp_path)
+    source_dir = tmp_path / "src"
+    bundled = source_dir / "3rdparty" / "Vulkan-Headers" / "include" / "vulkan"
+    bundled.mkdir(parents=True)
+    (bundled / "vulkan.h").write_text("different", encoding="utf-8")
+    monkeypatch.setattr(
+        FFmpegBuilder,
+        "_prepend_python_module_parent_to_pythonpath",
+        staticmethod(lambda env, module_name: None),
+    )
+    monkeypatch.setattr(
+        builder.executor,
+        "execute_with_log",
+        lambda *args: (type("Result", (), {"success": True})(), tmp_path / "log"),
+    )
+    with pytest.raises(BuildError, match="Conflicting bundled Vulkan-Headers"):
+        builder.build_libplacebo(_make_libplacebo_component(), source_dir)
 
 
 def _make_patch_component(name: str = "x265") -> Component:
@@ -1050,6 +1195,125 @@ def test_build_libvmaf_disables_tests_and_docs_in_meson(
     configure_cmd = next(cmd for step, cmd in executed_commands if step == "configure")
     assert "-Denable_tests=false" in configure_cmd
     assert "-Denable_docs=false" in configure_cmd
+
+
+def test_vmaf_and_ffmpeg_share_cuda_profile_and_clean_stale_builds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from ffmpeg_builder.builders.graphics.vmaf import build_libvmaf
+    from ffmpeg_builder.builders.ffmpeg.ffmpeg import build_ffmpeg
+    from ffmpeg_builder.cuda_prerequisites import ResolvedCudaBuildHostInputs
+
+    builder = _make_libplacebo_builder(tmp_path, platform="linux")
+    builder.config.openmp = True
+    inputs = ResolvedCudaBuildHostInputs(
+        cuda_root=tmp_path / "cuda",
+        nvcc_path=tmp_path / "cuda/bin/nvcc",
+        detected_cuda_version="12.4",
+        ccbin_path=tmp_path / "gcc/bin/gcc",
+        ccbin_profile="gcc12",
+        ccbin_profile_version="12",
+        ccbin_provenance={"prefix": str(tmp_path / "gcc")},
+        resolution_source="config",
+        diagnostics=(),
+        compute_architecture="compute_70",
+        probe_status="passed",
+        compatibility_workaround="-Xcompiler=-U_GNU_SOURCE",
+    )
+    pi = builder.platform_detector.platform_info
+    pi.cuda_available = True
+    pi.cuda_build_host_inputs = inputs
+    builder.registry.get_ffmpeg_configure_flags = lambda *args: []
+    vmaf_source = tmp_path / "vmaf-src"
+    ffmpeg_source = tmp_path / "ffmpeg-src"
+    (vmaf_source / "build" / "meson-private").mkdir(parents=True)
+    (vmaf_source / "build" / "meson-private" / "coredata.dat").touch()
+    (ffmpeg_source / "ffbuild").mkdir(parents=True)
+    (ffmpeg_source / "ffbuild" / "config.mak").touch()
+    calls = []
+
+    def run_step(component, status, detail, error, command, step, cwd, env):
+        calls.append((component.name, step, command, env.copy()))
+
+    monkeypatch.setattr(builder, "_run_step", run_step)
+    build_libvmaf(builder, _make_patch_component("libvmaf"), vmaf_source)
+    build_ffmpeg(builder, _make_patch_component("ffmpeg"), ffmpeg_source)
+
+    _, _, vmaf_command, vmaf_env = next(c for c in calls if c[0:2] == ("libvmaf", "configure"))
+    assert "--wipe" in vmaf_command and "-Denable_cuda=true" in vmaf_command
+    assert vmaf_env["CUDACXX"] == str(inputs.nvcc_path)
+    assert str(inputs.cuda_root / "bin") == vmaf_env["PATH"].split(os.pathsep)[0]
+    for flag in inputs.common_flags():
+        assert flag in vmaf_env["NVCC_PREPEND_FLAGS"]
+    assert "-gencode=arch=compute_70,code=sm_70" in vmaf_env["NVCC_PREPEND_FLAGS"]
+    assert "-Xcompiler=-fopenmp" in vmaf_env["NVCC_PREPEND_FLAGS"]
+    assert any(c[0:2] == ("ffmpeg", "clean") for c in calls)
+    _, _, ffmpeg_command, ffmpeg_env = next(c for c in calls if c[0:2] == ("ffmpeg", "configure"))
+    assert f"--nvcc={inputs.nvcc_path}" in ffmpeg_command
+    assert "--enable-cuda-nvcc" in ffmpeg_command
+    assert "--disable-cuda-llvm" in ffmpeg_command
+    nvccflags = next(arg for arg in ffmpeg_command if arg.startswith("--nvccflags="))
+    for flag in inputs.common_flags():
+        assert flag in nvccflags
+    assert "compute_70" in nvccflags and "--ptx" not in nvccflags
+    assert ffmpeg_env["NVCC_PREPEND_FLAGS"] == ""
+
+    builder.config.gpl_enabled = False
+    calls.clear()
+    build_ffmpeg(builder, _make_patch_component("ffmpeg"), ffmpeg_source)
+    command = next(c[2] for c in calls if c[0:2] == ("ffmpeg", "configure"))
+    assert "--disable-cuda-nvcc" in command
+    assert "--enable-nvenc" in command
+    assert "--enable-nonfree" not in command
+
+    builder.config.allow_nonfree_cuda = True
+    calls.clear()
+    build_ffmpeg(builder, _make_patch_component("ffmpeg"), ffmpeg_source)
+    command = next(c[2] for c in calls if c[0:2] == ("ffmpeg", "configure"))
+    assert "--enable-cuda-nvcc" in command
+    assert "--enable-nonfree" in command
+
+    pi.nvenc_api_version = "12.2"
+    archive_path = tmp_path / "nv-codec-13.tar.gz"
+    default = builder.registry.get_nv_codec_component()
+    with tarfile.open(archive_path, "w:gz") as archive:
+        for name in ("dynlink_cuda.h", "dynlink_loader.h"):
+            contents = f"latest-{name}".encode()
+            info = tarfile.TarInfo(f"{default.get_target_dir()}/include/ffnvcodec/{name}")
+            info.size = len(contents)
+            archive.addfile(info, io.BytesIO(contents))
+    monkeypatch.setattr(builder.downloader, "download", lambda *args, **kwargs: archive_path)
+    old_driver_source = tmp_path / "old-driver-vmaf"
+    old_driver_source.mkdir()
+    calls.clear()
+    build_libvmaf(builder, _make_patch_component("libvmaf"), old_driver_source)
+    private = old_driver_source / ".ffmpeg-builder-cuda-headers" / "include" / "ffnvcodec"
+    assert (old_driver_source / "include" / "ffnvcodec").resolve() == private
+    assert (private / "dynlink_loader.h").read_text() == "latest-dynlink_loader.h"
+    vmaf_env = next(c[3] for c in calls if c[0:2] == ("libvmaf", "configure"))
+    assert f"-I{private.parent}" in vmaf_env["CFLAGS"]
+
+
+@pytest.mark.parametrize("toolkit_detected", [False, True])
+def test_ffmpeg_keeps_nvenc_without_a_cuda_compiler_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, toolkit_detected: bool
+):
+    from ffmpeg_builder.builders.ffmpeg.ffmpeg import build_ffmpeg
+
+    builder = _make_libplacebo_builder(tmp_path, platform="linux")
+    builder.platform_detector.platform_info.cuda_available = toolkit_detected
+    builder.platform_detector.platform_info.nvenc_api_version = "12.2"
+    builder.registry.get_ffmpeg_configure_flags = lambda *args: []
+    source = tmp_path / "ffmpeg-src"
+    source.mkdir()
+    calls = []
+    monkeypatch.setattr(builder, "_run_step", lambda *args: calls.append(args))
+    build_ffmpeg(builder, _make_patch_component("ffmpeg"), source)
+    command = next(args[4] for args in calls if args[5] == "configure")
+    assert "--enable-nvenc" in command
+    assert "--disable-cuda-nvcc" in command
+    assert "--disable-cuda-llvm" in command
+    assert "--enable-cuda-llvm" not in command
 
 
 def _linux_bundle_builder(tmp_path: Path, ldd_target: Path, resolved_dir: str):

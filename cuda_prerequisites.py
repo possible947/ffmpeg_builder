@@ -1,12 +1,14 @@
 """WSL-Mingw CUDA SDK and project-managed NVCC host compiler resolution."""
 
 import os
+import json
 import re
+import shlex
 import subprocess
 import tempfile
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any, Iterable, Mapping, Optional
 
 from .build_types import (
     CATEGORY_CUDA_COMPATIBILITY,
@@ -26,6 +28,15 @@ from .toolchain_store import STATUS_ABSENT, STATUS_COMPATIBLE, ToolchainStore
 from .windows_probe import FeatureState, WindowsTargetState
 
 CUDA_ENVIRONMENT_VARIABLES = ("CUDA_HOME", "CUDA_PATH")
+
+
+def _nvcc_probe_environment(root: Path) -> dict[str, str]:
+    environment = dict(os.environ)
+    for name in ("NVCC_PREPEND_FLAGS", "NVCC_APPEND_FLAGS", "CUDA_NVCC_CCBIN"):
+        environment.pop(name, None)
+    environment["CUDA_HOME"] = str(root)
+    environment["CUDA_PATH"] = str(root)
+    return environment
 
 
 @dataclass(frozen=True)
@@ -48,6 +59,15 @@ class ResolvedCudaBuildHostInputs:
     compatibility_workaround: Optional[str] = None
     ccbin_version: Optional[str] = None
     probe_diagnostics: tuple[str, ...] = ()
+
+    def common_flags(self) -> tuple[str, ...]:
+        """Flags shared by PTX, object and fatbin compilation."""
+        if self.probe_status != "passed":
+            raise ValueError("CUDA profile has not passed its compatibility probe")
+        flags: tuple[str, ...] = (f"-ccbin={self.ccbin_path}",)
+        if self.compatibility_workaround:
+            flags += (self.compatibility_workaround,)
+        return flags
 
     def to_dict(self) -> dict[str, Any]:
         """Return a serialization-friendly diagnostic representation."""
@@ -93,7 +113,11 @@ def _validate_cuda_root(root: Path) -> ExternalPrerequisiteValidation:
 
     try:
         result = subprocess.run(
-            [str(nvcc), "--version"], capture_output=True, text=True, timeout=10
+            [str(nvcc), "--version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            env=_nvcc_probe_environment(root),
         )
     except (OSError, subprocess.SubprocessError) as exc:
         return ExternalPrerequisiteValidation(
@@ -138,8 +162,10 @@ def resolve_wsl_mingw_cuda_inputs(
     *,
     required: bool = True,
     environment: Optional[Mapping[str, str]] = None,
+    allow_host_override: bool = False,
+    host_override_source: str = "CUDA_NVCC_CCBIN",
 ) -> Optional[ResolvedCudaBuildHostInputs]:
-    """Resolve CUDA from its configured root and GCC only from ToolchainStore."""
+    """Resolve CUDA and its host compiler, with optional native-only override."""
     external = resolve_external_prerequisite(
         "cuda",
         config.external_prerequisite_paths.get("cuda"),
@@ -158,6 +184,39 @@ def resolve_wsl_mingw_cuda_inputs(
         f"CUDA {version} at {external.root}, NVCC {nvcc_path} (resolved from "
         f"{external.diagnostic_metadata['environment_variable'] or RESOLUTION_CONFIG})"
     )
+    env_values = os.environ if environment is None else environment
+    override = env_values.get("CUDA_NVCC_CCBIN") if allow_host_override else None
+    if override:
+        try:
+            ccbin = Path(override).expanduser().resolve(strict=True)
+            if ccbin.is_dir():
+                ccbin = (ccbin / "gcc").resolve(strict=True)
+            if not ccbin.is_file() or not os.access(ccbin, os.X_OK):
+                raise ValueError("not an executable file")
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise _toolchain_error(
+                "cuda_host_compiler_invalid",
+                f"CUDA_NVCC_CCBIN={override!r} is invalid: {exc}.",
+            ) from exc
+        source = (
+            RESOLUTION_CONFIG
+            if external.resolution_source == RESOLUTION_CONFIG
+            else str(external.diagnostic_metadata["environment_variable"])
+        )
+        return ResolvedCudaBuildHostInputs(
+            cuda_root=external.root,
+            nvcc_path=nvcc_path,
+            detected_cuda_version=version,
+            ccbin_path=ccbin,
+            ccbin_profile="external",
+            ccbin_profile_version="",
+            ccbin_provenance={"prefix": str(ccbin.parent), "source": host_override_source},
+            resolution_source=source,
+            diagnostics=(
+                f"CUDA root {external.root}; host compiler {ccbin} ({host_override_source}).",
+            ),
+            nvcc_version=str(external.effective_values["nvcc_version"]),
+        )
     if profile_name is None:
         raise _toolchain_error(
             "cuda_host_mapping_missing",
@@ -228,7 +287,6 @@ def resolve_wsl_mingw_cuda_inputs(
             f"{description.get('version', '')}: {ccbin}."
         ),
     ]
-    env_values = os.environ if environment is None else environment
     if env_values.get("CUDA_NVCC_CCBIN"):
         diagnostics.append(
             "CUDA_NVCC_CCBIN is ignored for linux-cross-mingw; the Toolchain Store "
@@ -250,7 +308,7 @@ def resolve_wsl_mingw_cuda_inputs(
 
 
 def _target_data_error(code: str, message: str) -> BuildError:
-    return BuildError("Windows CUDA target", message, category=CATEGORY_TARGET_DATA, code=code)
+    return BuildError("CUDA target", message, category=CATEGORY_TARGET_DATA, code=code)
 
 
 def _toolchain_probe_error(code: str, message: str) -> BuildError:
@@ -339,12 +397,33 @@ def _is_known_gnu_source_conflict(output: str, cuda_version: str) -> bool:
 
 def validate_cuda_ptx_compatibility(
     inputs: ResolvedCudaBuildHostInputs,
-    windows_target: WindowsTargetState,
+    windows_target: Optional[WindowsTargetState],
     *,
+    architecture: Optional[str] = None,
     timeout_seconds: int = 60,
 ) -> ResolvedCudaBuildHostInputs:
     """Compile and validate a tiny PTX kernel using the resolved CUDA/GCC inputs."""
-    architecture, target_diagnostics = _target_compute_architecture(windows_target)
+    if architecture is None:
+        if windows_target is None:
+            raise _target_data_error(
+                "cuda_target_compute_capability_missing",
+                "CUDA architecture is unknown; set CUDA_COMPUTE_CAPABILITY (for example 70).",
+            )
+        architecture, target_diagnostics = _target_compute_architecture(windows_target)
+    else:
+        match = (
+            re.fullmatch(r"(?:compute_)?([1-9]\d{1,2}|[1-9]\d?\.\d)", architecture)
+            if isinstance(architecture, str)
+            else None
+        )
+        if match is None:
+            raise _target_data_error(
+                "cuda_target_compute_capability_invalid",
+                f"Invalid CUDA compute capability {architecture!r}; use e.g. 70 or 7.0.",
+            )
+        capability = match.group(1).replace(".", "")
+        architecture = f"compute_{capability}"
+        target_diagnostics = (f"Selected CUDA architecture {architecture}.",)
     root = inputs.cuda_root
     nvcc = inputs.nvcc_path
     ccbin = inputs.ccbin_path
@@ -371,13 +450,12 @@ def validate_cuda_ptx_compatibility(
     except (KeyError, OSError, RuntimeError, ValueError) as exc:
         raise _toolchain_probe_error(
             "cuda_ccbin_unavailable",
-            f"Selected project-managed ccbin {ccbin} is no longer available in its "
-            f"recorded ToolchainStore prefix: {exc}.",
+            f"Selected ccbin {ccbin} is no longer available in its recorded prefix: {exc}.",
         ) from exc
     if not resolved_ccbin.is_file() or not os.access(resolved_ccbin, os.X_OK):
         raise _toolchain_probe_error(
             "cuda_ccbin_unavailable",
-            f"Selected project-managed ccbin {resolved_ccbin} is no longer executable.",
+            f"Selected ccbin {resolved_ccbin} is no longer executable.",
         )
 
     try:
@@ -390,21 +468,19 @@ def validate_cuda_ptx_compatibility(
     except (OSError, subprocess.SubprocessError) as exc:
         raise _toolchain_probe_error(
             "cuda_ccbin_unavailable",
-            f"Could not run selected project-managed ccbin {resolved_ccbin} --version: {exc}.",
+            f"Could not run selected ccbin {resolved_ccbin} --version: {exc}.",
         ) from exc
     compiler_output = _diagnostic_text(compiler_result)
     if compiler_result.returncode != 0:
         raise _toolchain_probe_error(
             "cuda_ccbin_unavailable",
-            f"Selected project-managed ccbin {resolved_ccbin} failed --version: "
-            f"{compiler_output}",
+            f"Selected ccbin {resolved_ccbin} failed --version: " f"{compiler_output}",
         )
     compiler_version_lines = (compiler_result.stdout or compiler_result.stderr or "").splitlines()
     if not compiler_version_lines:
         raise _toolchain_probe_error(
             "cuda_ccbin_unavailable",
-            f"Selected project-managed ccbin {resolved_ccbin} returned no version "
-            "information from --version.",
+            f"Selected ccbin {resolved_ccbin} returned no version " "information from --version.",
         )
     compiler_version = compiler_version_lines[0]
 
@@ -414,6 +490,7 @@ def validate_cuda_ptx_compatibility(
             capture_output=True,
             text=True,
             timeout=10,
+            env=_nvcc_probe_environment(resolved_root),
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise _external_probe_error(
@@ -488,6 +565,7 @@ def validate_cuda_ptx_compatibility(
                 text=True,
                 timeout=timeout_seconds,
                 cwd=directory_path,
+                env=_nvcc_probe_environment(resolved_root),
             )
 
         try:
@@ -594,3 +672,201 @@ def validate_cuda_ptx_compatibility(
         compatibility_workaround=workaround_used,
         probe_diagnostics=probe_diagnostics,
     )
+
+
+def validate_cuda_output_modes(
+    inputs: ResolvedCudaBuildHostInputs, *, timeout_seconds: int = 60
+) -> ResolvedCudaBuildHostInputs:
+    """Verify that the same inputs also produce host objects and fatbins."""
+    if not inputs.compute_architecture:
+        raise ValueError("CUDA PTX probe must run before output-mode probes")
+    capability = inputs.compute_architecture.removeprefix("compute_")
+    flags = (
+        *inputs.common_flags(),
+        f"--gpu-architecture={inputs.compute_architecture}",
+        f"-gencode=arch={inputs.compute_architecture},code=sm_{capability}",
+    )
+    environment = _nvcc_probe_environment(inputs.cuda_root)
+    try:
+        temporary_directory = tempfile.TemporaryDirectory(prefix="ffmpeg-builder-cuda-modes-")
+    except OSError as exc:
+        raise _compatibility_error(
+            "cuda_output_probe_failed", f"Could not create CUDA probe directory: {exc}."
+        ) from exc
+    with temporary_directory as directory:
+        root = Path(directory)
+        source = root / "probe.cu"
+        try:
+            source.write_text(
+                'extern "C" __global__ void ffmpeg_builder_cuda_probe(unsigned *x) { '
+                "if (threadIdx.x == 0) *x += 1; }\n",
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            raise _compatibility_error(
+                "cuda_output_probe_failed", f"Could not write CUDA probe source: {exc}."
+            ) from exc
+        for mode, suffix in (("--compile", "o"), ("--fatbin", "fatbin")):
+            output = root / f"probe.{suffix}"
+            command = [str(inputs.nvcc_path), *flags, mode, "-o", str(output), str(source)]
+            try:
+                result = subprocess.run(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout_seconds,
+                    cwd=root,
+                    env=environment,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                raise _compatibility_error(
+                    "cuda_output_probe_failed", f"CUDA {mode} probe failed: {exc}"
+                ) from exc
+            if result.returncode:
+                raise _compatibility_error(
+                    "cuda_output_probe_failed",
+                    f"CUDA {mode} probe failed with {inputs.nvcc_path}, flags {flags}:\n"
+                    f"{_diagnostic_text(result)}",
+                )
+            try:
+                valid_output = output.is_file() and output.stat().st_size > 0
+            except OSError as exc:
+                raise _compatibility_error(
+                    "cuda_output_probe_failed", f"Could not inspect CUDA {mode} output: {exc}."
+                ) from exc
+            if not valid_output:
+                raise _compatibility_error(
+                    "cuda_output_probe_failed",
+                    f"CUDA {mode} probe returned success but produced no nonempty output.",
+                )
+    return replace(
+        inputs,
+        probe_diagnostics=(*inputs.probe_diagnostics, "Object and fatbin probes passed."),
+    )
+
+
+def cuda_profile_identity(
+    inputs: Optional[ResolvedCudaBuildHostInputs],
+    *,
+    libvmaf_cuda: Optional[bool] = None,
+    ffmpeg_cuda: Optional[bool] = None,
+    nv_codec: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """Stable build inputs, excluding transient probe diagnostics."""
+    if inputs is None:
+        identity: dict[str, Any] = {"schema": 1, "mode": "disabled"}
+    else:
+        identity = {
+            "schema": 1,
+            "mode": "nvcc",
+            "cuda_root": str(inputs.cuda_root),
+            "nvcc": str(inputs.nvcc_path),
+            "nvcc_version": inputs.nvcc_version,
+            "ccbin": str(inputs.ccbin_path),
+            "ccbin_version": inputs.ccbin_version,
+            "ccbin_provenance": dict(inputs.ccbin_provenance),
+            "architecture": inputs.compute_architecture,
+            "flags": list(inputs.common_flags()),
+        }
+    if libvmaf_cuda is not None:
+        identity["libvmaf_cuda"] = bool(libvmaf_cuda and inputs is not None)
+    if ffmpeg_cuda is not None:
+        identity["ffmpeg_cuda"] = bool(ffmpeg_cuda and inputs is not None)
+    if nv_codec is not None:
+        identity["nv_codec"] = nv_codec
+    return identity
+
+
+def cuda_nv_codec_identity(
+    components: Iterable[Any], *, vmaf_headers: Optional[Any] = None
+) -> Optional[dict[str, Any]]:
+    component = next((item for item in components if item.name == "nv-codec"), None)
+    if component is None:
+        return None
+    result: dict[str, Any] = {"version": component.version, "sha256": component.sha256}
+    if vmaf_headers is not None:
+        result["vmaf_headers"] = {
+            "version": vmaf_headers.version,
+            "sha256": vmaf_headers.sha256,
+        }
+    return result
+
+
+def validate_required_cuda_components(
+    config: BuildConfig, components: Iterable[Any], inputs: Optional[ResolvedCudaBuildHostInputs]
+) -> None:
+    """Do not silently drop requested CUDA components through the tool gate."""
+    if config.cuda_build_mode != "required":
+        return
+    names = {component.name for component in components}
+    if inputs is None or "nv-codec" not in names:
+        raise BuildError("CUDA", "Required CUDA profile or nv-codec headers are not buildable.")
+    if config.enable_libvmaf and config.enable_libvmaf_cuda and "libvmaf" not in names:
+        raise BuildError(
+            "CUDA",
+            "libvmaf CUDA was required, but libvmaf is not buildable; check Meson and Ninja.",
+        )
+
+
+def invalidate_cuda_resume(
+    state_manager: Any,
+    inputs: Optional[ResolvedCudaBuildHostInputs],
+    *,
+    libvmaf_cuda: bool,
+    ffmpeg_cuda: Optional[bool] = None,
+    nv_codec: Optional[dict[str, Any]] = None,
+) -> bool:
+    """Invalidate consumers when their previously recorded CUDA inputs differ."""
+    from .state import ComponentStatus
+
+    state = state_manager.get()
+    current = cuda_profile_identity(
+        inputs, libvmaf_cuda=libvmaf_cuda, ffmpeg_cuda=ffmpeg_cuda, nv_codec=nv_codec
+    )
+    if state.cuda_profile == current:
+        return False
+    changed = False
+    names = ["libvmaf", "ffmpeg"]
+    if nv_codec is not None and (
+        not isinstance(state.cuda_profile, dict) or state.cuda_profile.get("nv_codec") != nv_codec
+    ):
+        names.insert(0, "nv-codec")
+    for name in names:
+        component = state.components.get(name)
+        if component and component.status in (ComponentStatus.COMPLETED, ComponentStatus.SYSTEM):
+            state_manager.mark_component_status(
+                name, ComponentStatus.PENDING, component.version, detail="CUDA profile changed"
+            )
+            changed = True
+    return changed
+
+
+def cuda_profile_environment(
+    environment: Mapping[str, str], inputs: ResolvedCudaBuildHostInputs
+) -> dict[str, str]:
+    """Make every NVCC and bin2c invocation use the probed toolkit and flags."""
+    env = dict(environment)
+    env["PATH"] = f"{inputs.cuda_root / 'bin'}{os.pathsep}{env.get('PATH', '')}"
+    env["CUDACXX"] = str(inputs.nvcc_path)
+    env["CUDA_HOME"] = str(inputs.cuda_root)
+    env["CUDA_PATH"] = str(inputs.cuda_root)
+    env["CUDA_NVCC_CCBIN"] = str(inputs.ccbin_path)
+    env["NVCC_PREPEND_FLAGS"] = shlex.join(inputs.common_flags())
+    env["NVCC_APPEND_FLAGS"] = ""
+    return env
+
+
+def cuda_build_tree_matches(path: Path, inputs: Optional[ResolvedCudaBuildHostInputs]) -> bool:
+    try:
+        return bool(json.loads(path.read_text(encoding="utf-8")) == cuda_profile_identity(inputs))
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def record_cuda_build_tree(path: Path, inputs: Optional[ResolvedCudaBuildHostInputs]) -> None:
+    try:
+        path.write_text(json.dumps(cuda_profile_identity(inputs), sort_keys=True), encoding="utf-8")
+    except OSError as exc:
+        raise BuildError(
+            "CUDA profile", f"Could not record build-tree inputs at {path}: {exc}"
+        ) from exc

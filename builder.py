@@ -36,6 +36,7 @@ from .builders.codecs.zimg import build_zimg
 from .builders.crypto.openssl import build_openssl
 from .builders.ffmpeg.ffmpeg import build_ffmpeg
 from .builders.graphics.glslang import build_glslang
+from .builders.graphics.vulkan_headers import invalidate_vulkan_resume, record_vulkan_headers
 from .builders.graphics.placebo import (
     build_libplacebo,
     patch_libplacebo_glslang_search,
@@ -833,6 +834,8 @@ class FFmpegBuilder:
         Args:
             component: Component to build.
         """
+        if component.name == "vulkan-headers":
+            invalidate_vulkan_resume(self.state_manager, self.workspace, [component])
         if self.state_manager.is_component_completed(component.name, component.version):
             return
 
@@ -896,6 +899,21 @@ class FFmpegBuilder:
         archive_path = self._download_and_extract(component)
         source_dir = self.packages / component.get_target_dir()
 
+        if component.name == "vulkan-headers":
+            try:
+                for path in (
+                    self.workspace / "include" / "vulkan",
+                    self.workspace / "include" / "vk_video",
+                    self.workspace / "share" / "vulkan" / "registry",
+                ):
+                    if path.exists():
+                        _rmtree(path)
+                (self.workspace / "share" / "vulkan" / "headers-manifest.json").unlink(
+                    missing_ok=True
+                )
+            except OSError as exc:
+                raise BuildError(component.name, f"Cannot replace Vulkan headers: {exc}") from exc
+
         self._apply_component_patches(component, source_dir)
         build_context = ComponentBuildContext.from_builder(self)
 
@@ -927,6 +945,8 @@ class FFmpegBuilder:
         except ValueError as exc:
             raise BuildError(component.name, str(exc)) from exc
 
+        if component.name == "vulkan-headers":
+            record_vulkan_headers(self.workspace, source_dir, component)
         self._execute_post_install(component, source_dir)
 
     def _configure_detail(self, component: Component) -> str:

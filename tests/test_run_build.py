@@ -37,7 +37,15 @@ def test_parse_args_accepts_all_options():
 
 
 def _config(**overrides):
-    values = {"ffmpeg_version": "8.1", "make_release": False}
+    values = {
+        "ffmpeg_version": "8.1",
+        "make_release": False,
+        "enable_libvmaf": True,
+        "enable_libvmaf_cuda": True,
+        "gpl_enabled": False,
+        "allow_nonfree_cuda": False,
+        "cuda_build_mode": "auto",
+    }
     values.update(overrides)
     config = SimpleNamespace(**values)
     config.to_dict = lambda: dict(values)
@@ -150,7 +158,9 @@ def test_run_build_stops_at_first_failure(monkeypatch):
     class FakeApp:
         workspace = "/tmp/ws"
         packages = "/tmp/ws/packages"
-        platform_detector = object()
+        platform_detector = SimpleNamespace(
+            platform_info=SimpleNamespace(cuda_build_host_inputs=None)
+        )
 
         def __init__(self):
             self.state_manager = FakeStateManager()
@@ -170,3 +180,33 @@ def test_run_build_stops_at_first_failure(monkeypatch):
     config = _config()
     exit_code = run_build.run_build(FakeApp(), config, resume=False, no_release=True)
     assert exit_code == 1
+
+
+def test_icx_partial_required_cuda_build_requires_matching_dependencies():
+    from ffmpeg_builder.config import BuildConfig
+    from ffmpeg_builder.state import ComponentState, ComponentStatus
+
+    spec = importlib.util.spec_from_file_location("icx_poc", ROOT / "scripts" / "icx_poc.py")
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    config = BuildConfig(cuda_build_mode="required", gpl_enabled=True)
+    components = [
+        SimpleNamespace(name="nv-codec", version="13"),
+        SimpleNamespace(name="libvmaf", version="3"),
+        SimpleNamespace(name="ffmpeg", version="8"),
+    ]
+    selected = [components[2]]
+    assert module.missing_required_cuda_dependencies(config, selected, components, {}) == [
+        "libvmaf",
+        "nv-codec",
+    ]
+    states = {
+        "nv-codec": ComponentState(status=ComponentStatus.COMPLETED, version="13"),
+        "libvmaf": ComponentState(status=ComponentStatus.COMPLETED, version="3"),
+    }
+    assert not module.missing_required_cuda_dependencies(config, selected, components, states)
+    states["libvmaf"].status = ComponentStatus.PENDING
+    assert module.missing_required_cuda_dependencies(config, selected, components, states) == [
+        "libvmaf"
+    ]

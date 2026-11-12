@@ -31,7 +31,14 @@ if str(PROJECT_ROOT.parent) not in sys.path:
 from ffmpeg_builder.app import FFmpegBuilderApp, PROJECT_ROOT as APP_ROOT  # noqa: E402
 from ffmpeg_builder.build_types import BuildError, SkipComponent  # noqa: E402
 from ffmpeg_builder.builder import FFmpegBuilder  # noqa: E402
+from ffmpeg_builder.builders.graphics.vulkan_headers import invalidate_vulkan_resume  # noqa: E402
 from ffmpeg_builder.config import BuildConfig  # noqa: E402
+from ffmpeg_builder.cuda_prerequisites import (  # noqa: E402
+    cuda_nv_codec_identity,
+    cuda_profile_identity,
+    invalidate_cuda_resume,
+    validate_required_cuda_components,
+)
 from ffmpeg_builder.state import ComponentStatus  # noqa: E402
 
 assert APP_ROOT == PROJECT_ROOT, "app package root mismatch"
@@ -77,16 +84,34 @@ def describe_plan(app: FFmpegBuilderApp, config: BuildConfig) -> int:
 
 def run_build(app: FFmpegBuilderApp, config: BuildConfig, resume: bool, no_release: bool) -> int:
     """Execute the build; return an exit code."""
-    all_components = app._get_buildable_components(config)
-    components = list(all_components)
     try:
         session = app.prepare_target(config, resume)
+        all_components = app._get_buildable_components(config)
+        cuda_inputs = getattr(app.platform_detector.platform_info, "cuda_build_host_inputs", None)
+        validate_required_cuda_components(config, all_components, cuda_inputs)
     except BuildError as exc:
         print(f"BLOCKED by identity guard: {exc}", flush=True)
         return 2
     for note in session.notes:
         print(f"NOTE: {note}", flush=True)
+    components = list(all_components)
+    nv_codec_identity = cuda_nv_codec_identity(
+        all_components,
+        vmaf_headers=(
+            app.registry.get_nv_codec_component()
+            if cuda_inputs and config.enable_libvmaf and config.enable_libvmaf_cuda
+            else None
+        ),
+    )
     if resume:
+        invalidate_vulkan_resume(app.state_manager, app.workspace, all_components)
+        invalidate_cuda_resume(
+            app.state_manager,
+            cuda_inputs,
+            libvmaf_cuda=config.enable_libvmaf and config.enable_libvmaf_cuda,
+            ffmpeg_cuda=config.gpl_enabled or config.allow_nonfree_cuda,
+            nv_codec=nv_codec_identity,
+        )
         resume_point = app.state_manager.get_resume_point()
         if resume_point:
             idx = next((i for i, c in enumerate(components) if c.name == resume_point), 0)
@@ -111,6 +136,12 @@ def run_build(app: FFmpegBuilderApp, config: BuildConfig, resume: bool, no_relea
     state = app.state_manager.get()
     state.config = config.to_dict()
     state.total_steps = len(all_components)
+    state.cuda_profile = cuda_profile_identity(
+        cuda_inputs,
+        libvmaf_cuda=config.enable_libvmaf and config.enable_libvmaf_cuda,
+        ffmpeg_cuda=config.gpl_enabled or config.allow_nonfree_cuda,
+        nv_codec=nv_codec_identity,
+    )
     app.state_manager.save()
     session.stamp(app.state_manager)
 

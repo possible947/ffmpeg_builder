@@ -484,7 +484,11 @@ class ComponentRegistry:
 
         # Filter HW acceleration components by availability
         if platform_info is not None:
-            if comp.name == "nv-codec" and not platform_info.cuda_available:
+            if (
+                comp.name == "nv-codec"
+                and not platform_info.cuda_available
+                and not getattr(platform_info, "nvenc_api_version", None)
+            ):
                 return False
             if comp.name == "glslang" and not platform_info.vulkan_available:
                 return False

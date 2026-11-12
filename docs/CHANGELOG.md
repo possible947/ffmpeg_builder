@@ -1,3 +1,41 @@
+### Verified — native Linux FFmpeg 8.1 and 9.0 (2026-11-12)
+
+- Both versioned workspaces completed on Ubuntu 26.04.1 x86_64 with CUDA
+  12.4.99, the store GCC 12.5 NVCC host compiler, and `compute_70`. Each
+  recorded 44 completed and 12 system components. libvmaf configured with
+  CUDA, and libplacebo used the workspace Vulkan registry.
+- Both installed FFmpeg binaries list `scale_cuda`, `libvmaf_cuda`,
+  `libplacebo`, and `h264_nvenc`. This verifies compiled feature presence,
+  not execution of each feature on every GPU or driver.
+
+### Fixed — shared CUDA build profile on native Linux
+
+- Select and probe one NVCC, host compiler, compute architecture and scoped
+  compatibility flags before building; use them in both libvmaf and FFmpeg.
+  PTX, object and fatbin probes report failures without an LLVM fallback.
+  NVENC/NVDEC remain independent of NVCC. CUDA auto/required/disabled modes,
+  explicit target capability and nonfree consent are configurable.
+- Record effective CUDA inputs in resume state and rebuild affected consumers
+  and stale build trees on profile changes or legacy state.
+- libvmaf uses current CUDA driver headers separately when an older NVENC
+  driver selects older nv-codec headers; FFmpeg keeps the latter.
+- In an isolated workspace, CUDA 12.4.99 with store GCC 12.5 built CUDA-enabled
+  libvmaf and a minimal FFmpeg. `scale_cuda` and `libvmaf_cuda` ran on the
+  TITAN V. This does not constitute a Windows cross-build acceptance.
+- A forced nv-codec 12.2 selection also built NVENC/CUVID and libvmaf CUDA
+  using separate headers. This was tested with the available driver, not a
+  physical older driver.
+
+### Fixed — libplacebo Vulkan header/registry mismatch
+
+- Vulkan-Headers now uses its CMake installer, including the matching Vulkan
+  registry. Installation provenance is checked before resume; older incomplete
+  workspaces rebuild Vulkan-Headers and affected completed consumers.
+- libplacebo uses the verified header/registry pair through its supported
+  bundled dependency and explicit Meson registry option, preventing an
+  unrelated SDK's headers or XML from being selected. The system Vulkan loader
+  remains external.
+
 ### Accepted — G2.4/G2.5 final live acceptance and regression closure (#16, 2026-11-10)
 
 - Re-ran production WSL-Mingw preparation on the physical Windows 11/WSL2
@@ -464,6 +502,10 @@
 - **`PlatformInfo.qsv_available` was always `False` on Linux, even with VAAPI and an Intel GPU present** — `PlatformDetector.detect_all()` (`platform_detect.py`) called `self.platform_info.qsv_available = self._check_qsv()` *before* `self.platform_info.vaapi_available = self._check_vaapi()`. `_check_qsv()`'s Linux branch requires `platform_info.vaapi_available` to be `True` before it will even probe `vainfo`/PCI IDs for an Intel GPU, but at the point it ran, `vaapi_available` still held the `PlatformInfo` dataclass default of `False`, so the VAAPI gate short-circuited `_check_qsv()` to `False` unconditionally, regardless of actual hardware. Downstream, `ComponentRegistry` (`components.py`) skips building the `onevpl` component whenever `qsv_available` is `False`, so `--enable-libvpl` was never passed to FFmpeg's configure and QSV encoders were silently absent from the resulting binary. Fixed by moving the `vaapi_available` detection call ahead of the CUDA/QSV detection block in `detect_all()`, so `_check_qsv()` observes the real VAAPI result. Verified on Fedora 44 with an Intel Arc A750 (iHD driver, VAAPI detected via `pkg-config libva`): `qsv_available` now correctly reports `True`, `onevpl` builds, and the resulting FFmpeg 8.1 binary's configure line includes `--enable-libvpl` with `h264_qsv`/`hevc_qsv`/`av1_qsv`/`vp9_qsv`/`mjpeg_qsv`/`mpeg2_qsv` registered in `-encoders`/`-decoders` and `qsv` listed in `-hwaccels`. Full suite (178 passed, 1 skipped) and `black --check .` pass.
 
 ### Fixed — Fedora 44 / GCC≥15 + CUDA 12.2 toolchain remediation (2026-09-07)
+
+> Historical implementation: the CUDA compiler selection and libvmaf header
+> fallback described below were superseded by the shared CUDA profile and
+> separate CUDA headers documented above and in `docs/DeveloperReadme.md`.
 
 Building FFmpeg 8.1 on Fedora Linux 44 (GCC 16.2.1, glibc ≥ 2.41, CUDA 12.2.140 SDK) surfaced a chain of toolchain-version-gap failures. All fixes below are scoped to `LinuxGcc15Platform` (the strategy resolved whenever `gcc_major_version >= 15` — the name predates GCC 16 and is historical shorthand for "modern GCC toolchain", not literally GCC 15) unless noted otherwise, and each was verified with a real end-to-end build through the actual `FFmpegBuilder` pipeline against real source tarballs, not just manual compilation.
 

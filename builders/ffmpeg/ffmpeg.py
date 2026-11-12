@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
-import os
+import shlex
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ...state import ComponentStatus
+from ...cuda_prerequisites import (
+    cuda_build_tree_matches,
+    cuda_profile_environment,
+    record_cuda_build_tree,
+)
 from ..graphics.placebo import patch_libplacebo_pc
 
 if TYPE_CHECKING:
@@ -120,47 +125,46 @@ def build_ffmpeg(builder: FFmpegBuilder, component: Component, source_dir: Path)
         configure_args.append("--enable-gpl")
         configure_args.append("--enable-nonfree")
 
-    # CUDA support
-    if builder.platform_detector.platform_info.cuda_available:
+    platform_info = builder.platform_detector.platform_info
+    inputs = getattr(platform_info, "cuda_build_host_inputs", None)
+    use_nvcc = inputs is not None and (
+        builder.config.gpl_enabled or builder.config.allow_nonfree_cuda
+    )
+    configure_args.append("--disable-cuda-llvm")
+    # CUDA compilation and hardware encode/decode are separate capabilities.
+    if builder.platform_detector.platform_info.cuda_available or getattr(
+        platform_info, "nvenc_api_version", None
+    ):
         # cuda-nvcc requires MSVC cl.exe on Windows which is not available
         # in the MSYS2 UCRT64 toolchain.  Hardware encode/decode APIs
         # (cuvid/nvdec/nvenc) and ffnvcodec headers work fine with GCC.
         if not builder._is_windows_ucrt64_backend():
-            platform_info = builder.platform_detector.platform_info
-            # Older CUDA toolkits pin a maximum-supported host-compiler
-            # version (e.g. CUDA 12.2 only supports gcc <= 12); on rolling
-            # distros with a newer system gcc, nvcc rejects it outright.
-            # cuda_nvcc_supported/nvcc_ccbin come from PlatformDetector's
-            # nvcc compile sanity-check (see _detect_cuda_nvcc_support),
-            # which consults the registry ``cuda`` table for a store-deployed
-            # host compiler when the system default is too new.
-            cuda_nvcc_supported = getattr(platform_info, "cuda_nvcc_supported", True)
-            cuda_nvcc_reason = getattr(platform_info, "cuda_nvcc_reason", "")
-            nvcc_ccbin = getattr(platform_info, "nvcc_ccbin", None)
-            if cuda_nvcc_supported:
+            if use_nvcc and inputs is not None:
+                env = cuda_profile_environment(env, inputs)
+                env["NVCC_PREPEND_FLAGS"] = ""
                 configure_args.append("--enable-cuda-nvcc")
-                cuda_cc = os.environ.get("CUDA_COMPUTE_CAPABILITY")
-                if not cuda_cc:
-                    cuda_cc = platform_info.cuda_compute_capability
-                if not cuda_cc:
-                    cuda_cc = "52"
-                nvccflags = f"-gencode arch=compute_{cuda_cc},code=sm_{cuda_cc} -O2"
-                if nvcc_ccbin:
-                    nvccflags = f"-ccbin={nvcc_ccbin} {nvccflags}"
-                    if builder.on_log is not None:
-                        builder.on_log(f"CUDA nvcc host compiler override: -ccbin={nvcc_ccbin}")
-                configure_args.append(f"--nvccflags={nvccflags}")
-            elif builder.on_log is not None:
-                builder.on_log(
-                    f"--enable-cuda-nvcc disabled ({cuda_nvcc_reason}); "
-                    "falling back to --enable-cuda-llvm only"
-                )
-            configure_args.append("--enable-cuda-llvm")
+                if not builder.config.gpl_enabled:
+                    configure_args.append("--enable-nonfree")
+                configure_args.append(f"--nvcc={inputs.nvcc_path}")
+                assert inputs.compute_architecture is not None
+                cuda_cc = inputs.compute_architecture.removeprefix("compute_")
+                flags = [
+                    *inputs.common_flags(),
+                    "-gencode",
+                    f"arch=compute_{cuda_cc},code=sm_{cuda_cc}",
+                    "-O2",
+                ]
+                configure_args.append(f"--nvccflags={shlex.join(flags)}")
+            else:
+                configure_args.append("--disable-cuda-nvcc")
+        else:
+            configure_args.append("--disable-cuda-nvcc")
         configure_args.append("--enable-cuvid")
         configure_args.append("--enable-nvdec")
         configure_args.append("--enable-nvenc")
         configure_args.append("--enable-ffnvcodec")
     else:
+        configure_args.append("--disable-cuda-nvcc")
         configure_args.append("--disable-ffnvcodec")
 
     # VAAPI support (Linux-only policy in current implementation).
@@ -192,6 +196,22 @@ def build_ffmpeg(builder: FFmpegBuilder, component: Component, source_dir: Path)
 
     configure_args.extend(configure_flags)
 
+    marker = source_dir / ".ffmpeg-builder-cuda-profile.json"
+    tree_inputs = inputs if use_nvcc else None
+    if (source_dir / "ffbuild" / "config.mak").is_file() and not cuda_build_tree_matches(
+        marker, tree_inputs
+    ):
+        builder._run_step(
+            component,
+            ComponentStatus.CONFIGURING,
+            "make clean",
+            "Cleaning stale CUDA build failed",
+            ["make", "clean"],
+            "clean",
+            source_dir,
+            env,
+        )
+
     builder._run_step(
         component,
         ComponentStatus.CONFIGURING,
@@ -202,6 +222,7 @@ def build_ffmpeg(builder: FFmpegBuilder, component: Component, source_dir: Path)
         source_dir,
         env,
     )
+    record_cuda_build_tree(marker, tree_inputs)
 
     builder._run_step(
         component,

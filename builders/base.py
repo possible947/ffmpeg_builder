@@ -136,9 +136,10 @@ def build_cmake(context: ComponentBuildContext, component: "Component", source_d
         build_dir = source_dir / component.workdir
         build_dir.mkdir(parents=True, exist_ok=True)
 
-    cmake_args = [
-        arg.replace("{workspace}", context.builder._ws_str()) for arg in component.configure_args
-    ]
+    workspace = context.builder._ws_str()
+    if component.name == "vulkan-headers" and context.builder._is_windows_ucrt64_backend():
+        workspace = str(context.builder.workspace).replace("\\", "/")
+    cmake_args = [arg.replace("{workspace}", workspace) for arg in component.configure_args]
 
     if component.name == "opencl-icd-loader":
         # OpenCL-ICD-Loader's CMakeLists.txt adds its test/ subdirectory
@@ -427,19 +428,6 @@ def install_headers_only(
             for item in src.iterdir():
                 dest_item = dest / item.name
                 shutil.copy2(item, dest_item)
-
-    elif component.name == "vulkan-headers":
-        dest = context.builder.workspace / "include"
-        src = source_dir / "include"
-        if src.exists():
-            dest.mkdir(parents=True, exist_ok=True)
-            for dirname in ("vulkan", "vk_video"):
-                src_item = src / dirname
-                if src_item.exists():
-                    dest_item = dest / dirname
-                    if dest_item.exists():
-                        _rmtree(dest_item)
-                    shutil.copytree(src_item, dest_item)
 
     elif component.name == "amf":
         dest = context.builder.workspace / "include" / "AMF"

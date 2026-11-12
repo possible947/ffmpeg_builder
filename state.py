@@ -74,6 +74,7 @@ class BuildState:
     identity: Any = None
     # Runtime-acceptance bookkeeping, e.g. {"status": "invalidated", ...}.
     acceptance: Optional[Dict[str, Any]] = None
+    cuda_profile: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -95,6 +96,7 @@ class BuildState:
             "total_steps": self.total_steps,
             "identity": self.identity,
             "acceptance": self.acceptance,
+            "cuda_profile": self.cuda_profile,
         }
 
     @classmethod

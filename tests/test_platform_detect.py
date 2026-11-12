@@ -535,9 +535,6 @@ def test_native_cuda_path_remains_ambient_path_based(monkeypatch):
     monkeypatch.setattr(
         detector, "_detect_cuda_compute_capability", lambda: calls.append(("capability", None))
     )
-    monkeypatch.setattr(
-        detector, "_detect_cuda_nvcc_support", lambda path: calls.append(("support", path))
-    )
 
     detector._detect_cuda()
 
@@ -545,23 +542,5 @@ def test_native_cuda_path_remains_ambient_path_based(monkeypatch):
     assert calls == [
         ("version", "/native/nvcc"),
         ("capability", None),
-        ("support", "/native/nvcc"),
     ]
-
-
-def test_native_cuda_nvcc_ccbin_override_remains_supported(monkeypatch):
-    detector = PlatformDetector()
-    monkeypatch.setenv("CUDA_NVCC_CCBIN", "/native/compiler")
-    calls = []
-
-    def probe(nvcc, ccbin=None):
-        calls.append((nvcc, ccbin))
-        return True
-
-    monkeypatch.setattr(detector, "_probe_nvcc_compile", probe)
-
-    detector._detect_cuda_nvcc_support("/native/nvcc")
-
-    assert calls == [("/native/nvcc", "/native/compiler")]
-    assert detector.platform_info.nvcc_ccbin == "/native/compiler"
-    assert detector.platform_info.cuda_nvcc_supported is True
+    assert "deferred" in detector.platform_info.cuda_nvcc_reason

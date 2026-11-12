@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 from ...build_types import BuildError
 from ...state import ComponentStatus
+from .vulkan_headers import _digest, invalidate_vulkan_resume, vulkan_headers_valid
 
 if TYPE_CHECKING:
     from ...builder import FFmpegBuilder
@@ -121,13 +122,40 @@ def build_libplacebo(builder: FFmpegBuilder, component: Component, source_dir: P
             log_file,
         )
 
-    # libplacebo 7.360.1 still compiles Vulkan stubs when Vulkan is disabled,
-    # and those stubs include the public Vulkan header.
-    if not (builder.workspace / "include" / "vulkan" / "vulkan.h").exists():
-        vulkan_headers = builder.registry.get_by_name("vulkan-headers")
-        if vulkan_headers is None:
-            raise BuildError(component.name, "vulkan-headers component is missing")
+    vulkan_headers = builder.registry.get_by_name("vulkan-headers")
+    if vulkan_headers is None:
+        raise BuildError(component.name, "vulkan-headers component is missing")
+    if not vulkan_headers_valid(builder.workspace, vulkan_headers):
+        invalidate_vulkan_resume(builder.state_manager, builder.workspace, [vulkan_headers])
         builder.build_component(vulkan_headers)
+    if not vulkan_headers_valid(builder.workspace, vulkan_headers):
+        raise BuildError(
+            component.name, "Vulkan headers and registry are incomplete or inconsistent"
+        )
+
+    # libplacebo gives its bundled Vulkan-Headers priority over loader metadata.
+    # Populate that supported dependency from the verified workspace installation.
+    bundled = source_dir / "3rdparty" / "Vulkan-Headers"
+    bundled_include = bundled / "include"
+    bundled_registry = bundled / "registry" / "vk.xml"
+    workspace_registry = builder.workspace / "share" / "vulkan" / "registry" / "vk.xml"
+    if bundled_include.exists():
+        try:
+            if _digest(bundled_include, bundled_registry) != _digest(
+                builder.workspace / "include", workspace_registry
+            ):
+                raise ValueError("bundled Vulkan-Headers differ from the workspace")
+        except (OSError, ValueError) as exc:
+            raise BuildError(component.name, f"Conflicting bundled Vulkan-Headers: {exc}") from exc
+    else:
+        try:
+            bundled_include.mkdir(parents=True, exist_ok=True)
+            for name in ("vulkan", "vk_video"):
+                shutil.copytree(builder.workspace / "include" / name, bundled_include / name)
+            bundled_registry.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(workspace_registry, bundled_registry)
+        except OSError as exc:
+            raise BuildError(component.name, f"Cannot stage Vulkan headers: {exc}") from exc
 
     # Determine whether to enable Vulkan inside libplacebo.
     pi = builder.platform_detector.platform_info
@@ -137,7 +165,11 @@ def build_libplacebo(builder: FFmpegBuilder, component: Component, source_dir: P
         and not (builder.config.full_static and builder.platform == "linux")
     )
 
-    ws = builder._ws_str()
+    ws = (
+        str(builder.workspace).replace("\\", "/")
+        if builder._is_windows_ucrt64_backend()
+        else builder._ws_str()
+    )
 
     fast_float_submod = source_dir / "3rdparty" / "fast_float" / "include" / "fast_float"
     fast_float_ws = builder.workspace / "include" / "fast_float"
@@ -154,7 +186,7 @@ def build_libplacebo(builder: FFmpegBuilder, component: Component, source_dir: P
     env["LIBRARY_PATH"] = builder._merge_path_list(
         existing_lp,
         [f"{ws}/lib", f"{ws}/lib64"],
-        ":",
+        ";" if builder._is_windows_ucrt64_backend() else ":",
     )
 
     if builder.platform == "darwin" and vulkan_ok:
@@ -185,6 +217,7 @@ def build_libplacebo(builder: FFmpegBuilder, component: Component, source_dir: P
         meson_args += [
             "-Dvulkan=enabled",
             f"-Dvulkan-sdk={ws}",
+            f"-Dvulkan-registry={ws}/share/vulkan/registry/vk.xml",
             "-Dglslang=enabled",
         ]
     else:

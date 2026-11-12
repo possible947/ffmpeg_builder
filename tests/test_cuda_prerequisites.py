@@ -4,6 +4,7 @@ import os
 import subprocess
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -17,8 +18,12 @@ from ffmpeg_builder.build_types import (
 from ffmpeg_builder.config import BuildConfig, TARGET_BACKEND_CROSS_MINGW
 from ffmpeg_builder.cuda_prerequisites import (
     ResolvedCudaBuildHostInputs,
+    cuda_profile_identity,
+    invalidate_cuda_resume,
     resolve_wsl_mingw_cuda_inputs,
+    validate_cuda_output_modes,
     validate_cuda_ptx_compatibility,
+    validate_required_cuda_components,
 )
 from ffmpeg_builder.external_prerequisites import (
     CODE_PREREQUISITE_INVALID_PATH,
@@ -639,3 +644,154 @@ def test_ptx_probe_reports_missing_selected_executable(tmp_path, monkeypatch, mi
 
     assert raised.value.category == expected_category
     assert raised.value.code == expected_code
+
+
+def test_native_ptx_architecture_does_not_require_gpu(tmp_path, monkeypatch):
+    inputs = _resolved_probe_inputs(tmp_path, monkeypatch)
+    _mock_ptx_probe(monkeypatch, ptx_text=_ptx("70"))
+
+    profile = validate_cuda_ptx_compatibility(inputs, None, architecture="7.0")
+
+    assert profile.compute_architecture == "compute_70"
+    assert profile.probe_status == "passed"
+
+
+def test_native_explicit_host_compiler_is_authoritative(tmp_path, monkeypatch):
+    root = _cuda_root(tmp_path, "sdk")
+    store = _store(tmp_path)
+    compiler = tmp_path / "explicit-gcc"
+    compiler.write_text("#!/bin/sh\n", encoding="utf-8")
+    compiler.chmod(0o755)
+    _mock_nvcc(monkeypatch)
+    profile = resolve_wsl_mingw_cuda_inputs(
+        _config(cuda=str(root)),
+        ToolchainRegistry(),
+        store,
+        environment={"CUDA_NVCC_CCBIN": str(compiler)},
+        allow_host_override=True,
+    )
+    assert profile is not None
+    assert profile.ccbin_path == compiler
+    assert profile.ccbin_provenance["source"] == "CUDA_NVCC_CCBIN"
+
+    with pytest.raises(BuildError, match="CUDA_NVCC_CCBIN"):
+        resolve_wsl_mingw_cuda_inputs(
+            _config(cuda=str(root)),
+            ToolchainRegistry(),
+            store,
+            environment={"CUDA_NVCC_CCBIN": str(tmp_path / "missing")},
+            allow_host_override=True,
+        )
+
+
+def test_required_cuda_does_not_silently_exclude_libvmaf(tmp_path, monkeypatch):
+    profile = replace(
+        _resolved_probe_inputs(tmp_path, monkeypatch),
+        compute_architecture="compute_70",
+        probe_status="passed",
+    )
+    config = BuildConfig(cuda_build_mode="required")
+    components = [SimpleNamespace(name="nv-codec"), SimpleNamespace(name="ffmpeg")]
+    with pytest.raises(BuildError, match="libvmaf is not buildable"):
+        validate_required_cuda_components(config, components, profile)
+    components.append(SimpleNamespace(name="libvmaf"))
+    validate_required_cuda_components(config, components, profile)
+
+
+def test_output_modes_reuse_common_flags_without_ptx(tmp_path, monkeypatch):
+    inputs = replace(
+        _resolved_probe_inputs(tmp_path, monkeypatch),
+        compute_architecture="compute_70",
+        probe_status="passed",
+        compatibility_workaround="-Xcompiler=-U_GNU_SOURCE",
+    )
+    commands = []
+
+    def run(args, **kwargs):
+        commands.append((args, kwargs))
+        Path(args[args.index("-o") + 1]).write_bytes(b"compiled")
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("ffmpeg_builder.cuda_prerequisites.subprocess.run", run)
+    monkeypatch.setenv("NVCC_PREPEND_FLAGS", "--untrusted-flag")
+    validate_cuda_output_modes(inputs)
+
+    assert [
+        next(flag for flag in args if flag in ("--compile", "--fatbin")) for args, _ in commands
+    ] == [
+        "--compile",
+        "--fatbin",
+    ]
+    for args, kwargs in commands:
+        assert "--ptx" not in args
+        assert f"-ccbin={inputs.ccbin_path}" in args
+        assert "-Xcompiler=-U_GNU_SOURCE" in args
+        assert "--gpu-architecture=compute_70" in args
+        assert "NVCC_PREPEND_FLAGS" not in kwargs["env"]
+
+
+def test_output_mode_probe_preserves_compiler_diagnostic(tmp_path, monkeypatch):
+    inputs = replace(
+        _resolved_probe_inputs(tmp_path, monkeypatch),
+        compute_architecture="compute_70",
+        probe_status="passed",
+    )
+    monkeypatch.setattr(
+        "ffmpeg_builder.cuda_prerequisites.subprocess.run",
+        lambda args, **kwargs: subprocess.CompletedProcess(
+            args, 1, stdout="", stderr="nvcc failure"
+        ),
+    )
+    with pytest.raises(BuildError, match="nvcc failure") as raised:
+        validate_cuda_output_modes(inputs)
+    assert raised.value.code == "cuda_output_probe_failed"
+
+
+def test_cuda_resume_invalidates_legacy_or_changed_consumers_only(tmp_path, monkeypatch):
+    from ffmpeg_builder.state import ComponentStatus, StateManager
+
+    inputs = replace(
+        _resolved_probe_inputs(tmp_path, monkeypatch),
+        compute_architecture="compute_70",
+        probe_status="passed",
+    )
+    manager = StateManager(tmp_path / "state.json")
+    for name in ("libvmaf", "ffmpeg", "x264"):
+        manager.mark_component_status(name, ComponentStatus.COMPLETED, "1")
+
+    assert invalidate_cuda_resume(manager, inputs, libvmaf_cuda=True)
+    assert manager.get().components["libvmaf"].status == ComponentStatus.PENDING
+    assert manager.get().components["ffmpeg"].status == ComponentStatus.PENDING
+    assert manager.get().components["x264"].status == ComponentStatus.COMPLETED
+
+    for name in ("libvmaf", "ffmpeg"):
+        manager.mark_component_status(name, ComponentStatus.COMPLETED, "1")
+    manager.get().cuda_profile = cuda_profile_identity(inputs, libvmaf_cuda=True)
+    manager.save()
+    reloaded = StateManager(tmp_path / "state.json")
+    assert not invalidate_cuda_resume(reloaded, inputs, libvmaf_cuda=True)
+    assert invalidate_cuda_resume(reloaded, inputs, libvmaf_cuda=False)
+
+
+def test_cuda_resume_invalidates_changed_nvcodec_headers(tmp_path, monkeypatch):
+    from ffmpeg_builder.state import ComponentStatus, StateManager
+
+    inputs = replace(
+        _resolved_probe_inputs(tmp_path, monkeypatch),
+        compute_architecture="compute_70",
+        probe_status="passed",
+    )
+    manager = StateManager(tmp_path / "state.json")
+    for name in ("nv-codec", "libvmaf", "ffmpeg"):
+        manager.mark_component_status(name, ComponentStatus.COMPLETED, "1")
+    old_headers = {"version": "12.2", "sha256": "old"}
+    new_headers = {"version": "13.0", "sha256": "new"}
+    manager.get().cuda_profile = cuda_profile_identity(
+        inputs, libvmaf_cuda=True, nv_codec=old_headers
+    )
+
+    assert invalidate_cuda_resume(manager, inputs, libvmaf_cuda=True, nv_codec=new_headers)
+    assert all(
+        manager.get().components[name].status == ComponentStatus.PENDING
+        for name in ("nv-codec", "libvmaf", "ffmpeg")
+    )
