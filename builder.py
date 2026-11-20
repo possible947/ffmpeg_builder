@@ -1112,6 +1112,32 @@ class FFmpegBuilder:
             component: Component to process.
             source_dir: Source directory.
         """
+        if (
+            component.name == "xvidcore"
+            and self.config.target_backend == TARGET_BACKEND_CROSS_MINGW
+        ):
+            prefix = Path(self._ws_str())
+            source_archive = prefix / "lib" / "xvidcore.a"
+            target_archive = prefix / "lib" / "libxvidcore.a"
+            if not source_archive.is_file():
+                raise BuildError(
+                    component.name,
+                    f"Expected static Windows archive is missing: {source_archive}",
+                )
+            try:
+                source_archive.replace(target_archive)
+                for artifact in (
+                    prefix / "lib" / "xvidcore.dll.a",
+                    prefix / "bin" / "xvidcore.dll",
+                ):
+                    artifact.unlink(missing_ok=True)
+            except OSError as exc:
+                raise BuildError(
+                    component.name,
+                    f"Could not normalize static Windows outputs in {prefix}: {exc}",
+                ) from exc
+            return
+
         if not component.post_install:
             return
 

@@ -550,7 +550,7 @@ class Wave1TargetValidator:
             raise BuildError(
                 "target prefix", f"Cannot read installed metadata {path}: {exc}"
             ) from exc
-        references = re.findall(r"""(?<![\w$}:/])(?:-[IL])?(/[^ \t\r\n"'(),;]+)""", content)
+        references = re.findall(r"""(?<![\w$}:/.])(?:-[IL])?(/[^ \t\r\n"'(),;]+)""", content)
         for reference in references:
             candidate = reference[2:] if reference.startswith(("-I/", "-L/")) else reference
             if not self._inside(Path(candidate), self.prefix):

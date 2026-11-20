@@ -35,7 +35,7 @@ guide.
 - **~60 Components** — All codecs, libraries, and tools built from source in correct dependency order
 - **macOS Support** — Macports clang detection, OpenMP, VideoToolbox, glibtool handling
 - **Linux Support** — GCC/Clang detection, C11/C++17 standards, host-tuned (`-march=native -mtune=native -fopenmp`) builds
-- **Windows (WSL-Mingw) — G1/G2/G3 PASS; G4 in progress** — G4 Waves 0 and 1 are accepted; seven real target dependencies cross-build, while Wave 2 and FFmpeg integration remain incomplete
+- **Windows (WSL-Mingw) — G1/G2/G3 PASS; G4 in progress** — G4 Waves 0–2 are accepted, including 18 real Windows-target dependencies; Wave 3 and FFmpeg integration remain incomplete
 
 ## Requirements
 
@@ -156,14 +156,17 @@ Or use the environment check script:
 
 ## Windows (WSL-Mingw)
 
-> **Status: G1/G2/G3 PASS; G4 Waves 0–1 complete, G4 in progress.** The production
+> **Status: G1/G2/G3 PASS; G4 Waves 0–2 complete, G4 in progress.** The production
 > `linux-cross-mingw` strategy, isolated target environment, role-scoped
 > builder contracts, CUDA fatbin/bin2c/COFF probe, Rust/Cargo target probe,
 > transitive link metadata, and integrated configure/link acceptance pass.
 > Wave 1 built zlib, libogg, opus, libpng, FreeType2, dav1d, and vid_stab for
 > the Windows target with COFF, pkg-config, link-smoke, prefix, and same-identity
-> reuse acceptance. Wave 2 and FFmpeg integration have not started; there is no
-> supported end-to-end Windows FFmpeg build workflow today. Early feasibility experiments succeeded on one specific
+> reuse acceptance. Wave 2 also accepted gettext, pcre, xvidcore, opencore,
+> lame, fdk_aac, soxr, libtiff, lcms2, libwebp, and libsdl with mandatory
+> OpenMP enabled and `libomp.dll` confirmed on physical Windows. Wave 3 and
+> FFmpeg integration have not started; there is no supported end-to-end
+> Windows FFmpeg build workflow today. Early feasibility experiments succeeded on one specific
 > host (see [`docs/windows_build_strategy.md`](docs/windows_build_strategy.md));
 > the complete configured dependency stack is not yet built.
 > WSL-Mingw resume is guarded by a full semantic target-and-input
@@ -250,9 +253,10 @@ prerequisites, not project-managed Windows target libraries.
 G2.4/G2.5 prerequisite preparation, G2.6 target-input staging, G2.7 semantic
 identity, and G2.8 offline-closure acceptance have passed on the validated
 host. G1/G2/G3 are closed; G3 acceptance does not build components or FFmpeg.
-G4 Wave 0 role-aware selection and Wave 1's seven-component production build
-are complete. G4 is in progress; Wave 2 and FFmpeg integration have not
-started.
+G4 Waves 0 and 1 are complete. Wave 2's eleven-component production build
+passed with the primary profile (`native_build=true`, `openmp=true`), including
+physical-Windows `libomp.dll` runtime acceptance and same-identity reuse. G4
+remains in progress; Wave 3 and FFmpeg integration have not started.
 
 ### Windows runtime prerequisites
 

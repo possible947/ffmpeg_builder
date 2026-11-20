@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Dict, Optional
 
 from .builders.codecs.jxl import build_libjxl
+from .builders.codecs.lcms2 import build_lcms2
+from .builders.codecs.soxr import build_soxr
 from .builders.codecs.tiff import build_libtiff
 from .builders.codecs.vorbis import build_libvorbis
 from .builders.codecs.vpx import build_libvpx
@@ -17,6 +19,8 @@ from .builders.ffmpeg.ffmpeg import build_ffmpeg
 from .builders.graphics.glslang import build_glslang
 from .builders.graphics.placebo import build_libplacebo
 from .builders.graphics.vmaf import build_libvmaf
+from .builders.tools.gettext import build_gettext
+from .builders.tools.pcre import build_pcre
 from .builders.network.srt import build_srt
 from .builders.network.zmq import build_libzmq
 from .builders.tools.meson import build_meson
@@ -51,5 +55,9 @@ CUSTOM_BUILDERS: Dict[str, CustomBuilder] = {
     "build_glslang": build_glslang,
     "build_libplacebo": build_libplacebo,
     "build_ninja": build_ninja,
+    "build_gettext": build_gettext,
+    "build_lcms2": build_lcms2,
+    "build_pcre": build_pcre,
+    "build_soxr": build_soxr,
     "build_ffmpeg": build_ffmpeg,
 }

@@ -37,6 +37,7 @@ from ffmpeg_builder.config import (  # noqa: E402
     BuildConfig,
 )
 from ffmpeg_builder.g4_wave1 import run_g4_wave1  # noqa: E402
+from ffmpeg_builder.g4_wave2 import run_g4_wave2  # noqa: E402
 from ffmpeg_builder.platform_detect import PlatformDetector  # noqa: E402
 from ffmpeg_builder.cuda_prerequisites import (  # noqa: E402
     cuda_nv_codec_identity,
@@ -81,6 +82,14 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         help=(
             "Build and accept only the fixed seven-component G4 Wave-1 subset "
             "for the linux-cross-mingw target."
+        ),
+    )
+    parser.add_argument(
+        "--g4-wave2",
+        action="store_true",
+        help=(
+            "Build and accept only the fixed eleven-component G4 Wave-2 subset "
+            "with the required primary OpenMP profile."
         ),
     )
     return parser.parse_args(argv)
@@ -272,18 +281,21 @@ def dry_run_cross_backend(app: FFmpegBuilderApp, config: BuildConfig, resume: bo
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = parse_args(argv)
+    if args.g4_wave1 and args.g4_wave2:
+        raise SystemExit("--g4-wave1 and --g4-wave2 are mutually exclusive.")
     if args.g4_wave1 and args.dry_run:
         raise SystemExit("--g4-wave1 performs real builds and cannot be combined with --dry-run.")
-    if args.g4_wave1 and args.ffmpeg_version not in (None, "9.0"):
-        raise SystemExit("--g4-wave1 is fixed to FFmpeg 9.0.")
+    if args.g4_wave2 and args.dry_run:
+        raise SystemExit("--g4-wave2 performs real builds and cannot be combined with --dry-run.")
+    if (args.g4_wave1 or args.g4_wave2) and args.ffmpeg_version not in (None, "9.0"):
+        raise SystemExit("--g4-wave1 and --g4-wave2 are fixed to FFmpeg 9.0.")
     app = FFmpegBuilderApp()
     config = app.config_manager.get()
     if args.ffmpeg_version:
         config.ffmpeg_version = args.ffmpeg_version
-    if args.g4_wave1:
+    if args.g4_wave1 or args.g4_wave2:
         config.ffmpeg_version = "9.0"
         config.target_backend = TARGET_BACKEND_CROSS_MINGW
-        config.allow_network_downloads = False
         config.make_release = False
         app.platform_detector = PlatformDetector(config=config)
         app.system_info, app.platform_info, app.tools = app.platform_detector.detect_all()
@@ -291,6 +303,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.g4_wave1:
         return run_g4_wave1(app, config)
+    if args.g4_wave2:
+        return run_g4_wave2(app, config)
     if args.dry_run:
         if getattr(config, "target_backend", "native") == TARGET_BACKEND_CROSS_MINGW:
             return dry_run_cross_backend(app, config, resume=args.resume)

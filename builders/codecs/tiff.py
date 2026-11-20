@@ -17,6 +17,11 @@ def build_libtiff(builder: FFmpegBuilder, component: Component, source_dir: Path
     env = builder.get_build_env(component)
     if type(builder.platform_strategy).__name__ == "LinuxGcc15Platform":
         env["CFLAGS"] = env.get("CFLAGS", "") + " -std=gnu11"
+    cross = builder.platform_context.cross_environment
+    cross_arguments: list[str] = []
+    if cross is not None and component.build_role.value == "target":
+        env.update(cross.autotools.environment)
+        cross_arguments.extend(cross.autotools.arguments)
 
     configure_args = [
         arg.replace("{workspace}", builder._ws_str()) for arg in component.configure_args
@@ -27,7 +32,7 @@ def build_libtiff(builder: FFmpegBuilder, component: Component, source_dir: Path
         ComponentStatus.CONFIGURING,
         "./configure",
         "Configure failed",
-        ["./configure"] + configure_args,
+        ["./configure"] + cross_arguments + configure_args,
         "configure",
         source_dir,
         env,

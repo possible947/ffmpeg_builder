@@ -1,9 +1,36 @@
 # Windows FFmpeg cross-build strategy
 
 **Status:** G1 **PASS**; G2.1–G2.8 **PASS**; G3 **PASS**; G4 **in progress**
-(Waves 0–1 complete). Wave 1 accepted seven real Windows target dependencies;
-the remaining configured component stack and a full Windows FFmpeg build are
-not yet complete.
+(Waves 0–2 complete). Wave 1 accepted seven and Wave 2 accepted eleven real
+Windows target dependencies; Wave 3 and the full Windows FFmpeg build remain
+incomplete.
+
+### G4 Wave 2 — static media and utility dependencies
+
+Accepted `gettext` 0.26, `pcre` 8.45, `xvidcore` 1.3.7, `opencore` 0.1.6,
+`lame` 3.100, `fdk_aac` 2.0.3, `soxr` 0.1.3, `libtiff` 4.7.2, `lcms2`
+2.19.1, `libwebp` 1.6.0, and `libsdl` 2.30.12 for the identity-specific
+Windows target prefix. Acceptance verified their expected headers, static
+archives, target pkg-config metadata where provided, COFF archive members,
+component link smokes, and the complete target-prefix contamination scan.
+Wave 1 remained reusable; the same-identity Wave-2 rerun reused all eleven
+components without rebuilding.
+
+The primary host-optimized Windows profile requires both
+`native_build=true` and `openmp=true`; failure with either enabled is a build
+failure, not a compatibility fallback. The supported compatibility/portable
+profile uses `native_build=false` and `openmp=false` for portable release or
+diagnostic builds, and its success cannot substitute for a primary-profile
+failure. Wave 2 passed with the primary profile. C and C++ OpenMP compile/link
+probes and a physical-Windows runtime smoke confirmed LLVM-MinGW's
+`libomp.dll`. soxr's effective CMake option was `WITH_OPENMP=ON`; its static
+consumer metadata requires `-fopenmp` and records `libomp.dll` as a
+toolchain-runtime DLL and G6 packaging input.
+
+All eleven registered source archives were already present in the
+project-managed offline mirror and passed their declared SHA-256 checks; no
+source or validation-tool downloads were needed. Wave 3 and FFmpeg integration
+have not started. G4 remains in progress.
 
 ### G4 Wave 1 — first production target dependencies
 
@@ -21,7 +48,8 @@ without tools, tests, shell `*-config` helpers, or unversioned header/library
 links. Its versioned static library and headers retain the upstream `libpng.pc`
 pkg-config alias required by FreeType's configure check. Sources were
 verified against local registered checksums; no project-source download was
-needed. Wave 2 and FFmpeg have not started, so G4 remains in progress.
+needed. At Wave-1 acceptance, Wave 2 and FFmpeg had not started; Wave 2 is now
+accepted as described above, and G4 remains in progress.
 
 ### G4 Wave 0 — role and ownership boundary
 

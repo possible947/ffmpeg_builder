@@ -1369,7 +1369,16 @@ def construct_cross_environment(
     explicit_tools = target_tools.as_dict()
     include_flags = f"-I{paths.target_prefix / 'include'}"
     tuning_flags = " ".join(cpu_tuning_flags)
-    target_cflags = " ".join(part for part in (tuning_flags, include_flags) if part)
+    openmp_flags = ("-fopenmp",) if config.openmp else ()
+    target_cflags = " ".join(part for part in (tuning_flags, *openmp_flags, include_flags) if part)
+    target_ldflags = " ".join(
+        part
+        for part in (
+            f"-L{paths.target_prefix / 'lib'}",
+            *openmp_flags,
+        )
+        if part
+    )
     environment.update(
         {
             **explicit_tools,
@@ -1378,7 +1387,7 @@ def construct_cross_environment(
             "CFLAGS": target_cflags,
             "CXXFLAGS": target_cflags,
             "CPPFLAGS": include_flags,
-            "LDFLAGS": f"-L{paths.target_prefix / 'lib'}",
+            "LDFLAGS": target_ldflags,
             "LIBS": "",
             "PKG_CONFIG": str(pkg_config_wrapper),
             "PKG_CONFIG_LIBDIR": os.pathsep.join(str(item) for item in pkg_config_libdirs),

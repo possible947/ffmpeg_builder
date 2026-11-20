@@ -370,6 +370,7 @@ def test_builder_selects_isolated_host_target_and_cargo_projections(tmp_path):
     workspace = tmp_path / "identity"
     target_prefix = workspace / "prefix"
     cross = SimpleNamespace(
+        backend=TARGET_BACKEND_CROSS_MINGW,
         paths=SimpleNamespace(workspace_root=workspace, target_prefix=target_prefix),
         host_environment={"PATH": "/usr/bin", "CFLAGS": "-O2"},
         compiler_environment={
@@ -480,6 +481,7 @@ def test_shared_builder_helpers_emit_scoped_cross_commands(tmp_path, monkeypatch
         "CARGO_NET_OFFLINE": "true",
     }
     cross = SimpleNamespace(
+        backend=TARGET_BACKEND_CROSS_MINGW,
         paths=SimpleNamespace(workspace_root=workspace, target_prefix=target_prefix),
         host_environment={"PATH": "/usr/bin:/bin"},
         compiler_environment=target_env,
@@ -807,10 +809,12 @@ def test_real_cross_environment_and_build_system_acceptance(tmp_path):
     for name in ("CFLAGS", "CXXFLAGS"):
         assert environment.compiler_environment[name].split() == [
             *CPU_TUNING_FLAGS,
+            "-fopenmp",
             f"-I{environment.paths.target_prefix / 'include'}",
         ]
         assert environment.autotools.environment[name].split() == [
             *CPU_TUNING_FLAGS,
+            "-fopenmp",
             f"-I{environment.paths.target_prefix / 'include'}",
         ]
     assert environment.autotools.environment["CFLAGS"] == environment.compiler_environment["CFLAGS"]
@@ -829,6 +833,25 @@ def test_real_cross_environment_and_build_system_acceptance(tmp_path):
     assert environment.rust_tools.target == "x86_64-pc-windows-gnullvm"
     assert environment.paths.target_prefix == workspace / "prefix"
     assert environment.pkg_config_wrapper.is_file()
+    portable = construct_cross_environment(
+        preparation,
+        BuildConfig(
+            target_backend=TARGET_BACKEND_CROSS_MINGW,
+            cuda_build_mode="disabled",
+            native_build=False,
+            openmp=False,
+        ),
+        tmp_path / "portable-workspace",
+        PROJECT_ROOT / "third_party" / "sources",
+        parent_environment=parent,
+        registry=components,
+    )
+    assert portable.cpu_tuning_flags == ()
+    for key in ("CFLAGS", "CXXFLAGS", "LDFLAGS"):
+        flags = portable.compiler_environment[key].split()
+        assert "-march=native" not in flags
+        assert "-mtune=native" not in flags
+        assert "-fopenmp" not in flags
     assert environment.cmake_toolchain_file.is_file()
     assert environment.meson_cross_file.is_file()
 

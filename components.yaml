@@ -155,6 +155,8 @@
   url: https://ftpmirror.gnu.org/gettext/gettext-{version}.tar.gz
   category: crypto
   build_system: autotools
+  workdir: gettext-runtime
+  custom_build_fn: build_gettext
   configure_args:
   - --prefix={workspace}
   - --enable-static
@@ -429,7 +431,9 @@
   - --prefix={workspace}
   - --disable-shared
   - --enable-static
+  - --disable-cpp
   archive_filename: pcre-{version}.tar.gz
+  custom_build_fn: build_pcre
   skip_condition: disable_lv2
   platform_overrides:
     linux:
@@ -543,6 +547,12 @@
   - --enable-static
   archive_filename: lame-{version}.tar.gz
   platform_overrides:
+    linux-cross-mingw:
+      configure_args_override:
+      - --prefix={workspace}
+      - --disable-shared
+      - --enable-static
+      - --disable-frontend
     windows:
       extra_env: {}
       configure_args_override:
@@ -631,8 +641,18 @@
   - -DWITH_OPENMP:bool=off
   - -DBUILD_TESTS:bool=off
   - -Wno-dev
+  custom_build_fn: build_soxr
   archive_filename: soxr-{version}.tar.xz
   workdir: build
+  target_link_metadata:
+    private_transitive_link_requirements:
+    - -fopenmp
+    runtime_dependencies:
+    - name: libomp.dll
+      classification: toolchain-runtime-dll
+      source_identity: llvm-mingw-20261104
+    provenance:
+    - LLVM-MinGW OpenMP static-consumer probe
   ffmpeg_configure_flag: --enable-libsoxr
 - name: libtiff
   sha256: 4996f0c4f93094719b1ca5c6279b20e588773ba8a247533e486416fb662ddb88
@@ -641,6 +661,8 @@
   category: image_codec
   build_system: autotools
   custom_build_fn: build_libtiff
+  depends_on:
+  - zlib
   configure_args:
   - --prefix={workspace}
   - --disable-shared
@@ -650,6 +672,10 @@
   - --disable-webp
   - --disable-zstd
   - --without-x
+  - --disable-tools
+  - --disable-tests
+  - --disable-docs
+  - --disable-cxx
 - name: libpng
   sha256: 8c9b05b675ca7301a458df2c2e46f26e1d41ff36b8863f8c33530bc58c2e6225
   version: 1.6.58
@@ -674,6 +700,7 @@
   url: https://github.com/mm2/Little-CMS/releases/download/lcms{version}/lcms2-{version}.tar.gz
   category: image_codec
   build_system: autotools
+  custom_build_fn: build_lcms2
   configure_args:
   - --prefix={workspace}
   - --disable-shared
@@ -723,6 +750,7 @@
   - --prefix={workspace}
   - --disable-shared
   - --enable-static
+  - --disable-sdl2-config
 - name: FreeType2
   sha256: 36bc4f1cc413335368ee656c42afca65c5a3987e8768cc28cf11ba775e785a5f
   version: 2.14.3

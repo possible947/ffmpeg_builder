@@ -8,6 +8,7 @@ import pytest
 from ffmpeg_builder.build_types import BuildError
 from ffmpeg_builder.builders import base as shared_builders
 from ffmpeg_builder.components import ComponentRegistry
+from ffmpeg_builder.config import TARGET_BACKEND_CROSS_MINGW
 from ffmpeg_builder.g4_wave1 import (
     G4_WAVE1_COMPONENTS,
     Wave1TargetValidator,
@@ -80,10 +81,11 @@ def test_zlib_cross_configure_uses_explicit_tools_without_autoconf_tuples(
         num_jobs = 2
         platform_context = SimpleNamespace(
             cross_environment=SimpleNamespace(
+                backend=TARGET_BACKEND_CROSS_MINGW,
                 autotools=SimpleNamespace(
                     environment={"CC": "/target/clang", "AR": "/target/llvm-ar"},
                     arguments=("--build=x86_64-linux", "--host=x86_64-w64-mingw32"),
-                )
+                ),
             )
         )
 
@@ -336,6 +338,18 @@ def test_installed_metadata_allows_urls_and_target_prefix_paths(tmp_path: Path):
         "URL: https://opus-codec.org/\n"
         f"prefix={validator.prefix}\n"
         f"Libs: -L{validator.prefix}/lib -lopus\n",
+        encoding="utf-8",
+    )
+
+    validator._validate_metadata_paths(metadata)
+
+
+def test_installed_cmake_metadata_allows_relocatable_parent_prefix(tmp_path: Path):
+    validator = _fake_validator(tmp_path)
+    metadata = validator.prefix / "share/WebP/cmake/WebPConfig.cmake"
+    metadata.parent.mkdir(parents=True)
+    metadata.write_text(
+        'get_filename_component(PACKAGE_PREFIX_DIR "${CMAKE_CURRENT_LIST_DIR}/../../../" ABSOLUTE)\n',
         encoding="utf-8",
     )
 

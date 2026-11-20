@@ -1,0 +1,76 @@
+"""PCRE component builder."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+from ...components import BuildRole
+from ...state import ComponentStatus
+
+if TYPE_CHECKING:
+    from ...builder import FFmpegBuilder
+    from ...components import Component
+
+
+def build_pcre(builder: FFmpegBuilder, component: Component, source_dir: Path) -> None:
+    """Build and install PCRE's 8-bit static library without target utilities."""
+    environment = builder.get_build_env(component)
+    cross = builder.platform_context.cross_environment
+    cross_arguments: list[str] = []
+    if cross is not None and component.build_role == BuildRole.TARGET_COMPONENT:
+        environment.update(cross.autotools.environment)
+        cross_arguments.extend(cross.autotools.arguments)
+
+    configure_args = [
+        argument.replace("{workspace}", builder._ws_str()).replace(
+            "{num_jobs}", str(builder.num_jobs)
+        )
+        for argument in component.configure_args
+    ]
+    override = component.platform_overrides.get(builder.platform)
+    if override is not None and override.configure_args_override is not None:
+        configure_args = [
+            argument.replace("{workspace}", builder._ws_str()).replace(
+                "{num_jobs}", str(builder.num_jobs)
+            )
+            for argument in override.configure_args_override
+        ]
+
+    builder._run_step(
+        component,
+        ComponentStatus.CONFIGURING,
+        "./configure",
+        "Configure failed",
+        ["./configure", *cross_arguments, *configure_args],
+        "configure",
+        source_dir,
+        environment,
+    )
+    builder._run_step(
+        component,
+        ComponentStatus.BUILDING,
+        f"make -j{builder.num_jobs} libpcre.la",
+        "Build failed",
+        ["make", f"-j{builder.num_jobs}", "libpcre.la"],
+        "build",
+        source_dir,
+        environment,
+    )
+    builder._run_step(
+        component,
+        ComponentStatus.INSTALLING,
+        "Install PCRE static library, headers, and pkg-config metadata",
+        "Install failed",
+        [
+            "make",
+            "install-libLTLIBRARIES",
+            "install-nodist_includeHEADERS",
+            "install-pkgconfigDATA",
+            "lib_LTLIBRARIES=libpcre.la",
+            "pkgconfig_DATA=libpcre.pc",
+        ],
+        "install",
+        source_dir,
+        environment,
+    )

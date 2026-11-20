@@ -94,8 +94,13 @@ def build_autotools(
     ]
 
     # Apply platform-specific configure_args_override if present.
-    if context.builder.platform in component.platform_overrides:
-        override = component.platform_overrides[context.builder.platform]
+    override_key = (
+        cross.backend
+        if cross is not None and component.build_role.value == "target"
+        else context.builder.platform
+    )
+    if override_key in component.platform_overrides:
+        override = component.platform_overrides[override_key]
         if override.configure_args_override is not None:
             configure_args = [
                 arg.replace("{workspace}", context.builder._ws_str()).replace(
@@ -166,12 +171,18 @@ def build_cmake(context: ComponentBuildContext, component: "Component", source_d
         # that subdirectory.
         cmake_args = [*cmake_args, "-DBUILD_TESTING=OFF"]
 
-    # Honour config.openmp: replace WITH_OPENMP:bool=off → on when
-    # OpenMP is enabled (e.g. soxr exposes this CMake option).
-    if context.builder.config.openmp:
-        cmake_args = [
-            arg.replace("-DWITH_OPENMP:bool=off", "-DWITH_OPENMP:bool=on") for arg in cmake_args
-        ]
+    # Keep declared CMake OpenMP options aligned with the selected profile.
+    # Components without an OpenMP option remain unaffected.
+    openmp_value = "ON" if context.builder.config.openmp else "OFF"
+    cmake_args = [
+        re.sub(
+            r"(-D[A-Za-z0-9_]*OPENMP[A-Za-z0-9_]*(?::[^=]+)?=)(?:ON|OFF|TRUE|FALSE|YES|NO|1|0)$",
+            rf"\g<1>{openmp_value}",
+            arg,
+            flags=re.IGNORECASE,
+        )
+        for arg in cmake_args
+    ]
 
     env = context.builder.get_build_env(component)
     cross = context.builder.platform_context.cross_environment

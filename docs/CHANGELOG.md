@@ -1,3 +1,28 @@
+### Accepted — G4 Wave 2 real target dependency cross-builds
+
+- Built and accepted gettext 0.26, pcre 8.45, xvidcore 1.3.7, opencore 0.1.6,
+  lame 3.100, fdk_aac 2.0.3, soxr 0.1.3, libtiff 4.7.2, lcms2 2.19.1,
+  libwebp 1.6.0, and libsdl 2.30.12 for the identity-specific Windows target
+  prefix. Validated target headers, static COFF archives, pkg-config metadata,
+  per-component link smokes, and the complete prefix contamination scan.
+- Accepted Wave-2 adaptations include a target soxr pkg-config file with
+  `Libs.private: -fopenmp`, a libtiff build that excludes unused tools/tests/
+  docs/C++ outputs, an lcms2 library-only build path, and disabling SDL's
+  host-side `sdl2-config` helper. The validator accepts relocatable CMake
+  package-prefix expressions while continuing to reject host absolute paths.
+- The primary Windows profile (`native_build=true`, `openmp=true`) passed.
+  C and C++ OpenMP compile/link probes and a physical-Windows smoke confirmed
+  `libomp.dll`; soxr requires `-fopenmp` and records that DLL as a
+  toolchain-runtime dependency and G6 packaging input. All eleven source
+  archives were available locally and checksum-verified; no downloads were
+  needed. The repeated same-identity run reused all eleven Wave-2 outputs and
+  the seven accepted Wave-1 dependencies.
+- Compatibility/portable mode is `native_build=false`, `openmp=false` for
+  portable releases or diagnostics; its success does not replace primary
+  profile acceptance or convert a primary failure into a pass.
+- G4 Waves 0–2 are complete; Wave 3 and FFmpeg integration have not started.
+  G4 remains in progress and is not marked PASS.
+
 ### Accepted — G4 Wave 1 real target dependency cross-builds
 
 - Built and accepted zlib 1.3.2, libogg 1.3.6, opus 1.6.1, libpng 1.6.58,
@@ -12,8 +37,8 @@
   target zlib/libpng in FreeType's configuration. Retained libpng's upstream
   `libpng.pc` alias for that target dependency while disabling its tools,
   tests, shell config scripts, and unversioned header/library links. G4 Waves
-  0–1 are accepted; Wave 2 and FFmpeg builds have not started. G4 remains in
-  progress.
+  0–1 were accepted at this milestone; Wave 2 and FFmpeg had not started then.
+  G4 remains in progress.
 
 ### Accepted — G4 Wave 0 role-aware selection
 
