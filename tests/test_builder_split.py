@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from ffmpeg_builder.builder import BuildError, CARGO_C_VERSION, FFmpegBuilder
-from ffmpeg_builder.components import BuildSystem, Component, ComponentCategory
+from ffmpeg_builder.components import BuildRole, BuildSystem, Component, ComponentCategory
 from ffmpeg_builder.config import BuildConfig, TARGET_BACKEND_CROSS_MINGW
 from ffmpeg_builder.component_builders import get_custom_builder
 from ffmpeg_builder.platforms.linux_gcc15 import LinuxGcc15Platform
@@ -747,6 +747,118 @@ def test_build_cargo_installs_pinned_cargo_c(tmp_path: Path, monkeypatch: pytest
     assert probed_components == [component]
     assert commands[0] == ["cargo", "install", "cargo-c", "--version", CARGO_C_VERSION]
     assert commands[1][:2] == ["cargo", "cinstall"]
+
+
+def test_build_cargo_cross_fails_closed_when_cargo_c_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    builder = _make_builder_with_archives(tmp_path, str(tmp_path / "archives"))
+    builder.config.target_backend = TARGET_BACKEND_CROSS_MINGW
+    component = _make_libplacebo_component()
+    commands = []
+
+    monkeypatch.setattr(
+        "ffmpeg_builder.builders.base.get_rustc_version",
+        lambda context, component=None: (1, 95, 0),
+    )
+    monkeypatch.setattr(shutil, "which", lambda name, path=None: None)
+    builder.executor.execute_with_log = lambda *args, **kwargs: commands.append(args)
+
+    with pytest.raises(BuildError, match="automatic installation is disabled") as error:
+        builder._build_cargo(component, tmp_path / "src")
+
+    assert error.value.code == "wsl_mingw_cargo_c_unavailable"
+    assert not commands
+
+
+def test_build_cargo_cross_rejects_unpinned_cargo_c_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    builder = _make_builder_with_archives(tmp_path, str(tmp_path / "archives"))
+    builder.config.target_backend = TARGET_BACKEND_CROSS_MINGW
+    component = _make_libplacebo_component()
+
+    monkeypatch.setattr(
+        "ffmpeg_builder.builders.base.get_rustc_version",
+        lambda context, component=None: (1, 95, 0),
+    )
+    monkeypatch.setattr(shutil, "which", lambda name, path=None: "/host/bin/cargo-c")
+    builder.executor.execute = lambda *args, **kwargs: type(
+        "Result", (), {"success": True, "stdout": "cargo-c 0.10.24"}
+    )()
+
+    with pytest.raises(BuildError, match="does not match the required pinned version") as error:
+        builder._build_cargo(component, tmp_path / "src")
+
+    assert error.value.code == "wsl_mingw_cargo_c_version_mismatch"
+
+
+def test_cross_host_tool_availability_does_not_create_component_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    builder = _make_builder_with_archives(tmp_path, str(tmp_path / "archives"))
+    builder.config.target_backend = TARGET_BACKEND_CROSS_MINGW
+    component = Component(
+        "cmake",
+        "4.4.3",
+        "https://example.org/cmake.tar.gz",
+        ComponentCategory.BUILD_TOOL,
+        BuildSystem.CMAKE,
+        system_component=True,
+        system_tool_name="cmake",
+        build_role=BuildRole.HOST_TOOL,
+    )
+    marks = []
+    builder.state_manager.mark_component_status = lambda *args, **kwargs: marks.append(args)
+    monkeypatch.setattr(builder, "_is_system_component_available", lambda _tool: True)
+
+    builder.build_component(component)
+
+    assert not marks
+
+
+def test_cross_host_system_libraries_cannot_satisfy_target_components(tmp_path: Path):
+    builder = _make_builder_with_archives(tmp_path, str(tmp_path / "archives"))
+    builder.config.target_backend = TARGET_BACKEND_CROSS_MINGW
+    registry = builder.registry
+
+    for name in ("zlib", "onevpl"):
+        component = registry.get_by_name(name)
+        assert component is not None
+        assert component.build_role == BuildRole.TARGET_COMPONENT
+        assert component.system_component
+        assert not builder._should_use_system_component(component)
+
+    for name in ("cmake", "nasm"):
+        component = registry.get_by_name(name)
+        assert component is not None
+        assert component.build_role == BuildRole.HOST_TOOL
+        assert builder._should_use_system_component(component)
+
+    builder.config.target_backend = "native"
+    zlib = registry.get_by_name("zlib")
+    assert zlib is not None
+    assert builder._should_use_system_component(zlib)
+
+
+def test_cross_target_system_status_does_not_skip_target_materialization(tmp_path: Path):
+    builder = _make_builder_with_archives(tmp_path, str(tmp_path / "archives"))
+    builder.config.target_backend = TARGET_BACKEND_CROSS_MINGW
+    zlib = builder.registry.get_by_name("zlib")
+    assert zlib is not None
+    builder.state_manager.mark_component_status(zlib.name, ComponentStatus.SYSTEM, zlib.version)
+    reached_source = []
+
+    def stop_before_download(component):
+        reached_source.append(component.name)
+        raise BuildError(component.name, "test stopped before source access")
+
+    builder._download_and_extract = stop_before_download
+
+    with pytest.raises(BuildError, match="test stopped before source access"):
+        builder._build_component_impl(zlib)
+
+    assert reached_source == ["zlib"]
 
 
 def test_build_cargo_rewrites_strict_c11_for_linux_gcc15(

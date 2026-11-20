@@ -1,10 +1,63 @@
 # Windows FFmpeg cross-build strategy
 
-**Status:** G1 **PASS**; G2.1–G2.8 **PASS**; G3 **PASS**; G4 **not started**.
-G3 established and accepted the production `linux-cross-mingw` strategy,
-identity-local target environment, shared build contracts, and integrated
-host/target acceptance. Component-wide Windows cross-build support and a full
-Windows FFmpeg build are not claimed.
+**Status:** G1 **PASS**; G2.1–G2.8 **PASS**; G3 **PASS**; G4 **in progress**
+(Waves 0–1 complete). Wave 1 accepted seven real Windows target dependencies;
+the remaining configured component stack and a full Windows FFmpeg build are
+not yet complete.
+
+### G4 Wave 1 — first production target dependencies
+
+Accepted `zlib` 1.3.2, `libogg` 1.3.6, `opus` 1.6.1, `libpng` 1.6.58,
+`FreeType2` 2.14.3, `dav1d` 1.5.4, and `vid_stab` 1.1.1 using the production
+Autotools, Meson, and CMake cross-build paths. Their identity-local target
+archives, headers, and pkg-config metadata passed Windows COFF validation,
+target link smokes, and the full target-prefix contamination scan. A repeated
+same-identity run validated and reused all seven outputs.
+
+The Wave-1 dependency graph declares `zlib -> libpng` and
+`zlib, libpng -> FreeType2`; FreeType configuration requires both target
+dependencies, and its pkg-config metadata publishes them. libpng is built
+without tools, tests, shell `*-config` helpers, or unversioned header/library
+links. Its versioned static library and headers retain the upstream `libpng.pc`
+pkg-config alias required by FreeType's configure check. Sources were
+verified against local registered checksums; no project-source download was
+needed. Wave 2 and FFmpeg have not started, so G4 remains in progress.
+
+### G4 Wave 0 — role and ownership boundary
+
+The existing `BuildRole` remains the single role model: `host` means a
+`HOST_TOOL`, `target` means a `TARGET_COMPONENT`, and `mixed` requires
+separate host and target phases. The ten registered host tools are
+`pkg-config`, `yasm`, `nasm`, `m4`, `autoconf`, `automake`, `libtool`,
+`cmake`, `meson`, and `ninja`. Under `linux-cross-mingw`, they resolve as
+read-only WSL host prerequisites; their availability is not persisted as a
+Windows-target component status, and they are never placed in the target
+prefix. NASM/Yasm remain host executables; a target consumer must request its
+Windows object format explicitly.
+
+`system_component` remains valid for native builds. On the cross backend it
+may satisfy a `HOST_TOOL`, but never a `TARGET_COMPONENT` or the target-output
+phase of a `MIXED` component. Thus host zlib or oneVPL cannot suppress their
+Windows-target builds. Same-identity target artifacts remain reusable through
+the identity guard and component state; host-system detection is not target
+artifact reuse.
+
+`giflib` remains registered and native-only: the FFmpeg 9.0 registry has no
+configured target consumer or FFmpeg flag for it, while the production
+builder treats it as an always-system prerequisite. It is not selected as a
+WSL-Mingw target output. `opencl-icd-loader` is native-only for component
+builds and is retained as G2 `OpenCL.def` provenance for the generated
+`libOpenCL.a` interface; Windows runtime policy remains system
+`OpenCL.dll` plus the vendor ICD. `cargo-c` is an explicit prepared WSL host
+prerequisite, not a ToolchainStore-managed artifact: the cross Cargo path
+requires the pinned 0.10.25 executable and fails closed if missing or
+mismatched, without invoking `cargo install`.
+
+The cross dry-run now reports G4 Wave-0 roles, host-tool satisfaction,
+conditional components, target inputs, and target-build selection after G1/G2
+authorization and G3 acceptance. It stops before any component build. The
+current target build selection is not an assertion that the later component
+builders are already cross-ready.
 
 **Naming.** The user-facing Windows build route is **WSL-Mingw**: Windows host
 → WSL2 Ubuntu build environment → LLVM-MinGW/UCRT cross toolchain → Windows
@@ -787,15 +840,17 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
 
 ### G3 — `linux-cross-mingw` backend and platform strategy
 
-- **Status:** G1 **PASS**; G2 **PASS**; G3 **PASS**; G4 **not started**.
+- **Status:** G1 **PASS**; G2 **PASS**; G3 **PASS**; G4 **in progress**
+  (Wave 0 complete; Wave 1 not started).
 - **Pass 1 completed:** production strategy selection; typed host/target tool
   projections; identity-workspace `prefix/`, `build/`, `generated/`,
   `packages/`, and `diagnostics/`; safe G2.6 target-input reuse; explicit
   LLVM-MinGW compiler/binutils mapping; host-native tool separation;
   target-only pkg-config wrapper and contamination checks; deterministic CMake
   and Meson cross files; Autotools tuples/environment; and identity-local Rust
-  and deferred CUDA host-tool projections. TUI and headless routes prepare and
-  validate this foundation, then stop before component selection/building.
+  and deferred CUDA host-tool projections. The TUI and normal headless build
+  route stop after G3; cross `--dry-run` also reports G4 Wave-0 selection and
+  stops before component building.
 - **Real pass-1 acceptance:** C/C++ and resource compile/link, static archive
   link, PE32+ x86-64/COFF/UCRT inspection, pkg-config isolation and malicious
   metadata rejection, minimal CMake configure/build, Meson setup/build, and
@@ -818,9 +873,9 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
   stack or production FFmpeg cross-build was run.
 - **Legacy and production boundary:** reached MSYS-specific FFmpeg path
   conversion is restricted to the legacy UCRT64 route; `linux-cross-mingw`
-  uses no MSYS shell/path semantics. TUI and headless G3 preparation run
-  identity-scoped acceptance and intentionally stop before component
-  selection/building.
+  uses no MSYS shell/path semantics. TUI and normal headless builds run
+  identity-scoped G3 acceptance and stop before component selection/building;
+  cross `--dry-run` also reports G4 Wave-0 selection but performs no builds.
 - **Final acceptance:** selected CUDA/NVCC/GCC/bin2c, Rust/Cargo, C/C++/COFF
   and PE, Autotools, CMake, Meson, target-only pkg-config, Vulkan/OpenCL
   interfaces, target contamination guards, and native regression suite pass.

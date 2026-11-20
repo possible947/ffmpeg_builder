@@ -402,7 +402,7 @@ def test_builder_selects_isolated_host_target_and_cargo_projections(tmp_path):
         "https://example.org/generator.tar.gz",
         ComponentCategory.BUILD_TOOL,
         BuildSystem.CMAKE,
-        build_role=BuildRole.HOST,
+        build_role=BuildRole.HOST_TOOL,
     )
     target = Component(
         "library",
@@ -434,6 +434,10 @@ def test_builder_selects_isolated_host_target_and_cargo_projections(tmp_path):
     assert builder._ws_str(host) == str(workspace / "host-prefix")
     assert builder._ws_str(target) == str(target_prefix)
     assert "CC" not in host_env and target_env["CC"] == "/llvm-mingw/bin/clang"
+    assert host_env["CMAKE_PREFIX_PATH"] == str(workspace / "host-prefix")
+    assert "PKG_CONFIG_LIBDIR" not in host_env
+    assert "-march=native" not in host_env.get("CFLAGS", "")
+    assert str(target_prefix) not in host_env.get("CMAKE_PREFIX_PATH", "")
     assert cargo_env["CARGO_BUILD_TARGET"] == "x86_64-pc-windows-gnullvm"
     assert "RUSTFLAGS" not in cargo_env
     assert "CFLAGS" not in cargo_env
@@ -518,8 +522,20 @@ def test_shared_builder_helpers_emit_scoped_cross_commands(tmp_path, monkeypatch
     monkeypatch.setattr(shared_builders, "run_make", capture_make)
     monkeypatch.setattr(shared_builders, "run_install", capture_install)
     monkeypatch.setattr(shared_builders, "get_rustc_version", lambda *args: (1, 99, 0))
-    monkeypatch.setattr(shared_builders.shutil, "which", lambda *args, **kwargs: None)
-    context = SimpleNamespace(builder=builder, executor=None, state_manager=None)
+    monkeypatch.setattr(
+        shared_builders.shutil,
+        "which",
+        lambda name, *args, **kwargs: "/usr/bin/cargo-c" if name == "cargo-c" else None,
+    )
+    context = SimpleNamespace(
+        builder=builder,
+        executor=SimpleNamespace(
+            execute=lambda *args, **kwargs: SimpleNamespace(
+                success=True, stdout=f"cargo-c {shared_builders.CARGO_C_VERSION}"
+            )
+        ),
+        state_manager=None,
+    )
     sources = tmp_path / "sources"
     sources.mkdir()
     components = {
@@ -568,12 +584,8 @@ def test_shared_builder_helpers_emit_scoped_cross_commands(tmp_path, monkeypatch
     make = next(call for call in calls if call[0] == "g3-make_only" and call[1] == "build")
     assert make[3]["CC"] == target_cc
     assert make[3]["CFLAGS"].split()[:2] == ["-march=native", "-mtune=native"]
-    cargo_install = next(
-        call for call in calls if call[0] == "g3-cargo" and call[1] == "install-cargo-c"
-    )
     cargo_build = next(call for call in calls if call[0] == "g3-cargo" and call[1] == "build")
-    assert "--target" not in cargo_install[3]
-    assert "CFLAGS" not in cargo_install[3]
+    assert not any(call[1] == "install-cargo-c" for call in calls)
     assert cargo_build[3]["CARGO_BUILD_TARGET"] == "x86_64-pc-windows-gnullvm"
     assert cargo_build[3]["CARGO_TARGET_DIR"] == str(workspace / "build/cargo-target")
     assert all(
@@ -610,7 +622,10 @@ def test_headless_cross_route_stops_after_environment_acceptance(capsys):
     assert "G3 cross-environment acceptance passed" in capsys.readouterr().out
 
 
-def test_headless_cross_dry_run_performs_acceptance_without_component_selection(capsys):
+def test_headless_cross_dry_run_reports_wave_zero_selection_without_building(capsys):
+    def component(name, version="1"):
+        return SimpleNamespace(name=name, version=version)
+
     class HeadlessApp:
         def prepare_target(self, config, resume):
             return SimpleNamespace(
@@ -624,8 +639,18 @@ def test_headless_cross_dry_run_performs_acceptance_without_component_selection(
                 paths=SimpleNamespace(workspace_root=Path("/identity/workspace")),
             )
 
-        def _get_buildable_components(self, config):
-            raise AssertionError("G3 preparation must stop before G4 component selection")
+        def _get_component_selection(self, config):
+            return SimpleNamespace(
+                host_tools=[component("cmake", "4.4.3")],
+                system_satisfied_host_requirements=["cmake"],
+                missing_host_tools=[],
+                target_inputs=[component("vulkan-headers")],
+                target_components_to_build=[component("zlib", "1.3.2")],
+                mixed_components=[component("mixed-generator")],
+                conditional_components=[component("amf")],
+                skipped_by_feature=[component("libvmaf")],
+                skipped_by_backend=[],
+            )
 
     status = dry_run_cross_backend(
         HeadlessApp(),
@@ -640,6 +665,13 @@ def test_headless_cross_dry_run_performs_acceptance_without_component_selection(
     assert status == 0
     assert "identity authorized" in output
     assert "Dry-run passed: G3 cross-environment acceptance passed" in output
+    assert "HOST TOOL cmake: satisfied" in output
+    assert "TARGET INPUT vulkan-headers" in output
+    assert "TARGET BUILD zlib" in output
+    assert "MIXED mixed-generator" in output
+    assert "CONDITIONAL amf" in output
+    assert "SKIPPED BY FEATURE libvmaf" in output
+    assert "no Wave-1 component was built" in output
 
 
 def _available_cross_inputs(tmp_path: Path):

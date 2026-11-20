@@ -221,10 +221,10 @@ toolchains:
     materialize:
       bin_subdir: bin
     note: >-
-      No store source: the rav1e cargo build installs cargo-c on demand
-      (pinned 0.10.25) when it is absent from PATH. That install runs
-      "cargo install", so it needs network access unless cargo-c is already
-      installed.
+      No store source: linux-cross-mingw treats cargo-c 0.10.25 as an
+      externally prepared WSL host prerequisite, verifies its version, and
+      fails closed when it is missing. Native builds retain the existing
+      on-demand "cargo install" fallback, which requires network access.
 
 platform_profiles:
   linux-ffmpeg-8.1:

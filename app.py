@@ -7,7 +7,7 @@ import sys
 import tempfile
 from dataclasses import replace
 from pathlib import Path
-from types import TracebackType
+from types import SimpleNamespace, TracebackType
 from typing import Any, Callable, Dict, List, Optional, Tuple, Type
 
 from rich.console import Console
@@ -21,7 +21,7 @@ from .build_types import (
     SkipComponent,
 )
 from .builder import FFmpegBuilder
-from .components import Component, ComponentRegistry
+from .components import Component, ComponentRegistry, ComponentSelection
 from .cross_environment import (
     CrossEnvironment,
     run_cross_environment_acceptance,
@@ -67,7 +67,7 @@ from .target_guard import (
 from .system_report import SystemReportGenerator
 from .toolchain_registry import ToolchainRegistry
 from .toolchain_store import ToolchainStore, resolve_store_root
-from .windows_probe import WindowsTargetState, probe_windows_target
+from .windows_probe import FeatureState, WindowsTargetState, probe_windows_target
 from .vulkan_prerequisites import (
     CAPABILITY_SHADER_COMPILATION,
     CAPABILITY_SPIRV_VALIDATION,
@@ -782,6 +782,21 @@ class FFmpegBuilderApp:
 
     def _get_buildable_components(self, config: BuildConfig) -> List[Component]:
         platform = self.platform_detector.get_platform_name()
+        if self._is_cross_mingw(config):
+            selection = self._get_component_selection(config)
+            selected = {
+                component.name: component
+                for component in (
+                    selection.target_inputs
+                    + selection.target_components
+                    + selection.mixed_components
+                )
+            }
+            return [
+                selected[component.name]
+                for component in self.registry.get_all()
+                if component.name in selected
+            ]
         return self.registry.get_buildable(
             config.gpl_enabled,
             platform,
@@ -793,6 +808,59 @@ class FFmpegBuilderApp:
             ffmpeg_version=config.ffmpeg_version,
             toolchain_checker=self._component_toolchain_checker(config),
         )
+
+    def _get_component_selection(self, config: BuildConfig) -> ComponentSelection:
+        """Return the role-aware selection for the WSL-Mingw build graph."""
+        if not self._is_cross_mingw(config):
+            raise ValueError("Role-aware selection is only available for linux-cross-mingw")
+        return self.registry.get_buildable_selection(
+            config.gpl_enabled,
+            self.platform_detector.get_platform_name(),
+            self.tools,
+            disable_lv2=config.disable_lv2,
+            enable_libvmaf=config.enable_libvmaf,
+            platform_info=self.platform_info,
+            ffmpeg_version=config.ffmpeg_version,
+            toolchain_checker=self._component_toolchain_checker(config),
+            target_backend=TARGET_BACKEND_CROSS_MINGW,
+            host_tool_checker=self._host_tool_available,
+            target_platform_info=self._cross_target_capabilities(config),
+        )
+
+    def _cross_target_capabilities(self, config: BuildConfig) -> Optional[Any]:
+        """Project Windows/runtime facts without consulting WSL GPU hardware."""
+        state = self.windows_target_state
+        if state is None:
+            return None
+        cuda_enabled = config.cuda_build_mode != "disabled" and (
+            config.cuda_build_mode == "required"
+            or (config.enable_libvmaf and config.enable_libvmaf_cuda)
+        )
+        nvidia_api = next((value for value in state.nvidia.api.values() if value), None)
+        opencl_present = state.opencl.state == FeatureState.PRESENT
+        return SimpleNamespace(
+            cuda_available=cuda_enabled,
+            nvenc_api_version=nvidia_api,
+            vulkan_available=config.enable_libplacebo_vulkan,
+            amf_available=False,
+            opencl_available=opencl_present,
+            opencl_runtime_available=opencl_present,
+            qsv_available=False,
+            is_msys2=False,
+            is_ucrt64=False,
+            build_backend=TARGET_BACKEND_CROSS_MINGW,
+        )
+
+    @staticmethod
+    def _host_tool_available(tool: str) -> bool:
+        """Check host executable availability without installing or mutating it."""
+        aliases = {
+            "pkg-config": ("pkg-config", "pkgconf"),
+            "libtool": ("libtool", "libtoolize"),
+            "automake": ("automake", "automake-1.18", "automake-1.17", "automake-1.16"),
+            "autoconf": ("autoconf", "autoconf-2.72", "autoconf-2.71"),
+        }
+        return any(shutil.which(name) is not None for name in aliases.get(tool, (tool,)))
 
     def _component_toolchain_checker(self, config: BuildConfig) -> Callable[[Component], bool]:
         """Per-component toolchain gate for skipped components.

@@ -12,7 +12,7 @@ from types import TracebackType
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Type
 
 from ..build_steps import BuildStepContext, run_install, run_make, run_step
-from ..build_types import BuildError
+from ..build_types import CATEGORY_EXTERNAL_PREREQUISITE, BuildError
 from ..config import TARGET_BACKEND_CROSS_MINGW
 from ..executor import CommandExecutor
 from ..state import ComponentStatus, StateManager
@@ -81,7 +81,10 @@ def build_autotools(
     cross_arguments: List[str] = []
     if cross is not None and component.build_role.value == "target":
         env.update(cross.autotools.environment)
-        cross_arguments.extend(cross.autotools.arguments)
+        # zlib's hand-written configure script rejects Autoconf's --build/--host.
+        # Its explicit compiler/binutils environment still produces target objects.
+        if component.name != "zlib":
+            cross_arguments.extend(cross.autotools.arguments)
 
     configure_args = [
         arg.replace("{workspace}", context.builder._ws_str()).replace(
@@ -393,19 +396,13 @@ def build_cargo(context: ComponentBuildContext, component: "Component", source_d
 
     cargo_c_path = shutil.which("cargo-c", path=env.get("PATH"))
     if cargo_c_path is None:
-        install_env = env
-        cross = context.builder.platform_context.cross_environment
-        if (
-            cross is not None
-            and context.builder.config.target_backend == TARGET_BACKEND_CROSS_MINGW
-        ):
-            install_env = dict(cross.cargo_environment)
-            install_env.pop("CARGO_BUILD_TARGET", None)
-            install_env.pop("CARGO_TARGET_X86_64_PC_WINDOWS_GNULLVM_LINKER", None)
-            install_env.pop("CARGO_TARGET_X86_64_PC_WINDOWS_GNULLVM_AR", None)
-            rust_bin = str(cross.rust_tools.cargo.parent)
-            install_env["PATH"] = rust_bin + (
-                os.pathsep + install_env["PATH"] if install_env.get("PATH") else ""
+        if context.builder.config.target_backend == TARGET_BACKEND_CROSS_MINGW:
+            raise BuildError(
+                component.name,
+                f"Required prepared WSL host prerequisite cargo-c {CARGO_C_VERSION} "
+                "is unavailable; automatic installation is disabled for linux-cross-mingw.",
+                category=CATEGORY_EXTERNAL_PREREQUISITE,
+                code="wsl_mingw_cargo_c_unavailable",
             )
         run_step(
             context,
@@ -416,8 +413,26 @@ def build_cargo(context: ComponentBuildContext, component: "Component", source_d
             [env.get("CARGO", "cargo"), "install", "cargo-c", "--version", CARGO_C_VERSION],
             "install-cargo-c",
             source_dir,
-            install_env,
+            env,
         )
+    elif context.builder.config.target_backend == TARGET_BACKEND_CROSS_MINGW:
+        version_result = context.executor.execute([cargo_c_path, "--version"], env=env)
+        version_match = re.search(r"\b(\d+\.\d+\.\d+)\b", version_result.stdout)
+        if not version_result.success or not version_match:
+            raise BuildError(
+                component.name,
+                "Prepared WSL host prerequisite cargo-c version could not be verified.",
+                category=CATEGORY_EXTERNAL_PREREQUISITE,
+                code="wsl_mingw_cargo_c_version_unavailable",
+            )
+        if version_match.group(1) != CARGO_C_VERSION:
+            raise BuildError(
+                component.name,
+                f"Prepared WSL host cargo-c version {version_match.group(1)} does not match "
+                f"the required pinned version {CARGO_C_VERSION}.",
+                category=CATEGORY_EXTERNAL_PREREQUISITE,
+                code="wsl_mingw_cargo_c_version_mismatch",
+            )
 
     run_step(
         context,

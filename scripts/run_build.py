@@ -36,6 +36,8 @@ from ffmpeg_builder.config import (  # noqa: E402
     TARGET_BACKEND_CROSS_MINGW,
     BuildConfig,
 )
+from ffmpeg_builder.g4_wave1 import run_g4_wave1  # noqa: E402
+from ffmpeg_builder.platform_detect import PlatformDetector  # noqa: E402
 from ffmpeg_builder.cuda_prerequisites import (  # noqa: E402
     cuda_nv_codec_identity,
     cuda_profile_identity,
@@ -65,13 +67,21 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         action="store_true",
         help=(
             "Validate the configured environment and show its plan; "
-            "cross builds stop after G3 acceptance."
+            "cross builds stop after G4 Wave-0 selection."
         ),
     )
     parser.add_argument(
         "--no-release",
         action="store_true",
         help="Skip the release-bundle step even if make_release is enabled.",
+    )
+    parser.add_argument(
+        "--g4-wave1",
+        action="store_true",
+        help=(
+            "Build and accept only the fixed seven-component G4 Wave-1 subset "
+            "for the linux-cross-mingw target."
+        ),
     )
     return parser.parse_args(argv)
 
@@ -216,7 +226,7 @@ def run_build(app: FFmpegBuilderApp, config: BuildConfig, resume: bool, no_relea
 
 
 def dry_run_cross_backend(app: FFmpegBuilderApp, config: BuildConfig, resume: bool) -> int:
-    """Run G1/G2 authorization and G3 acceptance without selecting components."""
+    """Run G1-G3 preparation and report G4 Wave-0 selection without building."""
     try:
         session = app.prepare_target(config, resume)
         environment = app.prepare_cross_environment(config, session)
@@ -231,18 +241,56 @@ def dry_run_cross_backend(app: FFmpegBuilderApp, config: BuildConfig, resume: bo
         f"workspace={environment.paths.workspace_root}.",
         flush=True,
     )
-    print("Stopped before the G4 component graph; G4 has not started.", flush=True)
+    selection = app._get_component_selection(config)
+    for component in selection.host_tools:
+        tool = getattr(component, "system_tool_name", None) or component.name
+        outcome = "satisfied" if tool in selection.system_satisfied_host_requirements else "missing"
+        print(f"  HOST TOOL {component.name}: {outcome}", flush=True)
+    if selection.missing_host_tools:
+        print(
+            "  MISSING HOST TOOLS: " + ", ".join(selection.missing_host_tools),
+            flush=True,
+        )
+    for component in selection.target_inputs:
+        print(f"  TARGET INPUT {component.name} {component.version}", flush=True)
+    for component in selection.target_components_to_build:
+        print(f"  TARGET BUILD {component.name} {component.version}", flush=True)
+    for component in selection.mixed_components:
+        print(f"  MIXED {component.name} {component.version}", flush=True)
+    for component in selection.conditional_components:
+        print(f"  CONDITIONAL {component.name} {component.version}", flush=True)
+    for component in selection.skipped_by_feature:
+        print(f"  SKIPPED BY FEATURE {component.name}", flush=True)
+    for component in selection.skipped_by_backend:
+        print(f"  SKIPPED BY BACKEND {component.name}", flush=True)
+    print(
+        "Stopped after G4 Wave-0 selection; no Wave-1 component was built.",
+        flush=True,
+    )
     return 0
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = parse_args(argv)
+    if args.g4_wave1 and args.dry_run:
+        raise SystemExit("--g4-wave1 performs real builds and cannot be combined with --dry-run.")
+    if args.g4_wave1 and args.ffmpeg_version not in (None, "9.0"):
+        raise SystemExit("--g4-wave1 is fixed to FFmpeg 9.0.")
     app = FFmpegBuilderApp()
     config = app.config_manager.get()
     if args.ffmpeg_version:
         config.ffmpeg_version = args.ffmpeg_version
+    if args.g4_wave1:
+        config.ffmpeg_version = "9.0"
+        config.target_backend = TARGET_BACKEND_CROSS_MINGW
+        config.allow_network_downloads = False
+        config.make_release = False
+        app.platform_detector = PlatformDetector(config=config)
+        app.system_info, app.platform_info, app.tools = app.platform_detector.detect_all()
     app._sync_workspace(config)
 
+    if args.g4_wave1:
+        return run_g4_wave1(app, config)
     if args.dry_run:
         if getattr(config, "target_backend", "native") == TARGET_BACKEND_CROSS_MINGW:
             return dry_run_cross_backend(app, config, resume=args.resume)

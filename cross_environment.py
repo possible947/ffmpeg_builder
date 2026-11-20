@@ -1282,7 +1282,9 @@ def construct_cross_environment(
     if paths.target_prefix.exists() and manifest_path.is_file():
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            validate_target_inputs_manifest(manifest, paths.target_prefix)
+            validate_target_inputs_manifest(
+                manifest, paths.target_prefix, allow_component_outputs=True
+            )
         except (OSError, ValueError, BuildError) as exc:
             raise _build_error(
                 "G3 target inputs",

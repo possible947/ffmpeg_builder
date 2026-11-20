@@ -166,6 +166,20 @@ output.write_bytes(b"!<arch>\\nwindows-coff-import-library")
     )
     validate_target_inputs_manifest(manifest, prefix)
 
+    (prefix / "share/man/man3/zlib.3").parent.mkdir(parents=True)
+    (prefix / "share/man/man3/zlib.3").write_text("target zlib manual\n", encoding="utf-8")
+    (prefix / "lib/pkgconfig/ogg.pc").parent.mkdir(parents=True, exist_ok=True)
+    (prefix / "lib/pkgconfig/ogg.pc").write_text(
+        "prefix=${pcfiledir}/../..\nLibs: -L${prefix}/lib -logg\n", encoding="utf-8"
+    )
+    with pytest.raises(BuildError, match="Host/runtime artifact in target prefix"):
+        validate_target_inputs_manifest(manifest, prefix)
+    validate_target_inputs_manifest(manifest, prefix, allow_component_outputs=True)
+    (prefix / "lib/libhost.so").write_bytes(b"not an ELF")
+    with pytest.raises(BuildError, match="Host/runtime artifact"):
+        validate_target_inputs_manifest(manifest, prefix, allow_component_outputs=True)
+    (prefix / "lib/libhost.so").unlink()
+
     tampered_id = copy.deepcopy(manifest)
     tampered_id["materialization_id"] = "0" * 64
     with pytest.raises(BuildError, match="ID does not match"):
@@ -184,7 +198,7 @@ output.write_bytes(b"!<arch>\\nwindows-coff-import-library")
 
     (prefix / "include" / "CL" / "cl.h").write_text("tampered\n", encoding="utf-8")
     with pytest.raises(BuildError, match="do not match manifest hashes"):
-        validate_target_inputs_manifest(manifest, prefix)
+        validate_target_inputs_manifest(manifest, prefix, allow_component_outputs=True)
 
 
 def test_target_prefix_contamination_is_rejected(tmp_path: Path):

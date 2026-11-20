@@ -11,7 +11,9 @@ with deployed gcc12 12.5.0 and 9.0 with the system GCC — 58/58 components
 each, smoke-tested). WSL-Mingw G1/G2 preparation and offline-closure
 acceptance are complete; G3 has established and validated the
 `linux-cross-mingw` cross-environment and shared build contracts. G3 is PASS;
-G4 and component-wide Windows cross-build support have not started.
+G4 Waves 0 and 1 are complete. Wave 1 accepted seven real Windows target
+dependencies through Autotools, Meson, and CMake; Wave 2, the complete
+configured dependency stack, and FFmpeg integration remain in progress.
 See `CHANGELOG.md` for the release history.
 
 ## Architecture Overview
@@ -96,8 +98,10 @@ prefix contains only G2.6 headers/interfaces at this stage.
 
 `run_cross_environment_acceptance()` executes temporary C/C++/resource and
 static-archive probes, target pkg-config isolation, and minimal CMake, Meson,
-and Autotools fixtures. The TUI and headless routes run these checks and stop
-before component selection; this is not a Windows FFmpeg build. When
+and Autotools fixtures. The TUI and normal headless build route stop after
+these checks; headless `--dry-run` additionally reports G4 Wave-0 component
+roles and selection, then stops before any component build. This is not a
+Windows FFmpeg build. When
 `native_build` is enabled, target C/C++ uses exactly `-march=native
 -mtune=native`; LLVM-MinGW interprets `native`, and the project does not
 expand or independently validate compiler-selected ISA features. G1 CPU data
@@ -476,10 +480,11 @@ Store behaviour (all profiles, not just LLVM-MinGW):
   and left its parent environment unchanged.
 
   Both `scripts/run_build.py`'s headless `run_build()` and the TUI
-  `_run_build()` path reached the same successful preparation result and were
-  now continue through identity-local G3 environment generation and real
-  configure/link acceptance, then stop before components. This does not claim
-  that either path can yet build a Windows target.
+  `_run_build()` path reach the same successful preparation result, continue
+  through identity-local G3 environment generation and real configure/link
+  acceptance, then stop before components. The cross `--dry-run` additionally
+  reports Wave-0 selection. This does not claim that either path can yet build
+  a Windows target.
 
 Isolated offline provisioning (does not touch the normal store):
 
@@ -829,9 +834,10 @@ Built with the `rich` library. Static screens use `Table`, `Panel`, and `Prompt`
 The Windows build route is **WSL-Mingw**: a Windows host runs a WSL2 Ubuntu
 build environment, which uses the LLVM-MinGW/UCRT cross toolchain to produce
 a Windows FFmpeg target. **WSL-Mingw** is the user-facing name; the backend
-identifier is **`linux-cross-mingw`**. G1, G2, and G3 are PASS; G3 acceptance
-stops before the component graph, and the full component stack is **not
-implemented**. G4 has not started. The gates
+identifier is **`linux-cross-mingw`**. G1, G2, and G3 are PASS; G4 Waves 0 and 1
+are accepted. Seven real target dependencies have been cross-built and
+validated; the full component stack and FFmpeg integration remain **in
+progress**. The gates
 G1–G7, verified early-PoC results and open issues are in
 [`windows_build_strategy.md`](windows_build_strategy.md), which is the
 authoritative plan. The previous MSYS2-based Windows build path was replaced
@@ -946,8 +952,7 @@ acceptance, and diagnostic-only changes do not prevent reuse. Live acceptance
 covered fresh/same preparation, material and diagnostic drift, and rejection
 of G1-only saved state on the physical Windows/WSL host. This establishes
 identity safety, not a production component cross-build; G2.8 final acceptance
-is recorded below. G3 pass 2 acceptance is recorded in the module reference;
-G4 remains not started.
+is recorded below. G3 pass 2 acceptance is recorded in the module reference.
 
 #### G2.8 — final offline closure and live prerequisites (PASS)
 

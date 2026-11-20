@@ -12,7 +12,11 @@ from .cross_build_contracts import (
     TargetLinkMetadata,
     compose_target_link_metadata,
 )
-from .config import SUPPORTED_TARGET_BACKENDS
+from .config import (
+    SUPPORTED_TARGET_BACKENDS,
+    TARGET_BACKEND_CROSS_MINGW,
+    TARGET_BACKEND_NATIVE,
+)
 
 # Per-component toolchain gate used by get_buildable(): returns True when the
 # component's resolved toolchain is satisfied (system, or an installed store
@@ -59,9 +63,11 @@ class ComponentCategory(str, Enum):
 class BuildRole(str, Enum):
     """Execution domain used by the cross backend."""
 
+    HOST_TOOL = "host"
+    TARGET_COMPONENT = "target"
+    MIXED = "mixed"
     HOST = "host"
     TARGET = "target"
-    MIXED = "mixed"
 
 
 @dataclass
@@ -150,6 +156,9 @@ class Component:
     driver_nvenc_api_map: Dict[str, str] = field(default_factory=dict)
     # Target eligibility is independent of host-platform/tool eligibility.
     target_backends: List[str] = field(default_factory=list)
+    # Backends on which this component is part of the build graph. This is
+    # distinct from target_backends, which declares G2 target-input sources.
+    build_backends: List[str] = field(default_factory=lambda: list(SUPPORTED_TARGET_BACKENDS))
     target_headers: List[TargetHeaderTree] = field(default_factory=list)
     target_import_interface: Optional[TargetImportInterface] = None
     build_role: BuildRole = BuildRole.TARGET
@@ -230,6 +239,22 @@ class Component:
         return True
 
 
+@dataclass
+class ComponentSelection:
+    """Role-aware selection for the Linux-to-Windows build graph."""
+
+    host_tools: List[Component] = field(default_factory=list)
+    target_components: List[Component] = field(default_factory=list)
+    mixed_components: List[Component] = field(default_factory=list)
+    system_satisfied_host_requirements: List[str] = field(default_factory=list)
+    missing_host_tools: List[str] = field(default_factory=list)
+    target_components_to_build: List[Component] = field(default_factory=list)
+    conditional_components: List[Component] = field(default_factory=list)
+    target_inputs: List[Component] = field(default_factory=list)
+    skipped_by_feature: List[Component] = field(default_factory=list)
+    skipped_by_backend: List[Component] = field(default_factory=list)
+
+
 class ComponentRegistry:
     """Registry of all build components, loaded from components.yaml."""
 
@@ -301,6 +326,19 @@ class ComponentRegistry:
         unknown_backends = sorted(set(target_backends) - set(SUPPORTED_TARGET_BACKENDS))
         if unknown_backends:
             raise ValueError(f"unknown target backend(s): {', '.join(unknown_backends)}")
+        build_backends = data.get("build_backends", list(SUPPORTED_TARGET_BACKENDS))
+        if not isinstance(build_backends, list) or not all(
+            isinstance(backend, str) and backend for backend in build_backends
+        ):
+            raise ValueError("build_backends must be a list of backend names")
+        unknown_build_backends = sorted(set(build_backends) - set(SUPPORTED_TARGET_BACKENDS))
+        if unknown_build_backends:
+            raise ValueError(f"unknown build backend(s): {', '.join(unknown_build_backends)}")
+        requires_tools = data.get("requires_tools") or []
+        if not isinstance(requires_tools, list) or not all(
+            isinstance(tool, str) and tool.strip() for tool in requires_tools
+        ):
+            raise ValueError("requires_tools must be a list of non-empty tool names")
 
         def _relative_target_path(value: Any, field_name: str) -> str:
             if not isinstance(value, str) or not value:
@@ -380,9 +418,26 @@ class ComponentRegistry:
             build_role = BuildRole(data.get("build_role", BuildRole.TARGET.value))
         except ValueError as exc:
             raise ValueError(f"unknown build_role {data.get('build_role')!r}") from exc
+        if build_role == BuildRole.HOST_TOOL and (
+            target_backends or target_headers or target_import_interface
+        ):
+            raise ValueError(
+                "HOST_TOOL components cannot declare target_backends, target_headers, "
+                "or target_import_interface"
+            )
+        system_component = data.get("system_component", False)
+        if not isinstance(system_component, bool):
+            raise ValueError("system_component must be a boolean")
+        system_tool_name = data.get("system_tool_name")
+        if system_tool_name is not None and (
+            not isinstance(system_tool_name, str) or not system_tool_name.strip()
+        ):
+            raise ValueError("system_tool_name must be a non-empty string when provided")
         link_data = data.get("target_link_metadata") or {}
         if not isinstance(link_data, dict):
             raise ValueError("target_link_metadata must be a mapping")
+        if build_role == BuildRole.HOST_TOOL and link_data:
+            raise ValueError("HOST_TOOL components cannot declare target_link_metadata")
 
         def _link_values(key: str) -> tuple[str, ...]:
             values = link_data.get(key) or []
@@ -439,14 +494,14 @@ class ComponentRegistry:
             build_args=list(data.get("build_args") or []),
             install_args=list(data.get("install_args") or []),
             depends_on=list(data.get("depends_on") or []),
-            requires_tools=list(data.get("requires_tools") or []),
+            requires_tools=requires_tools,
             gpl_only=bool(data.get("gpl_only", False)),
             non_gpl_only=bool(data.get("non_gpl_only", False)),
             linux_only=bool(data.get("linux_only", False)),
             macos_only=bool(data.get("macos_only", False)),
             windows_ucrt64_supported=bool(data.get("windows_ucrt64_supported", False)),
-            system_component=bool(data.get("system_component", False)),
-            system_tool_name=data.get("system_tool_name"),
+            system_component=system_component,
+            system_tool_name=system_tool_name,
             archive_strip_components=int(data.get("archive_strip_components", 1)),
             archive_filename=data.get("archive_filename"),
             archive_dirname=data.get("archive_dirname"),
@@ -470,6 +525,7 @@ class ComponentRegistry:
             toolchain=str(data.get("toolchain", "n/a")),
             driver_nvenc_api_map=driver_nvenc_api_map,
             target_backends=target_backends,
+            build_backends=build_backends,
             target_headers=target_headers,
             target_import_interface=target_import_interface,
             build_role=build_role,
@@ -612,6 +668,7 @@ class ComponentRegistry:
                 else self.get_nv_codec_component(platform_info) if comp.name == "nv-codec" else comp
             )
             for comp in self._components
+            if TARGET_BACKEND_NATIVE in comp.build_backends
             if self._is_eligible(
                 comp, gpl_enabled, platform, tools, platform_info, disable_lv2, enable_libvmaf
             )
@@ -645,6 +702,158 @@ class ComponentRegistry:
 
         return result
 
+    def get_buildable_selection(
+        self,
+        gpl_enabled: bool,
+        platform: str,
+        tools: Dict,
+        *,
+        disable_lv2: bool = False,
+        enable_libvmaf: bool = True,
+        platform_info: Optional[Any] = None,
+        ffmpeg_version: str = "8.1",
+        toolchain_checker: Optional[ToolchainChecker] = None,
+        target_backend: str = TARGET_BACKEND_CROSS_MINGW,
+        host_tool_checker: Optional[Callable[[str], bool]] = None,
+        target_platform_info: Optional[Any] = None,
+    ) -> ComponentSelection:
+        """Select cross-build components without using WSL hardware as a gate.
+
+        Required target components remain selected when host capabilities are
+        absent; they are reported as conditional instead. Target inputs staged
+        by G2 are kept separate from source-built target components, and
+        HOST_TOOL entries are never returned in the target build list.
+        """
+        if target_backend != TARGET_BACKEND_CROSS_MINGW:
+            raise ValueError("get_buildable_selection is only defined for linux-cross-mingw")
+
+        candidates: List[Component] = []
+        skipped_by_feature: List[Component] = []
+        skipped_by_backend: List[Component] = []
+        for component in self._components:
+            selected = (
+                self.get_ffmpeg_component(ffmpeg_version)
+                if component.category == ComponentCategory.TARGET
+                else (
+                    self.get_nv_codec_component(platform_info)
+                    if component.name == "nv-codec"
+                    else component
+                )
+            )
+            if self._feature_excludes(component, gpl_enabled, disable_lv2, enable_libvmaf):
+                skipped_by_feature.append(selected)
+                continue
+            if target_backend not in component.build_backends:
+                if component.is_available(gpl_enabled, platform, tools, platform_info):
+                    skipped_by_backend.append(selected)
+                continue
+            if not self._is_eligible(
+                component,
+                gpl_enabled,
+                platform,
+                tools,
+                platform_info,
+                disable_lv2,
+                enable_libvmaf,
+                check_capabilities=False,
+            ):
+                continue
+            if (
+                component.build_role != BuildRole.HOST_TOOL
+                and component.name != "rav1e"
+                and toolchain_checker is not None
+                and not toolchain_checker(selected)
+            ):
+                continue
+            candidates.append(selected)
+
+        target_inputs_by_name = {
+            component.name: component for component in self.get_target_inputs(target_backend)
+        }
+        target_inputs: List[Component] = []
+        if "nv-codec" in target_inputs_by_name:
+            target_inputs_by_name["nv-codec"] = self.get_nv_codec_component(platform_info)
+        for component in candidates:
+            if component.name in target_inputs_by_name:
+                target_inputs.append(component)
+
+        host_tools = [c for c in candidates if c.build_role == BuildRole.HOST_TOOL]
+        target_components = [
+            c
+            for c in candidates
+            if c.build_role == BuildRole.TARGET_COMPONENT and c.name not in target_inputs_by_name
+        ]
+        mixed_components = [c for c in candidates if c.build_role == BuildRole.MIXED]
+
+        def tool_available(name: str) -> bool:
+            info = tools.get(name)
+            if info is not None and getattr(info, "available", False):
+                return True
+            return bool(host_tool_checker and host_tool_checker(name))
+
+        system_satisfied = sorted(
+            {
+                component.system_tool_name or component.name
+                for component in host_tools
+                if tool_available(component.system_tool_name or component.name)
+            }
+        )
+        missing_host_tools = {
+            component.system_tool_name or component.name
+            for component in host_tools
+            if not tool_available(component.system_tool_name or component.name)
+        }
+        required_tools = {tool for component in candidates for tool in component.requires_tools}
+        missing_host_tools.update(tool for tool in required_tools if not tool_available(tool))
+
+        conditional = [
+            component
+            for component in candidates
+            if component.build_role != BuildRole.HOST_TOOL
+            and not self._is_eligible(
+                component,
+                gpl_enabled,
+                platform,
+                tools,
+                target_platform_info or platform_info,
+                disable_lv2,
+                enable_libvmaf,
+                check_capabilities=True,
+            )
+        ]
+        conditional_names = {component.name for component in conditional}
+        target_components_to_build = [
+            component for component in target_components if component.name not in conditional_names
+        ]
+        # Mixed recipes require explicit host/target dispatch and are not
+        # silently folded into the target-only build sequence.
+        return ComponentSelection(
+            host_tools=host_tools,
+            target_components=target_components,
+            mixed_components=mixed_components,
+            system_satisfied_host_requirements=system_satisfied,
+            missing_host_tools=sorted(missing_host_tools),
+            target_components_to_build=target_components_to_build,
+            conditional_components=conditional,
+            target_inputs=target_inputs,
+            skipped_by_feature=skipped_by_feature,
+            skipped_by_backend=skipped_by_backend,
+        )
+
+    @staticmethod
+    def _feature_excludes(
+        component: Component,
+        gpl_enabled: bool,
+        disable_lv2: bool,
+        enable_libvmaf: bool,
+    ) -> bool:
+        return bool(
+            (component.gpl_only and not gpl_enabled)
+            or (component.non_gpl_only and gpl_enabled)
+            or (component.skip_condition == "disable_lv2" and disable_lv2)
+            or (component.name == "libvmaf" and not enable_libvmaf)
+        )
+
     def _is_eligible(
         self,
         comp: Component,
@@ -654,6 +863,7 @@ class ComponentRegistry:
         platform_info: Optional[Any],
         disable_lv2: bool,
         enable_libvmaf: bool,
+        check_capabilities: bool = True,
     ) -> bool:
         """Return whether a component passes every filter except ``requires_tools``.
 
@@ -673,7 +883,7 @@ class ComponentRegistry:
             return False
 
         # Filter HW acceleration components by availability
-        if platform_info is not None:
+        if check_capabilities and platform_info is not None:
             if (
                 comp.name == "nv-codec"
                 and not platform_info.cuda_available

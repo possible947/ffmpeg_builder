@@ -8,6 +8,9 @@
   url: https://downloads.sourceforge.net/project/giflib/giflib-6.x/giflib-{version}.tar.gz
   category: build_tool
   build_system: custom
+  # This is a native system prerequisite with no configured FFmpeg 9 target consumer.
+  build_backends:
+  - native
   system_component: true
   system_tool_name: giflib
 - name: pkg-config
@@ -16,6 +19,7 @@
   url: https://pkgconfig.freedesktop.org/releases/pkg-config-{version}.tar.gz
   category: build_tool
   build_system: autotools
+  build_role: host
   configure_args:
   - --prefix={workspace}
   - --with-pc-path={workspace}/lib/pkgconfig
@@ -28,6 +32,7 @@
   url: https://github.com/yasm/yasm/releases/download/v{version}/yasm-{version}.tar.gz
   category: build_tool
   build_system: autotools
+  build_role: host
   configure_args:
   - --prefix={workspace}
   system_component: true
@@ -38,6 +43,7 @@
   url: https://www.nasm.us/pub/nasm/releasebuilds/{version}/nasm-{version}.tar.xz
   category: build_tool
   build_system: autotools
+  build_role: host
   configure_args:
   - --prefix={workspace}
   - --disable-shared
@@ -61,6 +67,7 @@
   url: https://ftpmirror.gnu.org/gnu/m4/m4-{version}.tar.gz
   category: build_tool
   build_system: autotools
+  build_role: host
   configure_args:
   - --prefix={workspace}
   system_component: true
@@ -71,6 +78,7 @@
   url: https://ftpmirror.gnu.org/gnu/autoconf/autoconf-{version}.tar.gz
   category: build_tool
   build_system: autotools
+  build_role: host
   configure_args:
   - --prefix={workspace}
   depends_on:
@@ -83,6 +91,7 @@
   url: https://ftpmirror.gnu.org/gnu/automake/automake-{version}.tar.gz
   category: build_tool
   build_system: autotools
+  build_role: host
   configure_args:
   - --prefix={workspace}
   depends_on:
@@ -95,6 +104,7 @@
   url: https://ftpmirror.gnu.org/libtool/libtool-{version}.tar.gz
   category: build_tool
   build_system: autotools
+  build_role: host
   configure_args:
   - --prefix={workspace}
   - --enable-static
@@ -114,6 +124,7 @@
   - -DCMAKE_USE_OPENSSL=OFF
   system_component: true
   system_tool_name: cmake
+  build_role: host
   extra_env:
     CXXFLAGS_EXTRA: -std=c++11
 - name: meson
@@ -122,6 +133,7 @@
   url: https://github.com/mesonbuild/meson/releases/download/{version}/meson-{version}.tar.gz
   category: build_tool
   build_system: custom
+  build_role: host
   configure_args:
   - --prefix={workspace}
   system_component: true
@@ -133,6 +145,7 @@
   url: https://github.com/ninja-build/ninja/archive/refs/tags/v{version}.tar.gz
   category: build_tool
   build_system: custom
+  build_role: host
   system_component: true
   system_tool_name: ninja
   custom_build_fn: build_ninja
@@ -237,6 +250,10 @@
   - --buildtype=release
   - --default-library=static
   - --libdir={workspace}/lib
+  - -Denable_tests=false
+  - -Denable_tools=false
+  - -Denable_examples=false
+  - -Denable_docs=false
   requires_tools:
   - python3
   - meson
@@ -333,6 +350,7 @@
   - -DCMAKE_INSTALL_PREFIX={workspace}
   - -DUSE_OMP=OFF
   - -DENABLE_SHARED=off
+  workdir: build
   gpl_only: true
   archive_filename: vid.stab-{version}.tar.gz
   ffmpeg_configure_flag: --enable-libvidstab
@@ -642,6 +660,13 @@
   - --prefix={workspace}
   - --disable-shared
   - --enable-static
+  - --disable-tests
+  - --disable-tools
+  - --with-binconfigs=no
+  - --disable-unversioned-links
+  - --disable-unversioned-libpng-config
+  depends_on:
+  - zlib
   archive_filename: libpng-{version}.tar.gz
 - name: lcms2
   sha256: bfc54f7bab59fbc921012014a8032e4cba4abd46db47d46b76416a8c0b2815c8
@@ -708,6 +733,11 @@
   - --prefix={workspace}
   - --disable-shared
   - --enable-static
+  - --with-zlib=yes
+  - --with-png=yes
+  depends_on:
+  - zlib
+  - libpng
   ffmpeg_configure_flag: --enable-libfreetype
 - name: VapourSynth
   sha256: cbd5aa49d43a9e5061c5ea4b03a682322065f3d9b8870c36bfb8afa0f635e066
@@ -926,6 +956,9 @@
   url: https://github.com/KhronosGroup/OpenCL-ICD-Loader/archive/refs/tags/v{version}.tar.gz
   category: hw_accel
   build_system: cmake
+  # G2 consumes this archive only as OpenCL.def provenance for libOpenCL.a.
+  build_backends:
+  - native
   configure_args:
   - -DCMAKE_PREFIX_PATH={workspace}
   - -DCMAKE_INSTALL_PREFIX={workspace}

@@ -182,23 +182,32 @@ def _generate_import_interface(
         }
 
 
-def _validate_target_tree(root: Path) -> None:
+def _validate_target_tree(root: Path, allow_component_outputs: bool = False) -> None:
     for path in root.rglob("*"):
         if path.is_symlink():
-            raise BuildError("target-inputs", f"Target prefix contains a symlink: {path.name}")
+            if not allow_component_outputs:
+                raise BuildError("target-inputs", f"Target prefix contains a symlink: {path.name}")
+            try:
+                path.resolve(strict=True).relative_to(root.resolve(strict=True))
+            except (OSError, ValueError):
+                raise BuildError(
+                    "target-inputs", f"Target prefix contains an escaping symlink: {path.name}"
+                )
         if not path.is_file():
             continue
         relative = path.relative_to(root)
         if relative.name == "target-inputs.json":
             continue
-        if not relative.parts or relative.parts[0] not in ("include", "lib"):
+        allowed_roots = (
+            ("include", "lib", "share") if allow_component_outputs else ("include", "lib")
+        )
+        if not relative.parts or relative.parts[0] not in allowed_roots:
             raise BuildError("target-inputs", f"Unexpected target-prefix path: {relative}")
         lowered = path.name.lower()
-        if (
-            lowered.endswith((".so", ".dll", ".pc", ".la", ".cmake"))
-            or ".so." in lowered
-            or lowered == "cmakecache.txt"
-        ):
+        forbidden_suffixes: tuple[str, ...] = (".so", ".dll", ".exe", ".o", ".obj")
+        if not allow_component_outputs:
+            forbidden_suffixes += (".pc", ".la", ".cmake")
+        if lowered.endswith(forbidden_suffixes) or ".so." in lowered or lowered == "cmakecache.txt":
             raise BuildError("target-inputs", f"Host/runtime artifact in target prefix: {relative}")
         with path.open("rb") as source:
             if source.read(4) == b"\x7fELF":
@@ -217,9 +226,17 @@ def _validate_target_tree(root: Path) -> None:
 
 
 def validate_target_inputs_manifest(
-    manifest: object, target_prefix: Optional[Path] = None
+    manifest: object,
+    target_prefix: Optional[Path] = None,
+    *,
+    allow_component_outputs: bool = False,
 ) -> Dict[str, object]:
-    """Validate G2.6 identity metadata and, when supplied, its staged files."""
+    """Validate G2.6 identity metadata and its staged files.
+
+    Existing identity prefixes may contain later target-component installs;
+    this mode preserves strict hashes for G2 files while allowing validated
+    component outputs to coexist with them.
+    """
     if not isinstance(manifest, dict):
         raise BuildError("target-inputs", "Target-input manifest must be a JSON object")
     target_backend = manifest.get("target_backend")
@@ -288,13 +305,19 @@ def validate_target_inputs_manifest(
                 "target-inputs", "Generated interface definition-source checksum is invalid"
             )
     if target_prefix is not None:
-        _validate_target_tree(target_prefix)
+        _validate_target_tree(target_prefix, allow_component_outputs=allow_component_outputs)
         actual_files = {
             path.relative_to(target_prefix).as_posix(): _sha256(path)
             for path in sorted(target_prefix.rglob("*"))
             if path.is_file() and path.name != "target-inputs.json"
         }
-        if actual_files != files:
+        if allow_component_outputs:
+            mismatch = any(
+                actual_files.get(relative) != digest for relative, digest in files.items()
+            )
+        else:
+            mismatch = actual_files != files
+        if mismatch:
             raise BuildError("target-inputs", "Target-input files do not match manifest hashes")
     return manifest
 

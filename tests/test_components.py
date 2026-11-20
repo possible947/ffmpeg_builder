@@ -303,6 +303,191 @@ class TestComponentRegistry:
         assert metadata.consumer_link_requirements == ("-lc++", "-lunwind", "-lconsumer")
         assert metadata.runtime_dependencies[0].name == "libc++.dll"
 
+    def test_build_role_schema_and_host_tool_metadata_validation(self, tmp_path):
+        def registry_for(component):
+            path = tmp_path / "components.yaml"
+            path.write_text(yaml.safe_dump([component]), encoding="utf-8")
+            return ComponentRegistry(yaml_path=path)
+
+        base = {
+            "name": "sample",
+            "version": "1",
+            "url": "https://example.org/sample.tar.gz",
+            "category": "other_lib",
+            "build_system": "cmake",
+        }
+        assert registry_for(base).get_by_name("sample").build_role == BuildRole.TARGET_COMPONENT
+
+        host = {**base, "build_role": "host"}
+        assert registry_for(host).get_by_name("sample").build_role == BuildRole.HOST_TOOL
+        mixed = {**base, "build_role": "mixed"}
+        assert registry_for(mixed).get_by_name("sample").build_role == BuildRole.MIXED
+
+        with pytest.raises(ValueError, match="unknown build_role"):
+            registry_for({**base, "build_role": "host_tool"})
+        with pytest.raises(ValueError, match="HOST_TOOL components cannot declare"):
+            registry_for(
+                {
+                    **host,
+                    "target_headers": [{"source": "include", "destination": "include/sample"}],
+                }
+            )
+        with pytest.raises(ValueError, match="requires_tools must be"):
+            registry_for({**base, "requires_tools": "cmake"})
+        with pytest.raises(ValueError, match="unknown build backend"):
+            registry_for({**base, "build_backends": ["msys2"]})
+
+    def test_cross_build_selection_separates_host_tools_target_inputs_and_builds(self, mock_tools):
+        from ffmpeg_builder.config import BuildConfig, TARGET_BACKEND_CROSS_MINGW
+
+        config = BuildConfig(
+            target_backend=TARGET_BACKEND_CROSS_MINGW,
+            ffmpeg_version="9.0",
+            gpl_enabled=True,
+            enable_libvmaf=True,
+            enable_libvmaf_cuda=True,
+            cuda_build_mode="required",
+            enable_libplacebo_vulkan=True,
+            disable_lv2=False,
+            openmp=True,
+            full_static=False,
+        )
+
+        class NoHostHardware:
+            cuda_available = False
+            nvenc_api_version = None
+            vulkan_available = False
+            amf_available = False
+            opencl_available = False
+            opencl_runtime_available = False
+            qsv_available = False
+            is_msys2 = False
+            is_ucrt64 = False
+            build_backend = "linux-native"
+
+        host_names = {
+            "pkg-config",
+            "yasm",
+            "nasm",
+            "m4",
+            "autoconf",
+            "automake",
+            "libtool",
+            "cmake",
+            "meson",
+            "ninja",
+        }
+        tools = self._tools()
+        tools.update({name: type("Tool", (), {"available": True})() for name in host_names})
+        tools.update({name: type("Tool", (), {"available": True})() for name in ("zlib", "vpl")})
+        selection = self.registry.get_buildable_selection(
+            config.gpl_enabled,
+            "linux",
+            tools,
+            disable_lv2=config.disable_lv2,
+            enable_libvmaf=config.enable_libvmaf,
+            platform_info=NoHostHardware(),
+            ffmpeg_version=config.ffmpeg_version,
+            target_backend=config.target_backend,
+            host_tool_checker=lambda _tool: True,
+        )
+
+        assert {component.name for component in selection.host_tools} == host_names
+        assert set(selection.system_satisfied_host_requirements) == host_names
+        assert not selection.missing_host_tools
+        assert {component.name for component in selection.target_components_to_build} >= {
+            "zlib",
+            "libogg",
+            "opus",
+            "libpng",
+            "FreeType2",
+            "dav1d",
+            "vid_stab",
+        }
+        assert not (
+            {component.name for component in selection.target_components_to_build} & host_names
+        )
+        assert {"zlib", "onevpl"} <= {component.name for component in selection.target_components}
+        assert {component.name for component in selection.target_inputs} == {
+            "nv-codec",
+            "vulkan-headers",
+            "opencl-headers",
+        }
+        conditional_names = {component.name for component in selection.conditional_components}
+        assert {"nv-codec", "glslang", "amf", "opencl-headers", "onevpl"} <= conditional_names
+        assert {component.name for component in selection.skipped_by_backend} >= {
+            "giflib",
+            "opencl-icd-loader",
+        }
+        assert {component.name for component in selection.skipped_by_feature} == {
+            "gmp",
+            "gnutls",
+            "nettle",
+        }
+
+        class WindowsCapabilities:
+            cuda_available = True
+            nvenc_api_version = None
+            vulkan_available = True
+            amf_available = False
+            opencl_available = True
+            opencl_runtime_available = True
+            qsv_available = False
+            is_msys2 = False
+            is_ucrt64 = False
+            build_backend = TARGET_BACKEND_CROSS_MINGW
+
+        target_selection = self.registry.get_buildable_selection(
+            config.gpl_enabled,
+            "linux",
+            tools,
+            disable_lv2=config.disable_lv2,
+            enable_libvmaf=config.enable_libvmaf,
+            platform_info=NoHostHardware(),
+            target_platform_info=WindowsCapabilities(),
+            ffmpeg_version=config.ffmpeg_version,
+            target_backend=config.target_backend,
+            host_tool_checker=lambda _tool: True,
+        )
+        target_conditional_names = {
+            component.name for component in target_selection.conditional_components
+        }
+        assert target_conditional_names == {"amf", "onevpl"}
+        assert "glslang" in {
+            component.name for component in target_selection.target_components_to_build
+        }
+
+    def test_registered_host_tool_roles_and_cross_target_system_policy(self):
+        expected_host_tools = {
+            "pkg-config",
+            "yasm",
+            "nasm",
+            "m4",
+            "autoconf",
+            "automake",
+            "libtool",
+            "cmake",
+            "meson",
+            "ninja",
+        }
+        host_roles = {
+            component.name
+            for component in self.registry.get_all()
+            if component.build_role == BuildRole.HOST_TOOL
+        }
+        assert host_roles == expected_host_tools
+
+        for name in ("zlib", "onevpl"):
+            component = self.registry.get_by_name(name)
+            assert component is not None
+            assert component.build_role == BuildRole.TARGET_COMPONENT
+            assert component.system_component is True
+
+        giflib = self.registry.get_by_name("giflib")
+        loader = self.registry.get_by_name("opencl-icd-loader")
+        assert giflib is not None and giflib.build_backends == ["native"]
+        assert loader is not None and loader.build_backends == ["native"]
+
     def test_gmp_static_build_uses_pic(self):
         gmp = self.registry.get_by_name("gmp")
         assert gmp is not None

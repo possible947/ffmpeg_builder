@@ -14,7 +14,7 @@ from types import TracebackType
 from typing import Any, Callable, Dict, List, Optional, Tuple, Type
 
 from .build_steps import run_install, run_make, run_step
-from .build_types import BuildError, SkipComponent
+from .build_types import CATEGORY_EXTERNAL_PREREQUISITE, BuildError, SkipComponent
 from .cross_environment import CrossEnvironment
 from .builders.base import (
     CARGO_C_VERSION,
@@ -302,7 +302,9 @@ class FFmpegBuilder:
         return self._is_windows_ucrt64_backend() and self.config.windows.prefer_system_packages
 
     def _should_use_system_component(self, component: Component) -> bool:
-        """Return whether component should be treated as system-provided."""
+        """Return whether the active backend may use a system-provided component."""
+        if self.config.target_backend == TARGET_BACKEND_CROSS_MINGW:
+            return component.build_role == BuildRole.HOST_TOOL and component.system_component
         if component.system_component:
             return True
         if not self._prefer_system_packages():
@@ -891,6 +893,11 @@ class FFmpegBuilder:
 
         prefetch_components = []
         for component in components:
+            if (
+                self.config.target_backend == TARGET_BACKEND_CROSS_MINGW
+                and component.build_role == BuildRole.HOST_TOOL
+            ):
+                continue
             if self.state_manager.is_component_completed(component.name, component.version):
                 continue
             if component.name == "giflib":
@@ -941,12 +948,35 @@ class FFmpegBuilder:
 
     def _build_component_impl(self, component: Component) -> None:
         """Run component build with its role-scoped environment and prefix."""
+        cross_mingw = self.config.target_backend == TARGET_BACKEND_CROSS_MINGW
+        if cross_mingw and component.build_role == BuildRole.HOST_TOOL:
+            tool = component.system_tool_name or component.name
+            if self._is_system_component_available(tool):
+                return
+            raise BuildError(
+                component.name,
+                f"Required WSL host executable {tool!r} is unavailable; "
+                "install or provision it outside the build.",
+                category=CATEGORY_EXTERNAL_PREREQUISITE,
+                code="wsl_mingw_host_tool_unavailable",
+            )
+
         if component.name == "vulkan-headers":
             invalidate_vulkan_resume(self.state_manager, self.workspace, [component])
-        if self.state_manager.is_component_completed(component.name, component.version):
+        state = self.state_manager.get()
+        prior_component = state.components.get(component.name)
+        stale_system_status = (
+            cross_mingw
+            and component.build_role != BuildRole.HOST_TOOL
+            and prior_component is not None
+            and prior_component.status == ComponentStatus.SYSTEM
+        )
+        if not stale_system_status and self.state_manager.is_component_completed(
+            component.name, component.version
+        ):
             return
 
-        if component.name == "giflib":
+        if component.name == "giflib" and self._should_use_system_component(component):
             tool = component.system_tool_name or component.name
             if self._is_system_component_available(tool):
                 self.state_manager.mark_component_status(

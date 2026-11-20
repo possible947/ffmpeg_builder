@@ -35,7 +35,7 @@ guide.
 - **~60 Components** — All codecs, libraries, and tools built from source in correct dependency order
 - **macOS Support** — Macports clang detection, OpenMP, VideoToolbox, glibtool handling
 - **Linux Support** — GCC/Clang detection, C11/C++17 standards, host-tuned (`-march=native -mtune=native -fopenmp`) builds
-- **Windows (WSL-Mingw) — G3 PASS** — integrated cross-environment and host/target acceptance passes; G3 intentionally stops before component builds; G4 has not started
+- **Windows (WSL-Mingw) — G1/G2/G3 PASS; G4 in progress** — G4 Waves 0 and 1 are accepted; seven real target dependencies cross-build, while Wave 2 and FFmpeg integration remain incomplete
 
 ## Requirements
 
@@ -156,14 +156,16 @@ Or use the environment check script:
 
 ## Windows (WSL-Mingw)
 
-> **Status: G1/G2/G3 PASS; G4 not started.** The production
+> **Status: G1/G2/G3 PASS; G4 Waves 0–1 complete, G4 in progress.** The production
 > `linux-cross-mingw` strategy, isolated target environment, role-scoped
 > builder contracts, CUDA fatbin/bin2c/COFF probe, Rust/Cargo target probe,
 > transitive link metadata, and integrated configure/link acceptance pass.
-> The TUI and headless routes stop before component building; there is no
+> Wave 1 built zlib, libogg, opus, libpng, FreeType2, dav1d, and vid_stab for
+> the Windows target with COFF, pkg-config, link-smoke, prefix, and same-identity
+> reuse acceptance. Wave 2 and FFmpeg integration have not started; there is no
 > supported end-to-end Windows FFmpeg build workflow today. Early feasibility experiments succeeded on one specific
 > host (see [`docs/windows_build_strategy.md`](docs/windows_build_strategy.md));
-> G1, G2, and G3 are PASS; G4 component cross-build support has not started.
+> the complete configured dependency stack is not yet built.
 > WSL-Mingw resume is guarded by a full semantic target-and-input
 > identity; changed or legacy input identity is never silently adopted. The
 > previous MSYS2-based Windows build path was replaced by this route and is no longer documented
@@ -248,7 +250,9 @@ prerequisites, not project-managed Windows target libraries.
 G2.4/G2.5 prerequisite preparation, G2.6 target-input staging, G2.7 semantic
 identity, and G2.8 offline-closure acceptance have passed on the validated
 host. G1/G2/G3 are closed; G3 acceptance does not build components or FFmpeg.
-G4 has not started.
+G4 Wave 0 role-aware selection and Wave 1's seven-component production build
+are complete. G4 is in progress; Wave 2 and FFmpeg integration have not
+started.
 
 ### Windows runtime prerequisites
 

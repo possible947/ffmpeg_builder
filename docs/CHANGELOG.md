@@ -1,3 +1,37 @@
+### Accepted — G4 Wave 1 real target dependency cross-builds
+
+- Built and accepted zlib 1.3.2, libogg 1.3.6, opus 1.6.1, libpng 1.6.58,
+  FreeType2 2.14.3, dav1d 1.5.4, and vid_stab 1.1.1 through production
+  Autotools, Meson, and CMake builders for the identity-specific
+  `linux-cross-mingw` target prefix.
+- Validated local registered source checksums, target static archives and
+  headers, target-only pkg-config metadata, COFF archive members, per-library
+  LLVM-MinGW link smokes, and a complete target-prefix contamination scan.
+  The second same-identity run validated and reused all seven outputs.
+- Declared the verified zlib/libpng/FreeType2 dependency edges and required
+  target zlib/libpng in FreeType's configuration. Retained libpng's upstream
+  `libpng.pc` alias for that target dependency while disabling its tools,
+  tests, shell config scripts, and unversioned header/library links. G4 Waves
+  0–1 are accepted; Wave 2 and FFmpeg builds have not started. G4 remains in
+  progress.
+
+### Accepted — G4 Wave 0 role-aware selection
+
+- Kept G3 `BuildRole` as the single role model and explicitly marked the ten
+  WSL host tools. Cross selection separates host prerequisites, G2 target
+  inputs, target builds, mixed recipes, and capability-conditional components;
+  host hardware no longer removes a required cross candidate.
+- Made system-component reuse backend/role aware: native behavior is
+  unchanged, while Linux host libraries cannot satisfy Windows target
+  components. Host-tool availability creates no Windows-target component
+  status. `giflib` and the OpenCL ICD Loader remain native-only component
+  builds; the latter remains G2 `OpenCL.def` provenance.
+- Cross `cargo-c` use is an explicit prepared-host prerequisite pinned to
+  0.10.25; missing or mismatched installations fail without `cargo install`.
+  The cross dry-run reaches Wave-0 selection and stops before Wave-1 builds.
+  G4 is in progress; Wave 1, component builds, and full FFmpeg integration are
+  not claimed.
+
 ### Accepted — G3 pass 2 integrated cross-build contracts (2026-03-19)
 
 - Completed the role-scoped host, target, and mixed build contracts and
