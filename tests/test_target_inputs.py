@@ -195,6 +195,38 @@ def test_target_prefix_contamination_is_rejected(tmp_path: Path):
         _validate_target_tree(prefix)
 
 
+@pytest.mark.parametrize(
+    ("source_content", "expected_code"),
+    [(None, "source_missing"), (b"corrupt archive", "checksum_mismatch")],
+)
+def test_target_source_failures_are_classified_and_leave_no_prefix(
+    tmp_path: Path, source_content: bytes | None, expected_code: str
+):
+    registry = ComponentRegistry()
+    component = registry.get_target_inputs("linux-cross-mingw")[0]
+    source_mirror = tmp_path / "sources"
+    source_mirror.mkdir()
+    if source_content is not None:
+        (source_mirror / component.get_archive_filename()).write_bytes(source_content)
+    target_prefix = tmp_path / "target-prefix"
+
+    with pytest.raises(BuildError) as error:
+        materialize_target_inputs(
+            registry,
+            "linux-cross-mingw",
+            source_mirror,
+            tmp_path / "packages",
+            target_prefix,
+            tmp_path / "llvm-mingw",
+            allow_network_downloads=False,
+        )
+
+    assert error.value.category == "project_source"
+    assert error.value.code == expected_code
+    assert not target_prefix.exists()
+    assert not list(tmp_path.glob(".target-prefix.target-inputs-*"))
+
+
 def test_target_stage_refuses_existing_or_system_prefix(tmp_path: Path):
     existing = tmp_path / "existing"
     existing.mkdir()

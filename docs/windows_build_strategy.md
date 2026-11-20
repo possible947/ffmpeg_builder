@@ -1,8 +1,8 @@
 # Windows FFmpeg cross-build strategy
 
-**Status:** G1 **PASS**; G2.1–G2.7 complete; G2.8 and G3 **not started**.
-G2.4/G2.5 passed final live acceptance in issue #16, G2.6 passed isolated
-target-input acceptance, and G2.7 passed live identity/reuse acceptance. The
+**Status:** G1 **PASS**; G2.1–G2.8 **PASS** (G2 closed); G3 **not started**.
+G2.4/G2.5 passed final live acceptance in issue #16; G2.6/G2.7 and the G2.8
+offline-closure/live-prerequisite acceptance also passed. The
 `linux-cross-mingw` cross-build backend and full Windows component stack remain
 unimplemented; this is not an end-to-end Windows FFmpeg build acceptance.
 
@@ -381,8 +381,9 @@ These are **not Windows cross-build results**. G2.4/G2.5 validate WSL host
 prerequisites and PTX, G2.6 validates isolated target headers and link
 interfaces, and G0A.5 is a separate early Windows feature slice. None
 establishes a production Windows libvmaf CUDA build, its fatbin/runtime path,
-or a Windows cross-build. G2.7 now protects resume identity for these inputs;
-G2.8 and G3 remain open. The following is implementation work, not a
+or a Windows cross-build. G2.7 protects resume identity for these inputs, and
+G2.8 accepted the complete offline G2 closure and live prerequisite path. G2
+is closed; G3 remains not started. The following is implementation work, not a
 gate-status change.
 The module-level mapping is in
 [DeveloperReadme.md](DeveloperReadme.md#reusing-the-native-cudavulkan-work-for-wsl-mingw).
@@ -642,11 +643,10 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
   no rustup). G2.4 CUDA resolution (#10), the external-prerequisite foundation
   and CUDA PTX probe (#12) are implemented and accepted for the scoped host.
   G2.5 Vulkan prerequisites and host/target isolation (#14) are implemented and
-  accepted for the scoped host. G2.6 target headers/interfaces and isolated
-  offline acceptance and G2.7 identity integration are complete; G2.8 final
-  offline closure remains open; G3 is not started. Full G2 offline closure is
-  not claimed. G2 checks external WSL SDK prerequisites; it does not own or
-  install those SDKs.
+  accepted for the scoped host. G2.6 target headers/interfaces, G2.7 identity
+  integration, and G2.8 final offline closure/live prerequisite acceptance are
+  complete; G2 is PASS and G3 is not started. G2 checks external WSL SDK
+  prerequisites; it does not own or install those SDKs.
 - **SDK ownership:** The CUDA SDK (example `/opt/cuda-12.4`) and Vulkan SDK
   (example `/opt/vulkan-sdk/1.4.363.1/x86_64`) are external prerequisites. Locate
   them from configured/documented paths or environment, verify presence and that
@@ -875,10 +875,8 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
 
 | Gate | Open issue | Required resolution |
 |---|---|---|
-| G2.8 | Final offline closure and reproducibility audit remain open. | Verify the declared project-owned dependency/source closure offline without claiming the G3 cross environment. |
-| G2 | Future CUDA toolkit coexistence and explicit SDK selection. | Resolve the configured SDK path; reject ambiguous ambient tools. |
 | G3 | Production implementation of CPU flag derivation and compatibility-workaround classification. | Derive from effective Windows capabilities and validate selected compiler; scope `_GNU_SOURCE` workaround narrowly. |
-| G4 | Remaining full software component cross-build issues and complete offline provisioning closure (the LLVM-MinGW input itself is offline-provisionable since G2.2). | Resolve builder/registry/provisioning gaps component-by-component with target-isolation tests. |
+| G4 | Remaining full software component cross-build issues and full-stack source/build closure. | Resolve builder/registry/provisioning gaps component-by-component with target-isolation tests. |
 | G5 | Neural-network backend/API and complete D3D/QSV/AMF feature support. | Select required backend/API and prove target build/runtime; only an unavoidable MSVC-only ABI limitation can reopen Variant 2. |
 | G5 | Hardware capabilities absent or unsupported on the tested TITAN V host, including untested codec/profile combinations. | Retain build-presence assertions; record runtime acceptance as not validated where appropriate. |
 | G6 | Final runtime DLL closure and redistribution policy for all production dependencies. | Inspect built package; include LLVM-MinGW/C++ runtime DLLs where required and document external Windows/driver prerequisites. |
@@ -907,10 +905,11 @@ project-owned artifact and never a Windows target component.
 
 ## 10. Ordered implementation checklist
 
-1. **G1:** Implement fresh Windows interop probe and identity guard; test fresh,
+1. **G1 — PASS:** Fresh Windows interop probe and identity guard; tested fresh,
    changed, failed, overridden, legacy and same-identity cases.
-2. **G2:** Register/provision project-managed inputs offline; validate explicit
-   installed CUDA/Vulkan SDK prerequisites and selected host compiler.
+2. **G2 — PASS:** Register/provision the complete project-managed input
+   closure offline; validate explicit installed CUDA/Vulkan SDK prerequisites
+   and selected host compiler; establish reproducible schema-2 identity.
 3. **G3:** Add `linux-cross-mingw`, isolated target environment and cross files;
    verify dry-run commands and host/target isolation.
 4. **G4:** Cross-build the full configured software dependency stack; verify

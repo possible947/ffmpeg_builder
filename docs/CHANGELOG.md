@@ -1,3 +1,26 @@
+### Accepted — G2.8 final offline closure and live prerequisite acceptance
+
+- Resolved the complete project-owned G2 source closure from production
+  registries: LLVM-MinGW; GCC 12.5.0 and GMP/MPFR/MPC bootstrap sources; Rust
+  1.99.0 and matching Windows target std; nv-codec, Vulkan-Headers,
+  OpenCL-Headers, and OpenCL ICD Loader definition sources. All 11 local
+  archives passed declared-checksum verification.
+- Provisioned all six required profiles in a fresh network-disabled
+  ToolchainStore and verified provenance/current compatibility. A repeated
+  production provisioning run reused the installations without rebuilding.
+  Independent offline target-input materialisations produced identical
+  materialisation IDs and Vulkan/OpenCL interface hashes; LLVM-MinGW header
+  compile, import-interface link/format, and contamination checks passed.
+- Missing/corrupt managed target sources retain project-source error
+  classification, with regression tests confirming no partial target prefix.
+  Fresh production preparation validated the Windows target, external CUDA
+  12.4.99 with project GCC 12.5.0 `-ccbin` and `compute_70` PTX, and external
+  Vulkan shader compilation/SPIR-V validation. Schema-2 identity was stable
+  across independent same-input preparations and resumed the same workspace.
+- Full pytest (550 passed, 1 skipped), Black, and the mypy baseline passed.
+  G2 is closed and PASS; G3 has not started. No Windows FFmpeg cross-build is
+  claimed, and external SDK/runtime trees remain external.
+
 ### Accepted — G2.7 WSL-Mingw semantic build identity
 
 - Integrated the freshly probed G1 Windows target with resolved LLVM-MinGW,
@@ -19,7 +42,8 @@
   workspace artifact preserved, and rejection of G1-only legacy WSL-Mingw
   state. No saved build configuration, real workspace, external SDK, system
   compiler, Windows host, or installed toolchain was changed. No complete
-  Windows FFmpeg cross-build is claimed; G2.8 and G3 remain open.
+  Windows FFmpeg cross-build is claimed. At G2.7 acceptance, G2.8 and G3
+  remained open; G2.8 is now accepted above.
 
 ### Accepted — G2.6 Windows target inputs and link interfaces
 
@@ -37,8 +61,8 @@
 - Offline acceptance with the production registry/source mirror and installed
   LLVM-MinGW compiled representative target headers, linked Vulkan/OpenCL
   smoke programs, inspected the generated COFF interfaces, and rejected host,
-  ELF, SDK, and PoC/session contamination. G2.6 is complete; G2.7, G2.8, and
-  G3 remain not started. No full Windows FFmpeg cross-build is claimed.
+  ELF, SDK, and PoC/session contamination. At G2.6 acceptance, G2.7, G2.8, and
+  G3 had not started. No full Windows FFmpeg cross-build is claimed.
 
 ### Verified — native Linux FFmpeg 8.1 and 9.0 (2026-11-12)
 
@@ -100,8 +124,9 @@
   and stopped before builder construction, component work, and G3.
 - The final acceptance report records the full validation results and
   repository baseline. No SDK, Windows host, system compiler configuration,
-  saved build configuration, or real workspace state was changed. G2.6, G2.7,
-  G2.8, and G3 remain unstarted; no Windows cross-build is claimed.
+  saved build configuration, or real workspace state was changed. At this
+  earlier acceptance point, G2.6, G2.7, G2.8, and G3 had not started; no
+  Windows cross-build is claimed.
 
 ### Added — G2.4/G2.5 WSL-Mingw production prerequisite preparation
 

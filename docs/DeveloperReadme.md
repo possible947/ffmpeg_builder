@@ -8,7 +8,9 @@ The current package version is `3.0.0`. The toolchain store replaces the
 external `nix shell` environment: compilers are built on the host for the
 host, and both FFmpeg versions build end-to-end (Linux, GCC 16.2.1 host: 8.1
 with deployed gcc12 12.5.0 and 9.0 with the system GCC — 58/58 components
-each, smoke-tested). See `CHANGELOG.md` for the release history.
+each, smoke-tested). WSL-Mingw G1/G2 preparation and offline-closure
+acceptance are complete; the G3 Windows cross-build backend has not started.
+See `CHANGELOG.md` for the release history.
 
 ## Architecture Overview
 
@@ -66,6 +68,15 @@ and the pre-reuse guard used by `app.prepare_target()` and
 `scripts/run_build.py`. G2.7 adds the resolved WSL-Mingw material-input
 projection without changing native identity requirements. Details:
 `docs/windows_build_strategy.md`, "G1 implementation notes" and §6.
+
+### `target_inputs.py`, `scripts/prepare_target_inputs.py` (G2.6/G2.8)
+
+Resolve and stage the checksum-pinned NVIDIA, Vulkan, and OpenCL target headers
+plus the generated Windows Vulkan/OpenCL import interfaces. The disposable
+target prefix and manifest are reproduced offline from `third_party/sources`;
+their provenance and materialisation ID feed the schema-2 identity. G2.8
+verified independent reproducibility and target contamination boundaries.
+This does not create the G3 compiler environment or build Windows components.
 
 ### `__main__.py`
 
@@ -616,9 +627,10 @@ Legacy Windows/UCRT64 policy in the current code (to be removed/migrated; not a 
 - `nv-codec`, `opencl-headers`, `opencl-icd-loader` remain `linux_only` and are allowed on Windows only through the legacy `windows_ucrt64_supported` override.
 
 WSL-Mingw (`linux-cross-mingw`) target inputs are declared separately through
-`target_backends`; G3 still needs to connect target eligibility to the
-production build graph. Target-input declarations do not change native
-`get_buildable()` behavior. See `windows_build_strategy.md` (G2.6 and G3–G5).
+`target_backends`; G2.8 reproduced and verified their staged closure offline.
+G3 still needs to connect target eligibility to the production build graph.
+Target-input declarations do not change native `get_buildable()` behavior.
+See `windows_build_strategy.md` (G2.6/G2.8 and G3–G5).
 
 ### `builder.py` — Build Engine
 
@@ -781,9 +793,9 @@ Built with the `rich` library. Static screens use `Table`, `Panel`, and `Prompt`
 The Windows build route is **WSL-Mingw**: a Windows host runs a WSL2 Ubuntu
 build environment, which uses the LLVM-MinGW/UCRT cross toolchain to produce
 a Windows FFmpeg target. **WSL-Mingw** is the user-facing name; the backend
-identifier is **`linux-cross-mingw`**. Target preparation and CUDA prerequisite
-checks exist, but the G3 cross-build backend and full component stack are
-**not implemented yet**. The gates
+identifier is **`linux-cross-mingw`**. G1/G2 target preparation and offline
+closure acceptance are complete, but the G3 cross-build backend and full
+component stack are **not implemented yet**. The gates
 G1–G7, verified early-PoC results and open issues are in
 [`windows_build_strategy.md`](windows_build_strategy.md), which is the
 authoritative plan. The previous MSYS2-based Windows build path was replaced
@@ -891,8 +903,31 @@ Same semantic inputs permit reuse. A material change selects an isolated
 workspace and leaves old artifacts untouched; runtime-only G1 drift invalidates
 acceptance, and diagnostic-only changes do not prevent reuse. Live acceptance
 covered fresh/same preparation, material and diagnostic drift, and rejection
-of G1-only saved state on the physical Windows/WSL host. This gate establishes
-identity safety, not a production cross-build; G2.8 and G3 remain open.
+of G1-only saved state on the physical Windows/WSL host. This establishes
+identity safety, not a production cross-build; G2.8 final acceptance is
+recorded below and G3 has not started.
+
+#### G2.8 — final offline closure and live prerequisites (PASS)
+
+Production registries resolved the complete project-owned G2 source closure:
+LLVM-MinGW; GCC 12.5.0 with GMP, MPFR, and MPC bootstrap sources; Rust 1.99.0
+with matching `x86_64-pc-windows-gnullvm` target std; nv-codec,
+Vulkan-Headers, OpenCL-Headers, and the pinned OpenCL ICD Loader definition
+source. All 11 archives were present in the local mirror and matched their
+declared checksums. A fresh, network-disabled ToolchainStore provisioned and
+verified the six required profiles; a second run reused them without changing
+the GCC build log.
+
+Two independent offline target-input stages had the same materialisation ID
+and generated-interface hashes. LLVM-MinGW compiled representative target
+headers and linked both Windows import interfaces; format and contamination
+checks passed. Missing/corrupt managed sources retain project-source error
+classification. Production `prepare_target()` then passed twice with fresh
+Windows probes, external CUDA 12.4.99 using the clean-store GCC 12.5.0 ccbin
+and `compute_70` PTX, and external Vulkan shader/SPIR-V tools. The schema-2
+identity digest/key were stable and the second preparation resumed the same
+isolated workspace. External SDK/runtime trees remain outside project-owned
+provenance and target inputs. No Windows FFmpeg cross-build was performed.
 
 #### Reusing the native CUDA/Vulkan work for WSL-Mingw
 

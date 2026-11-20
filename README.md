@@ -1,6 +1,10 @@
 # FFmpeg Builder 3.0
 
-Interactive Python-based build system for FFmpeg 8.1 (default) and 9.0 on macOS and Linux. Windows builds follow the **WSL-Mingw** route (WSL2 Ubuntu → LLVM-MinGW/UCRT cross toolchain), which is still in development — see [Windows (WSL-Mingw)](#windows-wsl-mingw).
+Interactive Python-based build system for FFmpeg 8.1 (default) and 9.0 on
+macOS and Linux. Windows builds follow the **WSL-Mingw** route (WSL2 Ubuntu →
+LLVM-MinGW/UCRT cross toolchain); its G2 preparation gates have passed, but
+the production cross-build backend is not implemented — see
+[Windows (WSL-Mingw)](#windows-wsl-mingw).
 
 FFmpeg Builder replaces the traditional bash `build-ffmpeg` script with a modern, interactive interface featuring real-time progress tracking, configuration management, platform-aware hardware acceleration detection, and resumable builds.
 
@@ -31,7 +35,7 @@ guide.
 - **~60 Components** — All codecs, libraries, and tools built from source in correct dependency order
 - **macOS Support** — Macports clang detection, OpenMP, VideoToolbox, glibtool handling
 - **Linux Support** — GCC/Clang detection, C11/C++17 standards, host-tuned (`-march=native -mtune=native -fopenmp`) builds
-- **Windows (WSL-Mingw) — in development** — Windows FFmpeg built from WSL2 Ubuntu with LLVM-MinGW/UCRT; the `linux-cross-mingw` backend is not implemented yet
+- **Windows (WSL-Mingw) — preparation accepted** — G1 and G2 pass; G3 has not started, and the `linux-cross-mingw` build backend is not implemented yet
 
 ## Requirements
 
@@ -152,15 +156,16 @@ Or use the environment check script:
 
 ## Windows (WSL-Mingw)
 
-> **Status: in development.** The WSL-Mingw route is the only Windows build
+> **Status: preparation accepted; build backend not implemented.** The
+> WSL-Mingw route is the only Windows build
 > route going forward, but its production backend (`linux-cross-mingw`) is
 > **not implemented yet**; there is no supported end-to-end Windows build
 > workflow today. Early feasibility experiments succeeded on one specific
 > host (see [`docs/windows_build_strategy.md`](docs/windows_build_strategy.md));
-> G1 and G2.1–G2.7 preparation gates are complete, while G2.8 and G3–G7 remain
-> open. WSL-Mingw resume is guarded by a full semantic target-and-input
-> identity; changed or legacy input identity is never silently adopted. The previous MSYS2-based
-> Windows build path was replaced by this route and is no longer documented
+> G1 and the complete G2 preparation/acceptance gate are PASS; G3 has not
+> started. WSL-Mingw resume is guarded by a full semantic target-and-input
+> identity; changed or legacy input identity is never silently adopted. The
+> previous MSYS2-based Windows build path was replaced by this route and is no longer documented
 > or supported; any MSYS2 code still in the repository is legacy and is
 > being removed/migrated.
 
@@ -236,10 +241,10 @@ resolves `VULKAN_SDK`; an invalid explicit root fails rather than falling back
 to the environment or `PATH`. These are externally managed WSL host
 prerequisites, not project-managed Windows target libraries.
 
-G2.4/G2.5 prerequisite preparation and G2.7 semantic identity have passed live
-acceptance on the validated host; G2.6 target-input staging has passed
-isolated acceptance. The Windows cross-build backend and end-to-end Windows
-FFmpeg build are not implemented; G2.8 and G3 remain unstarted.
+G2.4/G2.5 prerequisite preparation, G2.6 target-input staging, G2.7 semantic
+identity, and G2.8 offline-closure acceptance have passed on the validated
+host. G2 is closed. The Windows cross-build backend and end-to-end Windows
+FFmpeg build are not implemented; G3 has not started.
 
 ### Windows runtime prerequisites
 

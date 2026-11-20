@@ -14,7 +14,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from .build_types import BuildError
+from .build_types import CATEGORY_PROJECT_SOURCE, BuildError
 from .components import Component, ComponentRegistry
 from .downloader import Downloader
 
@@ -367,7 +367,19 @@ def materialize_target_inputs(
                         show_progress=False,
                     )
                 except RuntimeError as exc:
-                    raise BuildError(name, f"Project source acquisition failed: {exc}") from exc
+                    message = str(exc)
+                    if "missing in local source storage" in message:
+                        code = "source_missing"
+                    elif "SHA256 mismatch" in message:
+                        code = "checksum_mismatch"
+                    else:
+                        code = "source_acquisition_failed"
+                    raise BuildError(
+                        name,
+                        f"Project source acquisition failed: {exc}",
+                        category=CATEGORY_PROJECT_SOURCE,
+                        code=code,
+                    ) from exc
                 extracted[name] = _extract_source(
                     archive, component, extraction_root / component.get_target_dir()
                 )
