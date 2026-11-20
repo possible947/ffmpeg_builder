@@ -416,6 +416,19 @@
   archive_filename: zimg-{version}.tar.gz
   archive_dirname: zimg-release-{version}
   custom_build_fn: build_zimg
+  target_link_metadata:
+    private_transitive_link_requirements:
+    - -lc++
+    - -lunwind
+    runtime_dependencies:
+    - name: libc++.dll
+      classification: toolchain-runtime-dll
+      source_identity: llvm-mingw-20261104
+    - name: libunwind.dll
+      classification: toolchain-runtime-dll
+      source_identity: llvm-mingw-20261104
+    provenance:
+    - LLVM-MinGW zimg static-consumer link and C++ runtime import probe
   ffmpeg_configure_flag: --enable-libzimg
 - name: lv2
   sha256: 78c51bcf21b54e58bb6329accbb4dae03b2ed79b520f9a01e734bd9de530953f

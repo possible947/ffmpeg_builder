@@ -42,6 +42,7 @@ from ffmpeg_builder.g4_wave3a import run_g4_wave3a  # noqa: E402
 from ffmpeg_builder.g4_wave3b import run_g4_wave3b  # noqa: E402
 from ffmpeg_builder.g4_wave4a import run_g4_wave4a  # noqa: E402
 from ffmpeg_builder.g4_wave4b import run_g4_wave4b  # noqa: E402
+from ffmpeg_builder.g4_wave4c import run_g4_wave4c  # noqa: E402
 from ffmpeg_builder.platform_detect import PlatformDetector  # noqa: E402
 from ffmpeg_builder.cuda_prerequisites import (  # noqa: E402
     cuda_nv_codec_identity,
@@ -115,6 +116,11 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         "--g4-wave4b",
         action="store_true",
         help="Build and accept only the G4 Wave-4B x264, x265 and libvpx target subset.",
+    )
+    parser.add_argument(
+        "--g4-wave4c",
+        action="store_true",
+        help="Build and accept only the G4 Wave-4C zimg target subset.",
     )
     return parser.parse_args(argv)
 
@@ -314,6 +320,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 args.g4_wave3b,
                 args.g4_wave4a,
                 args.g4_wave4b,
+                args.g4_wave4c,
             )
         )
         > 1
@@ -331,6 +338,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         raise SystemExit("--g4-wave4a performs real builds and cannot be combined with --dry-run.")
     if args.g4_wave4b and args.dry_run:
         raise SystemExit("--g4-wave4b performs real builds and cannot be combined with --dry-run.")
+    if args.g4_wave4c and args.dry_run:
+        raise SystemExit("--g4-wave4c performs real builds and cannot be combined with --dry-run.")
     if (
         args.g4_wave1
         or args.g4_wave2
@@ -338,6 +347,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         or args.g4_wave3b
         or args.g4_wave4a
         or args.g4_wave4b
+        or args.g4_wave4c
     ) and args.ffmpeg_version not in (
         None,
         "9.0",
@@ -354,6 +364,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         or args.g4_wave3b
         or args.g4_wave4a
         or args.g4_wave4b
+        or args.g4_wave4c
     ):
         config.ffmpeg_version = "9.0"
         config.target_backend = TARGET_BACKEND_CROSS_MINGW
@@ -374,6 +385,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return run_g4_wave4a(app, config)
     if args.g4_wave4b:
         return run_g4_wave4b(app, config)
+    if args.g4_wave4c:
+        return run_g4_wave4c(app, config)
     if args.dry_run:
         if getattr(config, "target_backend", "native") == TARGET_BACKEND_CROSS_MINGW:
             return dry_run_cross_backend(app, config, resume=args.resume)

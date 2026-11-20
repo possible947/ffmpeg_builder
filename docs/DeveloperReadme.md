@@ -11,7 +11,7 @@ with deployed gcc12 12.5.0 and 9.0 with the system GCC — 58/58 components
 each, smoke-tested). WSL-Mingw G1/G2 preparation and offline-closure
 acceptance are complete; G3 has established and validated the
 `linux-cross-mingw` cross-environment and shared build contracts. G3 is PASS;
-G4 Waves 0–4A are complete. Wave 1 accepted seven Windows target dependencies;
+G4 Waves 0–4C are complete. Wave 1 accepted seven Windows target dependencies;
 Wave 2 accepted eleven more through production Autotools and CMake paths with
 the mandatory primary profile (`native_build=true`, `openmp=true`), and Wave
 3A accepted six LV2 dependencies through Meson. Wave 3B reused target libogg
@@ -24,8 +24,12 @@ runtime was confirmed on physical Windows. Wave 4B accepted x264, x265 and
 libvpx with host NASM, Windows COFF archives, target metadata and PE link
 smokes. x265's 12/10/8-bit archives are merged and independently rechecked;
 the registered 4.2 archive's embedded version reports `4.0+1-6318f22`.
-Wave 4C, the complete configured dependency stack, and FFmpeg integration
-remain in progress. The
+Wave 4C built zimg 3.0.6 from its checksum-verified offline archive using
+host autoreconf and the shared Autotools cross projection; the legacy MSYS
+lookup is not reached. Its static COFF archive, C and C++ headers, metadata,
+PE link smokes, libc++/libunwind transitive requirements, and same-identity
+reuse were accepted. Wave 5A and Windows FFmpeg have not been built; the
+complete configured dependency stack remains in progress. The
 compatibility/portable profile is `native_build=false`,
 `openmp=false`; it is for portable releases/diagnostics and cannot substitute
 for a failed primary-profile build.

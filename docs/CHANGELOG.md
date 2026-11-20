@@ -1,3 +1,16 @@
+### Accepted — G4 Wave 4C zimg
+
+- Built checksum-verified zimg 3.0.6 offline with host autoreconf and the shared
+  LLVM-MinGW Autotools projection. The cross recipe isolates the legacy MSYS
+  lookup and adds the upstream source's missing `<exception>` include for libc++.
+- Installed the static target archive, C/C++ headers and pkg-config/libtool
+  metadata. All 49 objects are Windows x86-64 COFF; C and C++ PE links,
+  C++ runtime negative link, accumulated-prefix scan and same-identity reuse
+  passed. The pkg-config, libtool and registry metadata publish libc++ and
+  libunwind; their DLLs are classified for later packaging. Unneeded inherited
+  libtool pthread/OpenMP flags are removed after archive symbol inspection.
+- G4 Waves 0–4C are complete; Wave 5A and Windows FFmpeg have not started.
+
 ### Accepted — G4 Wave 4B bespoke software codecs
 
 - Built checksum-verified x264, x265 and libvpx with LLVM-MinGW and host NASM
@@ -9,7 +22,7 @@
 - The registered x265 4.2 archive matches its checksum, but its embedded
   version says `4.0+1-6318f22` and its generated pkg-config version is `4.0`.
   This source-provenance discrepancy remains visible.
-- G4 Waves 0–4B are complete; Wave 4C and FFmpeg have not started.
+- At this acceptance point G4 Waves 0–4B were complete; Wave 4C and FFmpeg had not started.
 
 ### Accepted — G4 Wave 4A CMake video codecs
 

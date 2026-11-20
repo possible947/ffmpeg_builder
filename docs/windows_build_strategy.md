@@ -1,8 +1,29 @@
 # Windows FFmpeg cross-build strategy
 
 **Status:** G1 **PASS**; G2.1–G2.8 **PASS**; G3 **PASS**; G4 **in progress**
-(Waves 0–4B complete). Wave 4C and the full Windows FFmpeg build remain
-incomplete.
+(Waves 0–4C complete). Wave 5A and the full Windows FFmpeg build have not started.
+
+### G4 Wave 4C — zimg
+
+The local zimg 3.0.6 archive has SHA-256
+`be89390f13a5c9b2388ce0f44a5e89364a20c1c57ce46d382b1fcc3967057577`.
+It lacks a generated configure script, so the cross-only recipe bootstraps
+with host autoreconf, projects the shared Autotools cross environment, and
+selects static output without examples, tests or the test application. The
+recipe adds the missing `<exception>` include required by LLVM libc++ and
+isolates the old MSYS libtool lookup in the unchanged legacy/native route.
+Upstream x86 SIMD and dispatch remain enabled alongside the configured native
+target flags.
+
+The target prefix contains `zimg.h`, `zimg++.hpp`, `libzimg.a`, `libzimg.la`
+and `zimg.pc`. All 49 archive objects are x86-64 COFF; C and C++ public-API
+consumers link as Windows PE, including a negative C link without C++ runtime
+metadata. pkg-config, libtool and registry metadata publish `-lc++ -lunwind`;
+`libc++.dll` and `libunwind.dll` are classified for later packaging. The link
+smokes did not require target pthread or OpenMP; unused inherited libtool
+flags are removed only after checking the archive's undefined symbols. The accumulated prefix scan
+and same-identity revalidation/reuse passed. No Windows FFmpeg or Wave 5A
+component was built.
 
 ### G4 Wave 4B — bespoke software codecs
 
@@ -24,7 +45,7 @@ metadata publishes libc++/libunwind, with `libc++.dll` and its transitive
 The pinned x265 archive's own `x265Version.txt` reports `4.0+1-6318f22`, and
 its generated pkg-config version is `4.0`, despite the registry's 4.2 label;
 the archive checksum matches the registry. This provenance discrepancy is not
-silently rewritten. Wave 4C and FFmpeg have not been built.
+silently rewritten. At that acceptance point Wave 4C and FFmpeg had not been built.
 
 ### G4 Wave 4A — CMake AV1 codecs
 

@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import shutil
+import re
+import shlex
+import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
@@ -17,6 +20,107 @@ if TYPE_CHECKING:
 def build_zimg(builder: FFmpegBuilder, component: Component, source_dir: Path) -> None:
     """Build zimg."""
     env = builder.get_build_env(component)
+    cross = builder.platform_context.cross_environment
+    if cross is not None and component.build_role.value == "target":
+        env.update(cross.autotools.environment)
+        env["STL_LIBS"] = "-lc++ -lunwind"
+        api_source = source_dir / "src/zimg/api/zimg.cpp"
+        try:
+            text = api_source.read_text(encoding="utf-8")
+            if "#include <exception>\n" not in text:
+                if text.count("#include <cmath>\n") != 1:
+                    raise BuildError(component.name, "Unexpected zimg API source layout.")
+                api_source.write_text(
+                    text.replace(
+                        "#include <cmath>\n", "#include <cmath>\n#include <exception>\n", 1
+                    ),
+                    encoding="utf-8",
+                )
+        except OSError as exc:
+            raise BuildError(component.name, f"Cannot prepare zimg API source: {exc}") from exc
+        if not (source_dir / "configure").is_file():
+            builder._run_step(
+                component,
+                ComponentStatus.CONFIGURING,
+                "autoreconf",
+                "Autotools bootstrap failed",
+                ["autoreconf", "--verbose", "--install", "--force"],
+                "autogen",
+                source_dir,
+                env,
+            )
+        builder._run_step(
+            component,
+            ComponentStatus.CONFIGURING,
+            "./configure",
+            "Configure failed",
+            [
+                "./configure",
+                *cross.autotools.arguments,
+                f"--prefix={builder._ws_str()}",
+                "--enable-static",
+                "--disable-shared",
+                "--disable-testapp",
+                "--disable-example",
+                "--disable-unit-test",
+            ],
+            "configure",
+            source_dir,
+            env,
+        )
+        builder._run_make(
+            component,
+            ComponentStatus.BUILDING,
+            "make",
+            "Build failed",
+            source_dir,
+            builder.num_jobs,
+            env,
+        )
+        builder._run_step(
+            component,
+            ComponentStatus.INSTALLING,
+            "install library and headers",
+            "Install failed",
+            ["make", "install-libLTLIBRARIES", "install-includeHEADERS", "install-pkgconfigDATA"],
+            "install",
+            source_dir,
+            env,
+        )
+        libtool_file = builder.target_prefix / "lib/libzimg.la"
+        try:
+            symbols = subprocess.run(
+                [str(cross.target_tools.nm), "-u", str(builder.target_prefix / "lib/libzimg.a")],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=60,
+            )
+            if symbols.returncode:
+                raise BuildError(component.name, "Cannot inspect zimg runtime references.")
+            text = libtool_file.read_text(encoding="utf-8")
+            needle = "dependency_libs='"
+            if text.count(needle) != 1:
+                raise BuildError(component.name, "Unexpected zimg libtool metadata.")
+            lines = text.splitlines()
+            for index, line in enumerate(lines):
+                if line.startswith("inherited_linker_flags='") and line.endswith("'"):
+                    flags = shlex.split(line.partition("=")[2].strip("'"))
+                    if not re.search(r"pthread", symbols.stdout, re.IGNORECASE):
+                        flags = [flag for flag in flags if flag not in ("-pthread", "-lpthread")]
+                    if not re.search(r"__kmpc|GOMP_", symbols.stdout):
+                        flags = [flag for flag in flags if flag != "-fopenmp"]
+                    lines[index] = "inherited_linker_flags='" + " ".join(flags) + "'"
+                    break
+            else:
+                raise BuildError(component.name, "Unexpected zimg inherited linker flags.")
+            text = "\n".join(lines) + "\n"
+            libtool_file.write_text(
+                text.replace(needle, needle + " -lc++ -lunwind", 1), encoding="utf-8"
+            )
+        except OSError as exc:
+            raise BuildError(component.name, f"Cannot update zimg libtool metadata: {exc}") from exc
+        return
 
     def _resolve_tool_path(tool: str) -> Optional[str]:
         """Resolve executable path across native Windows and MSYS2 paths."""
