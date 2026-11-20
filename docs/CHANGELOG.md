@@ -1,3 +1,30 @@
+### Accepted — G4 Wave 4B bespoke software codecs
+
+- Built checksum-verified x264, x265 and libvpx with LLVM-MinGW and host NASM
+  producing win64 COFF. x265's 12-, 10- and 8-bit archives are merged without
+  dropping colliding members and independently reconstructed during reuse.
+- Static target metadata, individual and combined PE link smokes, the prefix
+  scan and same-identity reuse passed. x265 records LLVM-MinGW libc++/libunwind;
+  libvpx records target pthread and `libwinpthread-1.dll`.
+- The registered x265 4.2 archive matches its checksum, but its embedded
+  version says `4.0+1-6318f22` and its generated pkg-config version is `4.0`.
+  This source-provenance discrepancy remains visible.
+- G4 Waves 0–4B are complete; Wave 4C and FFmpeg have not started.
+
+### Accepted — G4 Wave 4A CMake video codecs
+
+- Built and accepted `svtav1` 4.2.0 and `av1` (libaom) 3.13.3 from
+  checksum-verified local archives through the production CMake cross
+  environment. Host NASM emits Windows x86-64 COFF; AOM uses host Perl
+  generators and retains upstream runtime CPU detection.
+- The target static libraries, headers, pkg-config/CMake exports and
+  PE/COFF consumer links passed acceptance and the prefix contamination scan.
+  AOM's target static link metadata records `-lm`, `-lpthread`, and the
+  LLVM-MinGW `libwinpthread-1.dll` runtime requirement. SVT's C consumer
+  required no extra C++ or OpenMP metadata. Same-identity reruns revalidate
+  and reuse both codecs.
+- At this acceptance point Wave 4B and Windows FFmpeg integration had not started.
+
 ### Accepted — G4 Wave 3B Vorbis/Theora target dependencies
 
 - Built `libvorbis` 1.3.7 and `libtheora` 1.2.0 offline for the identity-local
@@ -11,8 +38,7 @@
   all six installed static archives as x86-64 COFF, their headers and target
   pkg-config closure, individual and combined target link smokes, and the
   prefix contamination scan. Same-identity reruns revalidate and reuse them.
-- G4 Waves 0–3B are complete; G4 remains in progress. Wave 4 and Windows
-  FFmpeg integration have not started.
+- At this acceptance point Wave 4B and Windows FFmpeg integration had not started.
 
 ### Accepted — G4 Wave 3A LV2 target dependencies
 
@@ -51,7 +77,7 @@
 - Compatibility/portable mode is `native_build=false`, `openmp=false` for
   portable releases or diagnostics; its success does not replace primary
   profile acceptance or convert a primary failure into a pass.
-- G4 Waves 0–3B are complete; Wave 4 and FFmpeg integration have not started.
+- At this acceptance point Wave 4B and FFmpeg integration had not started.
   G4 remains in progress and is not marked PASS.
 
 ### Accepted — G4 Wave 1 real target dependency cross-builds

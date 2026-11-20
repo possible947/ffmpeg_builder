@@ -1,9 +1,42 @@
 # Windows FFmpeg cross-build strategy
 
 **Status:** G1 **PASS**; G2.1–G2.8 **PASS**; G3 **PASS**; G4 **in progress**
-(Waves 0–3B complete). Wave 1 accepted seven, Wave 2 eleven, Wave 3A six,
-and Wave 3B two real Windows target dependencies. Wave 4 and the full Windows
-FFmpeg build remain incomplete.
+(Waves 0–4B complete). Wave 4C and the full Windows FFmpeg build remain
+incomplete.
+
+### G4 Wave 4B — bespoke software codecs
+
+The verified offline archives for `x264` revision
+`b35605ace3ddf7c1a5d67a2eb553f034aef41d55`, `x265` registered as 4.2,
+and `libvpx` 1.17.0 were built with LLVM-MinGW. x264 and libvpx use their
+configure/make paths; x265 uses separate 12-, 10-, and 8-bit CMake builds and
+an LLVM archive merge that verifies every input member and preserves duplicate
+member names. The installed combined archive is independently reconstructed
+and compared on acceptance. NASM is a host executable emitting win64 COFF;
+upstream runtime CPU dispatch remains enabled alongside the project's target
+native-tuning flags.
+
+Individual and combined pkg-config-based Windows target links, all archive
+members and the accumulated prefix scan passed. x265's static-consumer
+metadata publishes libc++/libunwind, with `libc++.dll` and its transitive
+`libunwind.dll` recorded for packaging. libvpx publishes target pthread and
+`libwinpthread-1.dll`. Same-identity reruns revalidate and reuse all three.
+The pinned x265 archive's own `x265Version.txt` reports `4.0+1-6318f22`, and
+its generated pkg-config version is `4.0`, despite the registry's 4.2 label;
+the archive checksum matches the registry. This provenance discrepancy is not
+silently rewritten. Wave 4C and FFmpeg have not been built.
+
+### G4 Wave 4A — CMake AV1 codecs
+
+Accepted `svtav1` 4.2.0 and `av1` (AOM) 3.13.3 from verified offline sources
+using the shared CMake cross toolchain and host NASM producing `win64` COFF.
+AOM's generated tables use host Perl and runtime CPU dispatch remains enabled.
+Both target archives, headers, pkg-config/CMake metadata and Windows PE link
+smokes passed. The AOM static link requires target `-lm` and `-lpthread`, and
+imports the LLVM-MinGW `libwinpthread-1.dll`; this is recorded as transitive
+target metadata for later packaging. SVT's C consumer required no extra C++
+or OpenMP link flags. The repeated same-identity run revalidated and reused
+both codecs. At that acceptance point Wave 4B and FFmpeg had not been built.
 
 ### G4 Wave 3B — Ogg, Vorbis, and Theora
 
@@ -31,7 +64,7 @@ component link smokes, and the full prefix contamination scan. The repeat
 same-identity invocation reused all six accepted outputs. LV2's unconditional
 validator utility is omitted from the target install.
 
-G4 remains in progress; Wave 4 and FFmpeg integration have not started.
+At that acceptance point Wave 4B and FFmpeg integration had not started.
 
 ### G4 Wave 2 — static media and utility dependencies
 
@@ -58,8 +91,8 @@ toolchain-runtime DLL and G6 packaging input.
 All eleven registered source archives were already present in the
 project-managed offline mirror and passed their declared SHA-256 checks; no
 source or validation-tool downloads were needed. Wave 3A is now accepted as
-described above; Wave 4 and FFmpeg integration have not started. G4 remains
-in progress.
+described above; at that acceptance point Wave 4B and FFmpeg integration had
+not started. G4 remains in progress.
 
 ### G4 Wave 1 — first production target dependencies
 

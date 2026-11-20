@@ -267,6 +267,7 @@
   url: https://gitlab.com/AOMediaCodec/SVT-AV1/-/archive/v{version}/SVT-AV1-v{version}.tar.gz
   category: video_codec
   build_system: cmake
+  custom_build_fn: build_av1_cmake
   configure_args:
   - -DCMAKE_INSTALL_PREFIX={workspace}
   - -DENABLE_SHARED=off
@@ -311,6 +312,19 @@
   gpl_only: true
   archive_filename: x265-{version}.tar.gz
   custom_build_fn: build_x265
+  target_link_metadata:
+    private_transitive_link_requirements:
+    - -lc++
+    - -lunwind
+    runtime_dependencies:
+    - name: libc++.dll
+      classification: toolchain-runtime-dll
+      source_identity: llvm-mingw-20261104
+    - name: libunwind.dll
+      classification: toolchain-runtime-dll
+      source_identity: llvm-mingw-20261104
+    provenance:
+    - LLVM-MinGW x265 static-consumer link and C++ runtime import probe
   ffmpeg_configure_flag: --enable-libx265
 - name: libvpx
   sha256: 1020f184046187baa2985dbde38e0691f49c44088bca7a1842b0236c6081dc0a
@@ -320,6 +334,16 @@
   build_system: custom
   archive_filename: libvpx-{version}.tar.gz
   custom_build_fn: build_libvpx
+  target_link_metadata:
+    private_transitive_link_requirements:
+    - -lm
+    - -lpthread
+    runtime_dependencies:
+    - name: libwinpthread-1.dll
+      classification: toolchain-runtime-dll
+      source_identity: llvm-mingw-20261104
+    provenance:
+    - LLVM-MinGW libvpx static-consumer link and pthread import probe
   ffmpeg_configure_flag: --enable-libvpx
 - name: xvidcore
   sha256: abbdcbd39555691dd1c9b4d08f0a031376a3b211652c0d8b3b8aa9be1303ce2d
@@ -362,6 +386,7 @@
   url: https://aomedia.googlesource.com/aom/+archive/refs/tags/v{version}.tar.gz
   category: video_codec
   build_system: cmake
+  custom_build_fn: build_av1_cmake
   configure_args:
   - -DENABLE_TESTS=0
   - -DENABLE_EXAMPLES=0
@@ -371,6 +396,16 @@
   archive_filename: av1-{version}.tar.gz
   archive_dirname: av1
   workdir: aom_build
+  target_link_metadata:
+    private_transitive_link_requirements:
+    - -lm
+    - -lpthread
+    runtime_dependencies:
+    - name: libwinpthread-1.dll
+      classification: toolchain-runtime-dll
+      source_identity: llvm-mingw-20261104
+    provenance:
+    - LLVM-MinGW AOM static-consumer link and import probe
   ffmpeg_configure_flag: --enable-libaom
 - name: zimg
   sha256: be89390f13a5c9b2388ce0f44a5e89364a20c1c57ce46d382b1fcc3967057577

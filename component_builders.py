@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Dict, Optional
 
+from .builders.codecs.av1_cmake import build_av1_cmake
 from .builders.codecs.jxl import build_libjxl
 from .builders.codecs.lv2 import build_lv2_target
 from .builders.codecs.lcms2 import build_lcms2
@@ -48,6 +49,7 @@ CUSTOM_BUILDERS: Dict[str, CustomBuilder] = {
     "build_libvpx": build_libvpx,
     "build_zimg": build_zimg,
     "build_libvorbis": build_libvorbis,
+    "build_av1_cmake": build_av1_cmake,
     "build_libtheora": build_libtheora,
     "build_libjxl": build_libjxl,
     "build_libtiff": build_libtiff,

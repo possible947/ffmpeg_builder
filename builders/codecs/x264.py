@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ...build_types import BuildError
 from ...state import ComponentStatus
 
 if TYPE_CHECKING:
@@ -23,7 +25,19 @@ def build_x264(builder: FFmpegBuilder, component: Component, source_dir: Path) -
         "--disable-cli",
     ]
 
-    if builder.platform == "linux":
+    cross = builder.platform_context.cross_environment
+    if cross is not None:
+        nasm = shutil.which("nasm", path=env.get("PATH"))
+        if not nasm:
+            raise BuildError(component.name, "Required host NASM is unavailable.")
+        env["AS"] = nasm
+        env["PKGCONFIG"] = str(cross.pkg_config_wrapper)
+        configure_args += [
+            "--host=x86_64-w64-mingw32",
+            "--disable-opencl",
+            "--disable-bashcompletion",
+        ]
+    elif builder.platform == "linux":
         env["CXXFLAGS"] = f"-fPIC {env.get('CXXFLAGS', '')}"
 
     builder._run_step(
