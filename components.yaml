@@ -748,7 +748,11 @@
   install_args:
   - PREFIX={workspace}
   linux_only: true
-  windows_ucrt64_supported: true
+  target_backends:
+  - linux-cross-mingw
+  target_headers:
+  - source: include
+    destination: include
   versions:
     '13.0.19.1':
       sha256: eab9d02d461035a4baded23d4f2e2834e5b17934820b79cea45baaf0c85383eb
@@ -813,6 +817,19 @@
   - -DVULKAN_HEADERS_ENABLE_TESTS=OFF
   - -DVULKAN_HEADERS_ENABLE_MODULE=OFF
   archive_filename: Vulkan-Headers-{version}.tar.gz
+  target_backends:
+  - linux-cross-mingw
+  target_headers:
+  - source: include
+    destination: include
+  target_import_interface:
+    dll: vulkan-1.dll
+    definition_source_component: vulkan-headers
+    definition_path: registry/vk.xml
+    definition_format: vulkan_registry
+    symbols:
+    - vkGetInstanceProcAddr
+    output: lib/libvulkan.a
   ffmpeg_configure_flag: --enable-vulkan
 - name: glslang
   sha256: 01af17195fbeb59e39e31e9506de35bb39dfd35807ea0c9a1a99d7d1183ddd45
@@ -877,7 +894,17 @@
   configure_args:
   - -DCMAKE_INSTALL_PREFIX={workspace}
   linux_only: true
-  windows_ucrt64_supported: true
+  target_backends:
+  - linux-cross-mingw
+  target_headers:
+  - source: CL
+    destination: include/CL
+  target_import_interface:
+    dll: OpenCL.dll
+    definition_source_component: opencl-icd-loader
+    definition_path: loader/windows/OpenCL.def
+    definition_format: def
+    output: lib/libOpenCL.a
   archive_filename: OpenCL-Headers-{version}.tar.gz
   workdir: build
 - name: opencl-icd-loader

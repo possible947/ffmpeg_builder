@@ -176,6 +176,81 @@ class TestComponentRegistry:
     def test_get_by_name_returns_none_for_unknown(self):
         assert self.registry.get_by_name("nonexistent_component_xyz") is None
 
+    def test_target_inputs_are_explicit_and_separate_from_host_eligibility(self):
+        inputs = self.registry.get_target_inputs("linux-cross-mingw")
+        names = {component.name for component in inputs}
+        assert names == {"nv-codec", "vulkan-headers", "opencl-headers"}
+        assert "opencl-icd-loader" not in names
+        assert self.registry.get_target_inputs("native") == []
+
+        by_name = {component.name: component for component in inputs}
+        assert by_name["nv-codec"].target_import_interface is None
+        vulkan_interface = by_name["vulkan-headers"].target_import_interface
+        assert vulkan_interface is not None
+        assert vulkan_interface.dll == "vulkan-1.dll"
+        assert vulkan_interface.symbols == ["vkGetInstanceProcAddr"]
+        opencl_interface = by_name["opencl-headers"].target_import_interface
+        assert opencl_interface is not None
+        assert opencl_interface.dll == "OpenCL.dll"
+        assert opencl_interface.definition_source_component == "opencl-icd-loader"
+
+    def test_target_input_backend_validation_rejects_unknown_names(self, tmp_path):
+        data = [
+            {
+                "name": "target-headers",
+                "version": "1",
+                "url": "https://example.org/source-{version}.tar.gz",
+                "category": "hw_accel",
+                "build_system": "headers_only",
+                "target_backends": ["unknown-target"],
+                "target_headers": [{"source": "include", "destination": "include"}],
+            }
+        ]
+        path = tmp_path / "components.yaml"
+        path.write_text(yaml.safe_dump(data), encoding="utf-8")
+        with pytest.raises(ValueError, match="unknown target backend"):
+            ComponentRegistry(yaml_path=path)
+
+    def test_target_input_paths_must_have_safe_components(self, tmp_path):
+        data = [
+            {
+                "name": "target-headers",
+                "version": "1",
+                "url": "https://example.org/source-{version}.tar.gz",
+                "category": "hw_accel",
+                "build_system": "headers_only",
+                "target_backends": ["linux-cross-mingw"],
+                "target_headers": [{"source": "include", "destination": "."}],
+            }
+        ]
+        path = tmp_path / "components.yaml"
+        path.write_text(yaml.safe_dump(data), encoding="utf-8")
+        with pytest.raises(ValueError, match="safe relative path"):
+            ComponentRegistry(yaml_path=path)
+
+    def test_target_import_interface_requires_registered_definition_source(self, tmp_path):
+        data = [
+            {
+                "name": "target-headers",
+                "version": "1",
+                "url": "https://example.org/source-{version}.tar.gz",
+                "category": "hw_accel",
+                "build_system": "headers_only",
+                "target_backends": ["linux-cross-mingw"],
+                "target_headers": [{"source": "include", "destination": "include"}],
+                "target_import_interface": {
+                    "dll": "OpenCL.dll",
+                    "definition_source_component": "missing-source",
+                    "definition_path": "loader/windows/OpenCL.def",
+                    "output": "lib/libOpenCL.a",
+                },
+            }
+        ]
+        path = tmp_path / "components.yaml"
+        path.write_text(yaml.safe_dump(data), encoding="utf-8")
+        with pytest.raises(ValueError, match="references missing definition source"):
+            ComponentRegistry(yaml_path=path)
+
     def test_gmp_static_build_uses_pic(self):
         gmp = self.registry.get_by_name("gmp")
         assert gmp is not None

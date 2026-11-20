@@ -1,3 +1,22 @@
+### Accepted — G2.6 Windows target inputs and link interfaces
+
+- Added independent `target_backends` eligibility and offline staging for the
+  project-pinned NVIDIA codec, Vulkan, and OpenCL headers. The fresh target
+  prefix contains only those headers, two evidence-backed Windows import
+  interfaces, and `target-inputs.json` provenance; it does not use external
+  Linux SDK/header/library paths or stage runtime loaders.
+- The consumer audit found no import-library need for NVENC/NVDEC or CUDA
+  Driver APIs. The selected static libplacebo link path needs only
+  `vkGetInstanceProcAddr`, generated against the pinned Vulkan registry.
+  FFmpeg's OpenCL path uses `-lOpenCL`, with its import interface generated
+  from the pinned OpenCL-ICD-Loader Windows `.def`; the loader itself is not
+  built or staged.
+- Offline acceptance with the production registry/source mirror and installed
+  LLVM-MinGW compiled representative target headers, linked Vulkan/OpenCL
+  smoke programs, inspected the generated COFF interfaces, and rejected host,
+  ELF, SDK, and PoC/session contamination. G2.6 is complete; G2.7, G2.8, and
+  G3 remain not started. No full Windows FFmpeg cross-build is claimed.
+
 ### Verified — native Linux FFmpeg 8.1 and 9.0 (2026-11-12)
 
 - Both versioned workspaces completed on Ubuntu 26.04.1 x86_64 with CUDA

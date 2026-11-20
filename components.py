@@ -2,10 +2,12 @@
 
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Dict, List, Optional
 
 import yaml
+
+from .config import SUPPORTED_TARGET_BACKENDS
 
 # Per-component toolchain gate used by get_buildable(): returns True when the
 # component's resolved toolchain is satisfied (system, or an installed store
@@ -70,6 +72,26 @@ class ComponentVersion:
     archive_filename: Optional[str] = None
 
 
+@dataclass(frozen=True)
+class TargetHeaderTree:
+    """Source header tree materialised into a target prefix."""
+
+    source: str
+    destination: str
+
+
+@dataclass(frozen=True)
+class TargetImportInterface:
+    """Recipe for a target-only import library backed by a project source."""
+
+    dll: str
+    definition_source_component: str
+    definition_path: str
+    definition_format: str
+    output: str
+    symbols: List[str] = field(default_factory=list)
+
+
 @dataclass
 class Component:
     """Component definition."""
@@ -113,6 +135,10 @@ class Component:
     # NVENC API major version (as reported by the installed driver) -> declared
     # nv-codec component version. Replaces the previous driver-based heuristics.
     driver_nvenc_api_map: Dict[str, str] = field(default_factory=dict)
+    # Target eligibility is independent of host-platform/tool eligibility.
+    target_backends: List[str] = field(default_factory=list)
+    target_headers: List[TargetHeaderTree] = field(default_factory=list)
+    target_import_interface: Optional[TargetImportInterface] = None
 
     def with_version(self, version: str) -> "Component":
         """Return this component resolved to a declared source version."""
@@ -252,6 +278,89 @@ class ComponentRegistry:
                     f"driver_nvenc_api_map[{api!r}] references undeclared version "
                     f"{target_version!r}; declared versions: {declared}"
                 )
+        target_backends = data.get("target_backends") or []
+        if not isinstance(target_backends, list) or not all(
+            isinstance(backend, str) for backend in target_backends
+        ):
+            raise ValueError("target_backends must be a list of backend names")
+        unknown_backends = sorted(set(target_backends) - set(SUPPORTED_TARGET_BACKENDS))
+        if unknown_backends:
+            raise ValueError(f"unknown target backend(s): {', '.join(unknown_backends)}")
+
+        def _relative_target_path(value: Any, field_name: str) -> str:
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"{field_name} must be a non-empty relative path")
+            path = PurePosixPath(value)
+            if (
+                path.is_absolute()
+                or ".." in path.parts
+                or "." in path.parts
+                or not path.parts
+                or "\\" in value
+                or ":" in value
+            ):
+                raise ValueError(f"{field_name} must be a safe relative path")
+            return path.as_posix()
+
+        target_headers_data = data.get("target_headers") or []
+        if not isinstance(target_headers_data, list):
+            raise ValueError("target_headers must be a list")
+        target_headers = []
+        for entry in target_headers_data:
+            if not isinstance(entry, dict):
+                raise ValueError("each target_headers entry must be a mapping")
+            source = _relative_target_path(entry.get("source"), "target_headers.source")
+            destination = _relative_target_path(
+                entry.get("destination"), "target_headers.destination"
+            )
+            if PurePosixPath(destination).parts[0] != "include":
+                raise ValueError("target_headers.destination must be under include/")
+            target_headers.append(TargetHeaderTree(source=source, destination=destination))
+
+        target_interface_data = data.get("target_import_interface")
+        target_import_interface = None
+        if target_interface_data is not None:
+            if not isinstance(target_interface_data, dict):
+                raise ValueError("target_import_interface must be a mapping")
+            dll = target_interface_data.get("dll")
+            source_component = target_interface_data.get("definition_source_component")
+            if (
+                not isinstance(dll, str)
+                or not dll.lower().endswith(".dll")
+                or "/" in dll
+                or "\\" in dll
+            ):
+                raise ValueError("target_import_interface.dll must be a DLL basename")
+            if not isinstance(source_component, str) or not source_component:
+                raise ValueError("target_import_interface.definition_source_component is required")
+            definition_format = target_interface_data.get("definition_format", "def")
+            if definition_format not in ("def", "vulkan_registry"):
+                raise ValueError(
+                    "target_import_interface.definition_format must be def or vulkan_registry"
+                )
+            symbols = target_interface_data.get("symbols") or []
+            if not isinstance(symbols, list) or not all(
+                isinstance(symbol, str) and symbol for symbol in symbols
+            ):
+                raise ValueError("target_import_interface.symbols must be a list of names")
+            if definition_format == "vulkan_registry" and not symbols:
+                raise ValueError("vulkan_registry import interfaces must declare symbols")
+            output = _relative_target_path(
+                target_interface_data.get("output"), "target_import_interface.output"
+            )
+            if PurePosixPath(output).parts[0] != "lib":
+                raise ValueError("target_import_interface.output must be under lib/")
+            target_import_interface = TargetImportInterface(
+                dll=dll,
+                definition_source_component=source_component,
+                definition_path=_relative_target_path(
+                    target_interface_data.get("definition_path"),
+                    "target_import_interface.definition_path",
+                ),
+                definition_format=definition_format,
+                output=output,
+                symbols=symbols,
+            )
         return Component(
             name=data["name"],
             version=str(data["version"]),
@@ -292,6 +401,9 @@ class ComponentRegistry:
             versions=versions,
             toolchain=str(data.get("toolchain", "n/a")),
             driver_nvenc_api_map=driver_nvenc_api_map,
+            target_backends=target_backends,
+            target_headers=target_headers,
+            target_import_interface=target_import_interface,
         )
 
     def _load_components(self, yaml_path: Path) -> None:
@@ -318,6 +430,14 @@ class ComponentRegistry:
                     f"Invalid component definition at index {idx} "
                     f"(name={entry.get('name', '<missing>')!r}): {exc}"
                 ) from exc
+        component_names = {component.name for component in self._components}
+        for component in self._components:
+            interface = component.target_import_interface
+            if interface and interface.definition_source_component not in component_names:
+                raise ValueError(
+                    f"Component {component.name!r} target import interface references missing "
+                    f"definition source {interface.definition_source_component!r}"
+                )
 
     # ------------------------------------------------------------------
     # Query API  (unchanged public interface)
@@ -548,6 +668,19 @@ class ComponentRegistry:
     def get_source_components(self) -> List[Component]:
         """Get components that must be built from source."""
         return [c for c in self._components if not c.system_component]
+
+    def get_target_inputs(self, target_backend: str) -> List[Component]:
+        """Return components explicitly declared as inputs for a target backend."""
+        if target_backend not in SUPPORTED_TARGET_BACKENDS:
+            backends = ", ".join(SUPPORTED_TARGET_BACKENDS)
+            raise ValueError(
+                f"Unsupported target backend {target_backend!r}; supported: {backends}"
+            )
+        return [
+            component
+            for component in self._components
+            if target_backend in component.target_backends and component.target_headers
+        ]
 
     def get_ffmpeg_configure_flags(
         self,

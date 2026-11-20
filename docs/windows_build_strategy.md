@@ -1,8 +1,8 @@
 # Windows FFmpeg cross-build strategy
 
-**Status:** G1 **PASS**; G2.1 complete; G2.2 complete; G2.3 complete; G2.4/G2.5
-**PASS** after final live acceptance in issue #16. G2.6, G2.7, G2.8, and G3
-have **not started**. The `linux-cross-mingw` cross-build backend and full
+**Status:** G1 **PASS**; G2.1–G2.6 complete; G2.7, G2.8, and G3 **not started**.
+G2.4/G2.5 passed final live acceptance in issue #16, and G2.6 passed isolated
+target-input acceptance. The `linux-cross-mingw` cross-build backend and full
 Windows component stack remain unimplemented; this is not an end-to-end
 Windows FFmpeg build acceptance.
 
@@ -41,7 +41,7 @@ not a portability claim. Status labels are `[VERIFIED <gate>]`,
 | The Windows OpenCL runtime uses the system dispatcher and vendor platforms. | [VERIFIED G0A.4/G0A.5] Windows `OpenCL.dll` exposed two platforms; the NVIDIA TITAN V program and FFmpeg filter dispatched successfully. | Do not treat the dispatcher as an implementation or bundle a separate ICD loader by default. | Probe/select a platform and device explicitly; platform inventory is host-specific. |
 | Static C++ dependencies must carry their runtime requirements through metadata. | [VERIFIED G0A.5 Phase B] Static libplacebo objects needed libc++/libunwind flags at FFmpeg's final C-link invocation; the PoC repaired isolated pkg-config metadata. | Production dependency metadata/link composition must express those requirements transitively. | Do not copy the PoC metadata edit as a production recipe. |
 | Target-scoped discovery is mandatory. | [REQUIREMENT; verified in PoC isolation] Target pkg-config/CMake/Meson lookup must not consume Linux SDK/library paths. | Build isolated cross files and environment; keep host tools explicit. | PoC paths and temporary metadata are not production inputs. |
-| Build identity protects artifacts and resume state. | [REQUIREMENT; repository behavior is insufficient today] `build_id` is a UUID, not a host/input comparison; see §6. | G1 must compare identity before resume or artifact reuse. | Decide representation during G1; this plan does not prescribe a hash format. Identity prevents unsafe reuse; it does not make the project own external SDK lifecycle. |
+| Build identity protects artifacts and resume state. | [IMPLEMENTED G1; G2.7 OPEN] G1 compares Windows/build identity before reuse; effective CUDA/Vulkan inputs are not yet fully projected into it. | Extend the guard with material inputs before resume or artifact reuse; see §§5.7 and 6. | Identity prevents unsafe reuse; it does not make the project own external SDK lifecycle. |
 | MSYS2-UCRT64 is not a supported backend. | [MAINTAINER DECISION] The old MSYS2 approach motivated this design; it is replaced, not preserved. | No new feature work targets it; legacy branches may be removed/migrated when a gate reaches them. | Legacy code may remain temporarily; it carries no support or parity obligation. |
 | Capability policy is separate from present hardware. | [REQUIREMENT] Config/registry define required build capabilities; host inventory specializes and validates. | Missing host hardware cannot silently remove required build features. | Runtime acceptance is only required for host-present/supported hardware. |
 | PoC outputs are evidence only. | [REQUIREMENT] G0/G0A/E0 outputs are outside production workspace/store. | Production tests must reproduce behavior independently. | Never silently import PoC binaries, `.pc` files, import libraries, or DLL copies. |
@@ -156,21 +156,23 @@ not as a presumed way to complete Variant 1.
 ### 3.3 Repository facts to account for [REPO]
 
 The repository currently has native Linux/WSL strategies and a **legacy**
-MSYS2-UCRT64 strategy, but not `linux-cross-mingw`. The legacy code
-(`platforms/windows_ucrt64.py`, UCRT64-specific branches in `builder.py`,
+MSYS2-UCRT64 strategy. `linux-cross-mingw` has G1/G2 preparation, but not a
+production component backend. The legacy code (`platforms/windows_ucrt64.py`,
+UCRT64-specific branches in `builder.py`,
 `executor.py` sh-wrapping, `scripts/setup_windows_msys2_ucrt64.ps1`, registry
 `windows_ucrt64_supported` overrides, and related tests) is migration/removal
 work, not a supported backend; do not reuse MSYS path rewriting in the Linux
 cross backend. `state.py` persists a UUID
-`build_id`, configuration, and component statuses; it does not compare a fresh
-Windows/build identity before reuse. Workspaces are version-oriented, and a
-state reset alone does not isolate an existing prefix.
+`build_id`, configuration, component statuses, and identity. G1 compares a
+fresh Windows identity before reuse and selects an identity-specific workspace;
+G2.7 still needs to project the relevant resolved CUDA/Vulkan inputs into that
+identity. A state reset alone does not isolate an existing prefix.
 
-The existing CUDA detector/store contains `nvcc_ccbin` and version mappings,
-but the selected CUDA 12.4 / GCC 12.5 combination and Windows target behavior
-need explicit backend support. Existing FFmpeg configuration is not the
-production cross-build implementation. Extend declarative component and
-toolchain metadata rather than scattering component-specific policy.
+The existing CUDA resolver/store has validated the selected CUDA 12.4 / GCC
+12.5 PTX combination for the tested Windows target, and native Linux now shares
+a checked CUDA profile between libvmaf and FFmpeg. These do not implement the
+Windows component backend; see §5.7. Extend declarative component and toolchain
+metadata rather than scattering component-specific policy.
 
 ## 4. Build-host and target ownership
 
@@ -221,12 +223,14 @@ stores, hashes or recreates it. This is not evidence that CUDA 12.4 is
 vendor-supported on Ubuntu 26.04.
 
 When WSL-Mingw CUDA is enabled, target preparation compiles a minimal PTX
-kernel with resolved NVCC and ToolchainStore `-ccbin`, using NVIDIA capability
-from the same fresh G1 Windows probe used to form target identity. Every
-reported NVIDIA capability must be valid; for multiple devices the numeric
-minimum is the PTX baseline. There is no separate per-GPU selector: a G1 target
-override can supply an inventory. This does not prove runtime compatibility
-with every device.
+kernel with resolved NVCC and ToolchainStore `-ccbin`. Architecture comes from
+`cuda_compute_capability`, then `CUDA_COMPUTE_CAPABILITY`, or, if neither is
+set, the fresh G1 Windows probe. In the last case every reported NVIDIA
+capability must be valid and the numeric minimum is the PTX baseline. There is
+no separate per-GPU selector: a G1 target override can supply an inventory.
+An explicit architecture override is checked by the compiler probe but not
+against every Windows device; neither path proves runtime compatibility with
+every device.
 
 Live production preparation selected `/opt/cuda-12.4/bin/nvcc` (12.4.99),
 project `gcc12` (12.5.0), and the physical Windows TITAN V (7.0), requesting
@@ -361,10 +365,146 @@ prescribe or reuse that temporary `.pc` edit. The runtime test used copied
 DLLs when the production dependency graph remains dynamically dependent on
 them.
 
+### 5.7 Reusing the native CUDA/Vulkan fixes in WSL-Mingw
+
+**Status and evidence.** Commit `447b555` implemented a shared native CUDA
+profile, separate libvmaf/NVENC header selection, and verified Vulkan
+header/registry pairing. Native Linux FFmpeg 8.1 and 9.0 builds completed with
+these changes; both binaries list `scale_cuda`, `libvmaf_cuda`, `libplacebo`,
+and `h264_nvenc`. An isolated native CUDA build also executed `scale_cuda` and
+`libvmaf_cuda` on TITAN V. A forced older NVENC header selection was tested
+with the available driver, not a physical older driver. See
+`docs/CHANGELOG.md` for the scoped results.
+
+These are **not Windows cross-build results**. G2.4/G2.5 validate WSL host
+prerequisites and PTX, G2.6 validates isolated target headers and link
+interfaces, and G0A.5 is a separate early Windows feature slice. None
+establishes a production Windows libvmaf CUDA build, its fatbin/runtime path,
+or Windows resume with these new inputs. G2.7, G2.8, and G3 remain open. The
+following is implementation work, not a gate-status change.
+The module-level mapping is in
+[DeveloperReadme.md](DeveloperReadme.md#reusing-the-native-cudavulkan-work-for-wsl-mingw).
+
+**CUDA profile and host/target split — G2.7, G3, G4.**
+
+- Reuse `ResolvedCudaBuildHostInputs`, the selected-root NVCC resolver, the
+  project-store `-ccbin`, PTX diagnostics, and the narrowly recognized
+  CUDA 12.4/glibc retry. Keep architecture selection and overrides as described
+  in §4; obtain default target facts from the fresh Windows probe, not WSL GPU
+  detection. Preserve the configured required capabilities even when hardware
+  is absent; obtain a sufficient explicit target or fail clearly rather than
+  silently removing them.
+- Feed the same selected NVCC, host compiler, architecture, and verified common
+  flags to every requested CUDA consumer. `effective_flags` from the PTX probe
+  include PTX-specific options: use `common_flags()` plus the consumer's own
+  output-mode options instead of passing `--ptx` to a fatbin build. Do not
+  introduce an unverified CUDA LLVM fallback or a blanket
+  `--allow-unsupported-compiler`; keep the nonfree decision explicit.
+- G2.4's `probe_status == "passed"` establishes PTX generation, not libvmaf
+  fatbin support. The native `validate_cuda_output_modes()` also compiles a
+  Linux host object; that object is **not** Windows COFF and must never be
+  linked into the target. For the actual cross build, verify the required
+  device-code modes and selected Toolkit's `bin2c`, then validate the libvmaf
+  Meson flow: NVCC fatbin → host `bin2c` → generated C → LLVM-MinGW target
+  object. Also validate or adapt libvmaf's `add_languages('cuda')` and Meson
+  compiler sanity checks for this host/target split; do not assume Linux NVCC
+  can generate Windows host objects. This flow and its Windows runtime
+  behavior remain unverified.
+- libvmaf's current upstream Meson file adds its own `-gencode` options in
+  addition to the selected architecture. Inspect and validate the **actual**
+  effective NVCC commands and all requested architectures against the
+  selected Toolkit; prepending one architecture does not remove upstream
+  options. Resolve incompatibilities through a maintainable build-system
+  adaptation, not a new patch for each host or SDK update.
+- `cuda_profile_environment()` is a native build helper that sets
+  `CUDA_HOME`, `CUDA_PATH`, `CUDACXX`, and NVCC flags. Do not inject it
+  unchanged into Windows target dependency discovery. Construct a scoped
+  environment for Linux host tools and a separate, filtered target environment;
+  SDK executables are host tools, not Linux target libraries. The current
+  filtering primitive does not remove `CUDACXX` or sanitize `PATH`; G3 must
+  explicitly control those and the remaining compiler/discovery variables.
+
+**NVENC/NVDEC and libvmaf headers — G3–G5.**
+
+- G2.6 stages the pinned, project-managed nv-codec headers as a Windows
+  target input. Production integration must keep NVENC/NVDEC eligibility and
+  target runtime validation independent of NVCC kernel compilation.
+  Registry/config declares the required feature; missing hardware does not
+  silently remove it. Select target headers through an explicit compatibility
+  policy and Windows target facts, never from WSL's NVIDIA driver.
+- The current Windows probe records NVIDIA DLL file versions, but does **not**
+  call `NvEncodeAPIGetMaxSupportedVersion()`. `get_nv_codec_component()` maps
+  an exact reported API major and otherwise retains the registry default; that
+  default is not proof of compatibility. Extend target probing or provide a
+  sufficient explicit target policy/override, and report unknown or unmapped
+  compatibility without silently dropping a required capability.
+- Preserve the native separation when a driver-compatible NVENC release lacks
+  CUDA driver declarations required by libvmaf: FFmpeg uses the selected
+  target headers, while libvmaf can use the checksum-verified default
+  nv-codec archive in a private include tree. Verify both Meson's target C
+  checks and the NVCC fatbin include path. Record both project archive
+  identities; the newer CUDA declarations alone do not prove that an older
+  Windows driver implements every needed function. Make the target dependency
+  order explicit: selected nv-codec headers before libvmaf, and libvmaf before
+  FFmpeg.
+
+**Vulkan-Headers and libplacebo — G3, G4.**
+
+- G2.6 stages the pinned project Vulkan-Headers and uses the matching `vk.xml`
+  from that source archive to validate generation of only the
+  `vkGetInstanceProcAddr` `vulkan-1.dll` import interface required by the
+  selected static libplacebo link path. G3/G4 must carry the verified
+  header/registry pair into libplacebo and FFmpeg target builds. This verifies
+  project-owned inputs, not the external SDK.
+- Stage the same verified pair in libplacebo's bundled Vulkan-Headers
+  dependency; adapt the existing `-Dvulkan-sdk=<target-prefix>` and
+  `-Dvulkan-registry=<target-prefix>/share/vulkan/registry/vk.xml` options for
+  the cross build. Reject a conflicting pair instead of mixing it with
+  `VULKAN_SDK`. Adapt CMake/Meson cross files and paths rather than importing
+  Linux SDK include, library, or pkg-config directories.
+- Linux SDK shader/SPIR-V executables remain host tools. Windows-target
+  glslang libraries and the proven Vulkan import interface come from target
+  inputs; runtime uses the installed Windows loader/ICD. Preserve the static
+  C++ runtime linkage requirement from §5.6. The existing native glslang
+  search adjustment and pkg-config normalization are separate adaptations and
+  must not be copied as an unverified cross-link recipe.
+
+**Identity, resume, and acceptance — G2.7, G5, G7.**
+
+- `WslMingwPreparation.effective_build_inputs` already separates effective
+  compiler/architecture/flags from SDK diagnostics, but it is **not yet**
+  integrated into the G1 identity guard. Project the material CUDA profile,
+  feature options, both nv-codec archive identities, Vulkan header/registry
+  provenance, target toolchain and target interfaces into the Windows build
+  identity before trusting saved state or mutable artifacts. Do not copy
+  native `cuda_profile_identity()` wholesale: it includes SDK path/version,
+  which are diagnostic under §6 unless demonstrated to be material.
+- A changed or unknown Windows build identity must select an isolated prefix
+  or stop without altering the old one; marking a few native component
+  statuses pending is not sufficient. For a compatible identity, validate the
+  Vulkan pair and CUDA build-tree markers before reuse, rebuilding affected
+  consumers or stopping safely when invalid. Runtime-only drift invalidates
+  acceptance separately. Do not hash, provision, or modify the external SDKs.
+- Extend tests so a differing host SDK registry does not replace the target
+  pair, but mismatched project headers/XML or conflicting bundled headers fail
+  safely. Cover changed or missing manifests, stale build trees, mode-specific
+  NVCC flags, missing `bin2c`, incompatible upstream architectures,
+  architecture overrides, absent GPU or unmapped Windows NVENC API, old/new
+  nv-codec headers, and host-path contamination. Inspect Windows objects,
+  archives, metadata, and final PE imports for ELF or Linux-library leakage.
+  Extend the existing CUDA, WSL-Mingw preparation/environment, identity, and
+  builder tests; mocked tests do not replace a real cross build.
+- Build and inspect both configured FFmpeg versions. On the physical Windows
+  target, check feature presence separately from actual CUDA/libvmaf and Vulkan
+  filter execution and NVENC/NVDEC operations. Record unavailable or
+  unsupported hardware as **not runtime-validated**, not as a pass. A simulated
+  old header selection is not an old-driver runtime test.
+
 ## 6. Build identity and reuse policy
 
-Do not choose a final serialization or hash format here. G1 must define
-material inputs and comparison semantics.
+G1 already implements canonical identity and comparison for its current
+inputs. G2.7 must extend that model with the material effective inputs below;
+do not equate every diagnostic SDK value with a build identity change.
 
 | Category | Examples | Why |
 |---|---|---|
@@ -494,10 +634,11 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
   no rustup). G2.4 CUDA resolution (#10), the external-prerequisite foundation
   and CUDA PTX probe (#12) are implemented and accepted for the scoped host.
   G2.5 Vulkan prerequisites and host/target isolation (#14) are implemented and
-  accepted for the scoped host. G2.6–G2.8 (target headers/interfaces, identity
-  integration, final offline acceptance) remain open; G3 is not started. Full
-  G2 offline closure is not claimed. G2 checks external WSL SDK prerequisites;
-  it does not own or install those SDKs.
+  accepted for the scoped host. G2.6 target headers/interfaces and isolated
+  offline acceptance are complete; G2.7 identity integration and G2.8 final
+  offline closure remain open; G3 is not started. Full G2 offline closure is
+  not claimed. G2 checks external WSL SDK prerequisites; it does not own or
+  install those SDKs.
 - **SDK ownership:** The CUDA SDK (example `/opt/cuda-12.4`) and Vulkan SDK
   (example `/opt/vulkan-sdk/1.4.363.1/x86_64`) are external prerequisites. Locate
   them from configured/documented paths or environment, verify presence and that
@@ -510,9 +651,10 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
   `external_prerequisite_paths.cuda` > `CUDA_HOME` > `CUDA_PATH`; it takes NVCC
   only from the selected root. CUDA 12.4 maps to the existing ToolchainStore
   `gcc12` profile, whose verified `CC` is selected as `-ccbin`. The ambient
-  `CUDA_NVCC_CCBIN` is ignored on this backend; native CUDA detection retains
-  its prior policy. The resolution result keeps external SDK and project
-  compiler provenance separate; the functional PTX probe consumes that result.
+  `CUDA_NVCC_CCBIN` is ignored on this backend; native Linux permits that
+  override and has its own verified store/system fallback policy. The
+  resolution result keeps external SDK and project compiler provenance
+  separate; the functional PTX probe consumes that result.
   Stale legacy GCC state requires successful scoped `--verify-only` before
   backfill, including matching compiler versions and existing source metadata.
   No Linux CUDA libraries are automatically added to target discovery.
@@ -531,12 +673,13 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
 - **G2.4/G2.5 preparation integration:** `prepare_target()` shares the same
   WSL-Mingw preparation path between the TUI and headless runner. Fresh G1
   target probing and the identity guard precede enabled external prerequisite
-  resolution. CUDA target architecture is derived from all Windows-probed
-  NVIDIA devices (minimum valid capability); it is not inferred from WSL GPU
-  state or enumeration order. The typed `WslMingwPreparation` keeps Windows
-  target facts, required project-store LLVM-MinGW/Rust (including target std),
-  project-managed CUDA ccbin/effective compatibility inputs, and external
-  CUDA/Vulkan SDK diagnostics in separate domains. Missing or incompatible
+  resolution. CUDA architecture uses the explicit config/environment override
+  when supplied, otherwise the minimum valid Windows-probed capability; it is
+  not inferred from WSL GPU state or enumeration order. The typed
+  `WslMingwPreparation` keeps Windows target facts, required project-store
+  LLVM-MinGW/Rust (including target std), project-managed CUDA ccbin/effective
+  compatibility inputs, and external CUDA/Vulkan SDK diagnostics in separate
+  domains. Missing or incompatible
   required project toolchains fail preparation. Vulkan host
   shader/SPIR-V validation does not validate or replace Windows Vulkan runtime
   facts. CUDA/Vulkan SDK paths are configurable with
@@ -554,6 +697,30 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
   preserving the parent environment. The native saved configuration was not
   changed; acceptance used an in-memory WSL-Mingw selection and a temporary
   identity workspace.
+- **G2.6 target inputs and link interfaces:** `components.yaml` declares
+  `target_backends: [linux-cross-mingw]` independently of host eligibility.
+  `nv-codec` 13.0.19.1, Vulkan-Headers 1.4.357.0, and OpenCL-Headers
+  2026.05.29 are staged from checksum-pinned project archives; OpenCL-Headers'
+  `CL/` source tree is materialised as `include/CL`. No CUDA or Vulkan SDK
+  headers/libraries, OpenCL host headers, loaders, or NVIDIA driver DLLs enter
+  the target prefix. NVENC/NVDEC and CUDA Driver APIs remain dynamically
+  resolved at runtime and need no import library. The selected static
+  libplacebo link path needs `vkGetInstanceProcAddr`, so a one-symbol
+  `vulkan-1.dll` import library is generated using the pinned Vulkan registry.
+  FFmpeg's OpenCL configure/link path uses `-lOpenCL` and calls OpenCL API
+  functions; the interface is generated from the pinned OpenCL-ICD-Loader
+  `OpenCL.def`, without building or staging that loader. Both outputs are
+  generated by installed LLVM-MinGW `dlltool` and validated as x86-64 Windows
+  COFF archives.
+  `scripts/prepare_target_inputs.py` stages into a fresh caller-selected prefix
+  offline and writes `target-inputs.json` with source checksums, target
+  backend, interface recipe/input identities, and file hashes for future G2.7
+  identity work. Isolated acceptance materialised only declared headers,
+  `lib/libvulkan.a`, `lib/libOpenCL.a`, and the provenance manifest; focused
+  LLVM-MinGW header compiles and Vulkan/OpenCL link probes passed. Inspection
+  rejected ELF, host/runtime libraries, metadata, forbidden SDK paths, and
+  PoC/session paths. No full target dependency prefix or build environment is
+  created at G2.6.
 - **Tests:** Registry parsing, version resolution, checksums, target std
   compatibility, `-ccbin` version check, SDK path/tool usability checks,
   actionable missing-prerequisite/source errors, offline provisioning with
@@ -698,9 +865,8 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
 
 | Gate | Open issue | Required resolution |
 |---|---|---|
-| G1 | Exact identity schema, normalization, mismatch UX, and treatment of runtime-only drift. | Choose and test semantic identity and isolation; no hash scheme is preselected. |
+| G2.7 | Effective CUDA/Vulkan inputs are not yet integrated into the G1 identity and reuse guard. | Extend and test the existing canonical identity, isolation, and runtime-drift handling using material inputs. |
 | G2 | Future CUDA toolkit coexistence and explicit SDK selection. | Resolve the configured SDK path; reject ambiguous ambient tools. |
-| G2/G3 | Exact generated Vulkan/OpenCL target import-interface strategy where dependencies require one. | Pin or generate appropriate target interfaces; do not build a loader without a demonstrated link need. |
 | G3 | Production implementation of CPU flag derivation and compatibility-workaround classification. | Derive from effective Windows capabilities and validate selected compiler; scope `_GNU_SOURCE` workaround narrowly. |
 | G4 | Remaining full software component cross-build issues and complete offline provisioning closure (the LLVM-MinGW input itself is offline-provisionable since G2.2). | Resolve builder/registry/provisioning gaps component-by-component with target-isolation tests. |
 | G5 | Neural-network backend/API and complete D3D/QSV/AMF feature support. | Select required backend/API and prove target build/runtime; only an unavoidable MSVC-only ABI limitation can reopen Variant 2. |
