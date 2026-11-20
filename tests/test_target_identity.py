@@ -239,6 +239,10 @@ def test_probe_failure_is_not_replaced_by_defaults():
 def test_identity_is_deterministic_and_roundtrips():
     a, b = _identity(), _identity()
     assert a.build_key == b.build_key
+    assert a.schema_version == 2
+    assert "cpu_tuning" not in a.build["material_inputs"]
+    assert "target_cpu" not in repr(a.build)
+    assert "enabled_features" not in repr(a.build)
     assert compare_saved(a.to_dict(), b).result == Compatibility.COMPATIBLE
     assert compare_saved(json.loads(json.dumps(a.to_dict())), b).build_compatible
 
@@ -268,8 +272,8 @@ def test_material_changes_alter_build_key():
     cpu_changed["cpu"]["isa_features"] = {"avx2": True, "avx512f": True}
     native = {**CONFIG, "native_build": True}
     assert _identity(config=native).build_key != _identity(cpu_changed, native).build_key
-    # generic builds do not depend on CPU specialisation
     assert _identity().build_key == _identity(cpu_changed).build_key
+    assert _identity().build_key != _identity(config={**CONFIG, "native_build": True}).build_key
 
 
 def test_missing_corrupt_and_tampered_identity_is_unknown():

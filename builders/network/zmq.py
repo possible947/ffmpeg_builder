@@ -66,7 +66,7 @@ def build_libzmq(builder: FFmpegBuilder, component: Component, source_dir: Path)
     # suppresses dllimport.  Also, libzmq autotools does not add Windows
     # socket libraries to Libs.private; add them here.
     if builder._is_windows_ucrt64_backend():
-        pc_file = builder.workspace / "lib" / "pkgconfig" / "libzmq.pc"
+        pc_file = builder.target_prefix / "lib" / "pkgconfig" / "libzmq.pc"
         if pc_file.exists():
             text = pc_file.read_text()
             if "-DZMQ_STATIC" not in text:

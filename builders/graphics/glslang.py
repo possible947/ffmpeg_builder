@@ -34,6 +34,17 @@ def build_glslang(builder: FFmpegBuilder, component: Component, source_dir: Path
         "-DBUILD_SHARED_LIBS=OFF",
         f"-DCMAKE_INSTALL_PREFIX={builder._ws_str()}",
     ]
+    cross = builder.platform_context.cross_environment
+    if cross is not None and component.build_role.value == "target":
+        cmake_args.extend(
+            [
+                f"-DCMAKE_TOOLCHAIN_FILE={cross.cmake_toolchain_file}",
+                "-DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER",
+                "-DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY",
+                "-DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY",
+                "-DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=ONLY",
+            ]
+        )
 
     builder._run_step(
         component,

@@ -1,10 +1,10 @@
 # Windows FFmpeg cross-build strategy
 
-**Status:** G1 **PASS**; G2.1–G2.8 **PASS**; G3 pass 1 **complete**; G3
-**in progress**; G4 **not started**. G3 pass 1 adds the production
-`linux-cross-mingw` strategy, identity-local target environment and cross
-files, plus real compiler/pkg-config/CMake/Meson/Autotools acceptance. It stops
-before component builders; no Windows FFmpeg build is claimed.
+**Status:** G1 **PASS**; G2.1–G2.8 **PASS**; G3 **PASS**; G4 **not started**.
+G3 established and accepted the production `linux-cross-mingw` strategy,
+identity-local target environment, shared build contracts, and integrated
+host/target acceptance. Component-wide Windows cross-build support and a full
+Windows FFmpeg build are not claimed.
 
 **Naming.** The user-facing Windows build route is **WSL-Mingw**: Windows host
 → WSL2 Ubuntu build environment → LLVM-MinGW/UCRT cross toolchain → Windows
@@ -33,7 +33,7 @@ not a portability claim. Status labels are `[VERIFIED <gate>]`,
 | LLVM-MinGW UCRT is the initial cross toolchain. | [VERIFIED G0-G0A.5] LLVM-MinGW 20261104, Clang/LLD 23.1.5, Windows PE execution and actual UCRT loading. | Pin and validate toolchain identity, target triple, and runtime. | Does not establish compatibility with every library or toolchain revision. |
 | C++ and Rust communicate through a C ABI. | [VERIFIED G0A.1] The mixed C/C++/Rust tests passed in both linking directions and in one executable. | Use fixed-layout C interfaces and caller-owned buffers; contain exceptions and panics. | No arbitrary C++/Rust ABI or cross-boundary unwinding is supported. |
 | Rust uses `x86_64-pc-windows-gnullvm` with the matching target standard library. | [VERIFIED G0A.1] Rust 1.99.0 target-std was installed to an isolated PoC sysroot and linked with LLVM-MinGW. | Provision and version the target std alongside its compiler. | PoC provisioning is not the production store implementation. |
-| CPU specialization comes from effective Windows-host capability. | [VERIFIED G0A.2/G0A.5] Windows CPUID/OS-state data and compiler resolution were compared; specialized executables ran on this host. | Derive or validate target flags from fresh Windows capabilities and selected compiler. | Do not hard-code the observed CPU flag string or assume a model name determines effective ISA. |
+| WSL-Mingw target C/C++ tuning is compiler-native and host-specific. | [REQUIREMENT] Use `-march=native -mtune=native`; the selected LLVM-MinGW compiler interprets `native`. | Pass these flags in order when `native_build` is enabled; accept the policy when the selected compiler accepts them. | No portability claim is made for unrelated Windows CPUs. G1 CPU data remains target identity/runtime evidence, not a feature whitelist. |
 | CUDA uses Linux NVCC to emit PTX for the Windows NVIDIA driver. | [VERIFIED G0A.3/G0A.5] CUDA 12.4.99 generated compute_70 PTX; Windows driver JIT/kernel and FFmpeg CUDA-filter execution passed. | Select NVCC, host compiler (`-ccbin`), and target architecture explicitly. | Tested on TITAN V (CC 7.0), one driver/toolkit combination. |
 | CUDA host compiler selection is explicit. | [VERIFIED G0A.3/G0A.5] Project/store GCC 12.5.0 was passed as `-ccbin`; ambient GCC 15 was not used. | Version, validate, configure, and include effective `-ccbin` in identity. | Do not switch system GCC or use global alternatives. |
 | CUDA and Vulkan SDKs are external prerequisites of the prepared WSL environment. | [MAINTAINER DECISION; current paths checked] Example layout: CUDA `/opt/cuda-12.4`; Vulkan root `/opt/vulkan-sdk/1.4.363.1`, effective Linux root `/opt/vulkan-sdk/1.4.363.1/x86_64`. | Locate via documented/configured path or environment; check presence and that the tools/interfaces required by the selected configuration are usable; fail clearly if not. | The build system does not own, archive, provision, hash or version-manage these SDKs; ordinary SDK tool-version changes need no registry edits. They are not target-prefix contents. |
@@ -84,7 +84,7 @@ identity versus diagnostics.
 |---|---|---|
 | G0 | LLVM-MinGW built Windows PE C and C++ programs, OpenMP program, and all ran through Windows interop. The processes loaded UCRT; libc++/libunwind and libomp DLL paths were observed. OpenMP reported four workers. | `files/g0/G0-report.md`, final G0 addendum and logs. |
 | G0A.1 | C-compatible boundary passed with C, LLVM-MinGW C++ static library, and Rust static library. Both mixed link directions and combined program ran on Windows. C++ exceptions and Rust panic were caught inside their respective exported functions and returned as status; no unwind crossed the C ABI. | `files/g0a1/G0A1-report.md`, `files/g0a1/ABI.md`, logs. |
-| G0A.2 | On this host/toolchain, `-march=native` resolution and tested explicit specialization resolved to usable host features; Windows CPUID and OS-enabled vector state were inspected. Generic/model-only and explicit/native cases were compared. | `files/g0a2/logs/compiler-native-resolution.txt`, `explicit-host-resolution.txt`, `windows-cpuid-runtime.txt`, build/disassembly logs. |
+| G0A.2 | Historical feasibility testing compared compiler-native and explicit specialization, and inspected Windows CPUID/OS-enabled vector state. This experiment is not production policy; production uses `-march=native -mtune=native` and does not reproduce or validate the compiler's internal feature expansion. | `files/g0a2/logs/compiler-native-resolution.txt`, `explicit-host-resolution.txt`, `windows-cpuid-runtime.txt`, build/disassembly logs. |
 | G0A.3 | Linux NVCC generated compute_70 PTX with selected GCC 12.5 `-ccbin`; a Windows PE harness loaded the Windows CUDA Driver API, JIT-compiled PTX, dispatched a kernel, validated output, and exited successfully on TITAN V. A separate Windows codec probe exercised NVIDIA runtime APIs. | `files/g0a3/logs/nvcc-ptx-build-no-gnu-source.txt`, `cuda-driver-harness-runtime.txt`, `nvidia-codec-probe-runtime.txt`, PTX hash. The companion `nvcc-ptx-build.txt` captures the declaration-conflict failure without `-U_GNU_SOURCE`. |
 | G0A.4 | Windows PE Vulkan and OpenCL programs ran compute work on the NVIDIA TITAN V through installed Windows loaders/dispatcher and vendor driver. Shader compile/SPIR-V validation and Windows runtime discovery were recorded. | `files/g0a4/logs/vulkan-runtime.txt`, `opencl-runtime.txt`, imports and Windows inventory. |
 | G0A.5 core | Actual FFmpeg 9.0 Windows binaries configured and built with NVENC, NVDEC/CUVID, CUDA NVCC filters, Vulkan filters, and OpenCL filters. On the physical host, NVENC encoded, CUVID/NVDEC decoded, and CUDA, Vulkan, and OpenCL filters ran. `ffmpeg.exe`/`ffprobe.exe` executed via interop. Inspected final executables are PE32+ and their imports contain Windows DLLs (including UCRT API sets and `OpenCL.dll`), with no Linux `.so` import. | `files/g0a5/logs/configured-feature-summary.txt`, `final-host-feature-lists.txt`, `nvenc-encode-final.log`, `nvdec-decode-nv12.log`, `cuda-filter-yuv420p.log`, `vulkan-filter.log`, `opencl-filter.log`; final PoC binaries inspected read-only. |
@@ -136,8 +136,9 @@ not as a presumed way to complete Variant 1.
 
 - Registry/configuration declares the required feature set. Missing hardware
   must not silently remove configured capabilities.
-- Probe actual Windows state for target specialization and runtime acceptance;
-  do not infer it from WSL's Linux view.
+- Probe actual Windows state for target identity and runtime acceptance; do
+  not infer it from WSL's Linux view. CPU probe fields do not validate or
+  reconstruct LLVM-MinGW's interpretation of `native`.
 - A changed material host or effective build input must not reuse incompatible
   completion state, mutable build trees, target prefixes, or installed
   artifacts.
@@ -295,16 +296,22 @@ containing `-lmsvcrt`: tested PE imports used UCRT API sets and Windows loaded
 `ucrtbase.dll`. Do not generalize from the target spec or a link flag; inspect
 the actual effective runtime in production acceptance.
 
-### 5.2 CPU specialization
+### 5.2 CPU tuning
 
-G0A.2 used Windows CPU/OS state and compared compiler-native resolution,
-explicit flags, generic target and a model-only case. On this exact host and
-toolchain, compiler-native selection was validated by execution; a bare CPU
-model did not fully describe effective features. Windows-host capability is
-authoritative for target specialization. Cross-host portability is not the
-objective. The exact observed `skylake-avx512`/feature-flag string is evidence
-for that PoC only, not a backend policy. Production must validate every
-effective ISA feature against Windows-reported CPU and OS state.
+The production target C/C++ policy is exactly `-march=native -mtune=native`
+when `native_build` is enabled. LLVM-MinGW is the authority that interprets
+`native`; the project checks only that the selected compiler accepts the
+flags. It does not expand or independently validate compiler-selected ISA
+features. G1 CPU data remains part of physical-target identity and runtime
+evidence, not a compiler feature whitelist. Binaries are intended for the
+physical Windows computer running WSL and are not claimed portable to
+unrelated Windows CPUs.
+
+G0A.2's compiler-native/explicit-specialization comparison, disassembly, and
+Windows CPU/OS inspection were feasibility experiments only. The exact
+observed `skylake-avx512` and feature-flag output is historical evidence, not
+production policy; production does not reproduce or validate the compiler's
+internal feature expansion.
 
 ### 5.3 CUDA/NVIDIA
 
@@ -382,9 +389,10 @@ prerequisites and PTX, G2.6 validates isolated target headers and link
 interfaces, and G0A.5 is a separate early Windows feature slice. None
 establishes a production Windows libvmaf CUDA build, its fatbin/runtime path,
 or a Windows cross-build. G2.7 protects resume identity for these inputs, and
-G2.8 accepted the complete offline G2 closure and live prerequisite path. G2
-is closed; G3 pass 1 is complete and the backend remains in progress. The
-following is pass-2/G4 implementation work, not a full-build acceptance.
+G2.8 accepted the complete offline G2 closure and live prerequisite path. At
+that acceptance milestone G3 had not started; current status is G1/G2/G3
+**PASS**, with G4 **not started**. G3 validates cross-build contracts without
+claiming a full Windows component-stack build.
 The module-level mapping is in
 [DeveloperReadme.md](DeveloperReadme.md#reusing-the-native-cudavulkan-work-for-wsl-mingw).
 
@@ -509,9 +517,10 @@ before saved state or mutable artifacts may be trusted.
 
 | Category | Examples | Why |
 |---|---|---|
-| Physical Windows target | G1 Windows OS/architecture, CPU/effective ISA, selected GPU/capabilities and relevant driver/runtime facts. | Preserves G1 build-vs-runtime acceptance semantics; detailed probe fields remain separate diagnostics. |
+| Physical Windows target | G1 Windows OS/architecture, CPU identity/ISA fields, selected GPU/capabilities and relevant driver/runtime facts. | Preserves G1 workspace isolation, changed-host detection and runtime acceptance. CPU feature fields are not an LLVM-MinGW feature whitelist. |
 | Backend and capabilities | `linux-cross-mingw`; configured CUDA mode/features, Vulkan selection, registry-selected OpenCL/NVIDIA codec features. | Feature configuration changes expected build contents. Enabled-but-unavailable prerequisites fail rather than being silently reclassified as disabled. |
 | LLVM-MinGW | Profile/version, target triple/UCRT runtime, installed source/archive provenance and schema; no absolute store prefix. | Project compiler/ABI changes can alter PE/COFF output; relocation alone must not drift identity. |
+| CPU tuning policy | Existing material configuration field `native_build`: either no tuning or the ordered target C/C++ flags `-march=native`, `-mtune=native`. | Distinguishes generic and native-tuned builds without persisting compiler-internal model/features. The selected LLVM-MinGW compiler is the authority for `native`. |
 | Rust and target std | Rust profile/version/source provenance and sorted extras; `x86_64-pc-windows-gnullvm` target-std release/archive/checksum. | Compiler or target-std changes invalidate Rust artifacts; unordered extras do not create false drift. |
 | CUDA project compiler | Selected GCC profile/version/source provenance and compiler role path relative to its prefix. | Changing the selected project-managed `-ccbin` invalidates CUDA output; unselected ambient GCC and absolute store paths do not. |
 | Effective CUDA and external NVCC | Effective compute architecture, compatibility/workaround flags, and reported external toolkit/NVCC releases. | Architecture, flags, and NVCC release can change generated PTX/artifacts. NVCC/toolkit release is an **external material input**, not project-managed provenance. |
@@ -520,10 +529,16 @@ before saved state or mutable artifacts may be trusted.
 | Diagnostics only | Absolute CUDA/Vulkan SDK paths, `glslc`/`spirv-val` paths, full probe dumps, temporary target prefix, timestamps, logs, detailed device inventory. | Path relocation or incidental probe detail must not invalidate compatible artifacts. |
 | Windows runtime acceptance | Windows loader/ICD, OpenCL dispatcher/platform/device, NVIDIA driver, and other accepted G1 runtime facts. | Runtime-only changes invalidate prior acceptance as defined by G1. `vulkan-1.dll`, `OpenCL.dll`, and NVIDIA driver DLLs are not project-owned inputs. |
 
-CPU-specialized binaries bind to the effective CPU/OS capability set. CUDA
+WSL-Mingw target C/C++ builds use `-march=native -mtune=native` when
+`native_build` is enabled. The physical Windows machine running WSL is the
+intended target; the resulting binaries are not claimed portable to unrelated
+Windows CPUs. LLVM-MinGW interprets `native`; the project neither expands nor
+independently validates its selected ISA features. G1 CPU data remains part of
+physical-target identity/runtime evidence, not a compiler feature whitelist.
+Changing the physical target, selected LLVM-MinGW identity, or requested
+policy changes compatibility through the existing identity semantics. CUDA
 PTX, driver JIT, NVENC/NVDEC, Vulkan, and OpenCL acceptance bind to selected
-device/runtime state. Do not include an incidental value just because a PoC
-printed it; document why any field is build-material or acceptance-material.
+device/runtime state.
 
 Canonical sorted-key JSON and SHA-256 provide deterministic evidence and
 workspace keys; no timestamp, temporary prefix, or absolute SDK/store path is
@@ -565,8 +580,8 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
   probes first; `os`/`cpu` fields merge per field, other sections are replaced
   as a whole. A failed probe is not rescued by a supplement.
 - **Identity:** *build identity* (backend, target OS/arch, FFmpeg version,
-  material config, component versions/toolchain profiles, CPU specialisation
-  only when `native_build` is set) decides artifact reuse and names the
+  material config (including the `native_build` tuning choice), component
+  versions/toolchain profiles) decides artifact reuse and names the
   workspace. *Runtime identity* (OS version/build, CPU/ISA, GPUs, NVIDIA,
   Vulkan, OpenCL) decides whether earlier runtime acceptance is valid.
   Edition, UBR, ICD manifests and `probed_at` are diagnostic only. Identities
@@ -598,9 +613,9 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
 - **Status:** [IMPLEMENTED — G1] `windows_probe.py` (+ `windows_probe_script.py`),
   `build_identity.py` and `target_guard.py` implement the probe, overrides,
   semantic identity and reuse guard; see "G1 implementation notes" below. The
-  `linux-cross-mingw` build backend itself (G3) and runtime acceptance (G5)
-  are **not** implemented; selecting `target_backend: linux-cross-mingw`
-  currently runs the probe/guard only.
+  `linux-cross-mingw` route continues through G3 pass-1 cross-environment
+  construction and acceptance; builder-wide pass-2 integration remains
+  pending, and runtime acceptance is G5.
 - **Probe contract:** Windows version/build; CPU model/signature plus effective
   ISA and OS-enabled state; GPU inventory; NVIDIA model, compute capability,
   driver, and NVENC/NVDEC/API information needed for selection/acceptance;
@@ -633,7 +648,7 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
   and configuration for selected LLVM-MinGW, Rust target std, project-managed
   GCC `-ccbin` if applicable, headers/interfaces, import-library recipes,
   shader/component inputs and dependency metadata.
-- **Status:** [IMPLEMENTATION — in progress] G1 PASS; G2.1 audit complete; G2.2
+- **Status:** [PASS — G2] G1 PASS; G2.1 audit complete; G2.2
   complete (LLVM-MinGW managed toolchain + hardened `ToolchainStore`: checksum
   enforcement, staged/atomic install, provenance/stale detection, isolated
   `--store`/`--sources` offline provisioning). G2.3 complete (Rust 1.99.0
@@ -645,8 +660,8 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
   G2.5 Vulkan prerequisites and host/target isolation (#14) are implemented and
   accepted for the scoped host. G2.6 target headers/interfaces, G2.7 identity
   integration, and G2.8 final offline closure/live prerequisite acceptance are
-  complete; G2 is PASS and G3 is not started. G2 checks external WSL SDK
-  prerequisites; it does not own or install those SDKs.
+  complete; G2 is PASS. G2
+  checks external WSL SDK prerequisites; it does not own or install those SDKs.
 - **SDK ownership:** The CUDA SDK (example `/opt/cuda-12.4`) and Vulkan SDK
   (example `/opt/vulkan-sdk/1.4.363.1/x86_64`) are external prerequisites. Locate
   them from configured/documented paths or environment, verify presence and that
@@ -697,7 +712,29 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
   requirements, while enabled capabilities fail preparation when required
   inputs are missing. G2.7 projects the resolved toolchain, effective CUDA,
   configured capability, shader compiler, and target-input evidence into
-  schema-2 identity. G3 cross-environment construction remains unimplemented.
+  schema-2 identity. G3 pass 1 implemented cross-environment construction and
+  acceptance. G3 pass 2 is accepted: role-scoped host/target/MIXED contracts,
+  shared Autotools/CMake/Meson/Make/custom/Cargo projections, identity-local
+  Cargo target configuration, typed transitive target-link/runtime metadata,
+  and Vulkan/OpenCL target-interface projections are validated. The CUDA
+  contract selects NVCC, GCC `-ccbin`, architecture and scoped compatibility
+  flags; the integrated probe generates PTX and fatbin, converts fatbin with
+  selected host `bin2c`, compiles generated C with LLVM-MinGW to COFF, and
+  links a PE32+ harness without Linux object/runtime leakage. The selected
+  CUDA 12.4.99 supports libvmaf's effective upstream `compute_50`, `75`, `80`,
+  and `90` requests; its version branch excludes `compute_100`/`120`. Upstream
+  supplies its own fatbin/gencode list and enables Meson's CUDA language with
+  NVCC, which may introduce NVCC host-object/compiler checks; the accepted
+  production contract therefore uses only the proven fatbin → bin2c → target-C
+  split and does not treat NVCC as the Windows host compiler. Full libvmaf
+  adaptation and CUDA-enabled component builds remain fail-closed for G4.
+  Project-managed Rust/Cargo produced a Windows staticlib consumed by an
+  LLVM-MinGW C harness; Cargo build scripts remain host-native. Positive and
+  negative C++ transitive-link probes confirmed libc++/libunwind requirements.
+  G3 acceptance also covers the host-generator/MIXED pipeline, target Vulkan
+  and OpenCL imports, target path-contamination checks, and reached legacy
+  branch isolation. TUI and headless routes validate this contract and stop
+  intentionally before the G4 component graph.
   Live preparation passed with the working store's LLVM-MinGW 20261104,
   Rust 1.99.0 plus Windows target std, and GCC 12.5.0. The fresh Windows probe
   reported TITAN V compute capability 7.0; CUDA 12.4.99 produced validated
@@ -750,8 +787,7 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
 
 ### G3 — `linux-cross-mingw` backend and platform strategy
 
-- **Status:** G1 **PASS**; G2 **PASS**; G3 pass 1 **complete**; G3 **in
-  progress**; G4 **not started**.
+- **Status:** G1 **PASS**; G2 **PASS**; G3 **PASS**; G4 **not started**.
 - **Pass 1 completed:** production strategy selection; typed host/target tool
   projections; identity-workspace `prefix/`, `build/`, `generated/`,
   `packages/`, and `diagnostics/`; safe G2.6 target-input reuse; explicit
@@ -768,10 +804,28 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
   libraries, headers and SDK metadata are not target discovery roots; the
   target compiler/binutils are absolute paths and host executables remain
   separate.
-- **Deferred to pass 2:** validated host-specific CPU flags; scoped CUDA
-  consumer/host-tool integration; builder-wide consumption; transitive static
-  C++ runtime metadata; remaining directly relevant legacy migration; final
-  G3 acceptance. G4 component adapters and full dependency builds have not
+- **CPU tuning policy:** when `native_build` is enabled, target C/C++ uses
+  exactly `-march=native -mtune=native` in that order. LLVM-MinGW alone
+  interprets `native`; a compiler acceptance probe does not inspect its
+  internal feature expansion. G1 CPU data is identity/runtime evidence only.
+- **Pass 2 accepted:** role-scoped host/target/MIXED environments and prefixes;
+  Cargo host/target separation; transitive target-link/runtime metadata;
+  Vulkan/OpenCL target interfaces; shared build-system projections; CUDA
+  fatbin/bin2c/generated-C COFF and PE acceptance; Rust staticlib/C harness;
+  positive/negative C++ runtime metadata; and a generic mixed-role generator
+  pipeline. CUDA-enabled FFmpeg/libvmaf recipes remain fail-closed until their
+  component adapters are implemented and accepted in G4. No full component
+  stack or production FFmpeg cross-build was run.
+- **Legacy and production boundary:** reached MSYS-specific FFmpeg path
+  conversion is restricted to the legacy UCRT64 route; `linux-cross-mingw`
+  uses no MSYS shell/path semantics. TUI and headless G3 preparation run
+  identity-scoped acceptance and intentionally stop before component
+  selection/building.
+- **Final acceptance:** selected CUDA/NVCC/GCC/bin2c, Rust/Cargo, C/C++/COFF
+  and PE, Autotools, CMake, Meson, target-only pkg-config, Vulkan/OpenCL
+  interfaces, target contamination guards, and native regression suite pass.
+  Schema-2 identity remains unchanged; CPU tuning remains exactly
+  `-march=native -mtune=native` with compiler acceptance only. G4 has not
   started.
 - **Link requirements:** Model libc++/libunwind and other static C++ runtime
   needs transitively in target metadata/link composition. Handle Vulkan and
@@ -886,15 +940,15 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
 
 | Gate | Open issue | Required resolution |
 |---|---|---|
-| G3 | Production implementation of CPU flag derivation and compatibility-workaround classification. | Derive from effective Windows capabilities and validate selected compiler; scope `_GNU_SOURCE` workaround narrowly. |
+| G3 | Compatibility-workaround classification. | Scope `_GNU_SOURCE` workaround narrowly. CPU tuning policy is the ordered `-march=native -mtune=native` pair, interpreted by LLVM-MinGW and not reconstructed from G1. |
 | G4 | Remaining full software component cross-build issues and full-stack source/build closure. | Resolve builder/registry/provisioning gaps component-by-component with target-isolation tests. |
 | G5 | Neural-network backend/API and complete D3D/QSV/AMF feature support. | Select required backend/API and prove target build/runtime; only an unavoidable MSVC-only ABI limitation can reopen Variant 2. |
 | G5 | Hardware capabilities absent or unsupported on the tested TITAN V host, including untested codec/profile combinations. | Retain build-presence assertions; record runtime acceptance as not validated where appropriate. |
 | G6 | Final runtime DLL closure and redistribution policy for all production dependencies. | Inspect built package; include LLVM-MinGW/C++ runtime DLLs where required and document external Windows/driver prerequisites. |
 
 No separate feasibility risk remains for LLVM-MinGW/UCRT smoke execution,
-contained C ABI mixed Rust/C++ use, host-specific CPU specialization on the
-tested configuration, CUDA PTX/JIT, tested NVENC/NVDEC, Vulkan/OpenCL runtime,
+contained C ABI mixed Rust/C++ use, native compiler tuning on the tested
+configuration, CUDA PTX/JIT, tested NVENC/NVDEC, Vulkan/OpenCL runtime,
 or the early FFmpeg 9.0 feature slice. These are verified within their stated
 scope, not universally.
 
@@ -921,10 +975,11 @@ project-owned artifact and never a Windows target component.
 2. **G2 — PASS:** Register/provision the complete project-managed input
    closure offline; validate explicit installed CUDA/Vulkan SDK prerequisites
    and selected host compiler; establish reproducible schema-2 identity.
-3. **G3 pass 1 — complete; G3 remains in progress:** establish the backend
-   strategy, isolated target environment/cross files, and real configure/link
-   acceptance. **G3 pass 2:** add CPU specialization, scoped CUDA handling,
-   builder consumption, runtime metadata, and final acceptance.
+3. **G3 — PASS:** establish the backend strategy, isolated target
+   environment/cross files, host/target/MIXED build contracts, reusable CUDA
+   fatbin/bin2c/COFF flow, Rust/Cargo target integration, transitive link
+   metadata, shared builder projections, and integrated production-path
+   acceptance. G4 component adapters and full-stack builds have not started.
 4. **G4:** Cross-build the full configured software dependency stack; verify
    PE/COFF, no Linux leakage, runtime and resume.
 5. **G5:** Build-assert every configured hardware feature and run only

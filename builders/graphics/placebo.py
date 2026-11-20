@@ -55,12 +55,14 @@ def patch_libplacebo_pc(builder: FFmpegBuilder) -> None:
     2. Ensure SPIRV-Tools transitive static deps are present.
     """
     pc_candidates = [
-        builder.workspace / "lib" / "pkgconfig" / "libplacebo.pc",
-        builder.workspace / "lib64" / "pkgconfig" / "libplacebo.pc",
+        builder.target_prefix / "lib" / "pkgconfig" / "libplacebo.pc",
+        builder.target_prefix / "lib64" / "pkgconfig" / "libplacebo.pc",
     ]
     multiarch = builder.platform_detector.get_multiarch_dir()
     if multiarch:
-        pc_candidates.append(builder.workspace / "lib" / multiarch / "pkgconfig" / "libplacebo.pc")
+        pc_candidates.append(
+            builder.target_prefix / "lib" / multiarch / "pkgconfig" / "libplacebo.pc"
+        )
 
     for pc_file in pc_candidates:
         if not pc_file.exists():
@@ -125,24 +127,32 @@ def build_libplacebo(builder: FFmpegBuilder, component: Component, source_dir: P
     vulkan_headers = builder.registry.get_by_name("vulkan-headers")
     if vulkan_headers is None:
         raise BuildError(component.name, "vulkan-headers component is missing")
-    if not vulkan_headers_valid(builder.workspace, vulkan_headers):
-        invalidate_vulkan_resume(builder.state_manager, builder.workspace, [vulkan_headers])
-        builder.build_component(vulkan_headers)
-    if not vulkan_headers_valid(builder.workspace, vulkan_headers):
-        raise BuildError(
-            component.name, "Vulkan headers and registry are incomplete or inconsistent"
-        )
+    target_prefix = builder.target_prefix
+    cross = builder.platform_context.cross_environment
+    if cross is None:
+        if not vulkan_headers_valid(target_prefix, vulkan_headers):
+            invalidate_vulkan_resume(builder.state_manager, target_prefix, [vulkan_headers])
+            builder.build_component(vulkan_headers)
+        if not vulkan_headers_valid(target_prefix, vulkan_headers):
+            raise BuildError(
+                component.name, "Vulkan headers and registry are incomplete or inconsistent"
+            )
+    elif not (
+        cross.target_interfaces.vulkan_headers.is_dir()
+        and cross.target_interfaces.vulkan_registry.is_file()
+    ):
+        raise BuildError(component.name, "Verified target Vulkan headers/registry are unavailable")
 
     # libplacebo gives its bundled Vulkan-Headers priority over loader metadata.
     # Populate that supported dependency from the verified workspace installation.
     bundled = source_dir / "3rdparty" / "Vulkan-Headers"
     bundled_include = bundled / "include"
     bundled_registry = bundled / "registry" / "vk.xml"
-    workspace_registry = builder.workspace / "share" / "vulkan" / "registry" / "vk.xml"
+    workspace_registry = target_prefix / "share" / "vulkan" / "registry" / "vk.xml"
     if bundled_include.exists():
         try:
             if _digest(bundled_include, bundled_registry) != _digest(
-                builder.workspace / "include", workspace_registry
+                target_prefix / "include", workspace_registry
             ):
                 raise ValueError("bundled Vulkan-Headers differ from the workspace")
         except (OSError, ValueError) as exc:
@@ -151,7 +161,7 @@ def build_libplacebo(builder: FFmpegBuilder, component: Component, source_dir: P
         try:
             bundled_include.mkdir(parents=True, exist_ok=True)
             for name in ("vulkan", "vk_video"):
-                shutil.copytree(builder.workspace / "include" / name, bundled_include / name)
+                shutil.copytree(target_prefix / "include" / name, bundled_include / name)
             bundled_registry.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(workspace_registry, bundled_registry)
         except OSError as exc:
@@ -159,20 +169,33 @@ def build_libplacebo(builder: FFmpegBuilder, component: Component, source_dir: P
 
     # Determine whether to enable Vulkan inside libplacebo.
     pi = builder.platform_detector.platform_info
-    vulkan_ok = (
-        builder.config.enable_libplacebo_vulkan
-        and pi.vulkan_available
-        and not (builder.config.full_static and builder.platform == "linux")
-    )
+    if cross is not None:
+        vulkan_ok = builder.config.enable_libplacebo_vulkan
+        if vulkan_ok and (
+            not cross.target_interfaces.vulkan_import_library.is_file()
+            or not cross.target_interfaces.host_shader_tools.get("shader_compiler")
+        ):
+            raise BuildError(
+                component.name,
+                "Configured target Vulkan support lacks its verified import interface "
+                "or selected host shader compiler.",
+                code="wsl_mingw_vulkan_interface_incomplete",
+            )
+    else:
+        vulkan_ok = (
+            builder.config.enable_libplacebo_vulkan
+            and pi.vulkan_available
+            and not (builder.config.full_static and builder.platform == "linux")
+        )
 
     ws = (
-        str(builder.workspace).replace("\\", "/")
+        str(target_prefix).replace("\\", "/")
         if builder._is_windows_ucrt64_backend()
         else builder._ws_str()
     )
 
     fast_float_submod = source_dir / "3rdparty" / "fast_float" / "include" / "fast_float"
-    fast_float_ws = builder.workspace / "include" / "fast_float"
+    fast_float_ws = target_prefix / "include" / "fast_float"
     if fast_float_ws.exists() and not any(
         fast_float_submod.iterdir() if fast_float_submod.exists() else iter([])
     ):
@@ -225,6 +248,11 @@ def build_libplacebo(builder: FFmpegBuilder, component: Component, source_dir: P
             "-Dvulkan=disabled",
             "-Dglslang=disabled",
         ]
+    if cross is not None and component.build_role.value == "target":
+        meson_args = ["--cross-file", str(cross.meson_cross_file), *meson_args]
+        shader_tool = cross.target_interfaces.host_shader_tools.get("shader_compiler")
+        if shader_tool:
+            env["GLSLANG_VALIDATOR"] = shader_tool
 
     builder._run_step(
         component,

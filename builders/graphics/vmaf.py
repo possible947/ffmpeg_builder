@@ -37,7 +37,7 @@ def _link_nv_codec_headers_into_source(
         if dest.resolve() == src.resolve():
             return
         previous = dest.resolve()
-        workspace_headers = (builder.workspace / "include" / "ffnvcodec").resolve()
+        workspace_headers = (builder.target_prefix / "include" / "ffnvcodec").resolve()
         private_headers = (libvmaf_dir / ".ffmpeg-builder-cuda-headers").resolve()
         if previous != workspace_headers and not previous.is_relative_to(private_headers):
             raise BuildError("libvmaf", f"Refusing to replace unrelated header link {dest}.")
@@ -53,7 +53,7 @@ def _libvmaf_cuda_headers(builder: FFmpegBuilder, libvmaf_dir: Path) -> Path:
     default = builder.registry.get_nv_codec_component()
     selected = builder.registry.get_nv_codec_component(builder.platform_detector.platform_info)
     if selected.version == default.version and selected.sha256 == default.sha256:
-        return builder.workspace / "include" / "ffnvcodec"
+        return builder.target_prefix / "include" / "ffnvcodec"
     try:
         archive = builder.downloader.download(
             default.get_url(),
@@ -104,6 +104,21 @@ def build_libvmaf(builder: FFmpegBuilder, component: Component, source_dir: Path
     build_dir.mkdir(parents=True, exist_ok=True)
 
     inputs = getattr(builder.platform_detector.platform_info, "cuda_build_host_inputs", None)
+    cross = builder.platform_context.cross_environment
+    if cross is not None and builder.config.enable_libvmaf_cuda:
+        if cross.cuda_host_tools.nvcc is None:
+            raise BuildError(
+                component.name,
+                "libvmaf CUDA is configured, but the verified CUDA host-tool projection is absent.",
+                code="wsl_mingw_cuda_inputs_missing",
+            )
+        raise BuildError(
+            component.name,
+            "The validated NVCC PTX/fatbin and bin2c probes do not establish "
+            "libvmaf's NVCC-fatbin to LLVM-MinGW COFF object flow; CUDA-enabled "
+            "libvmaf is blocked until that mixed-role recipe is validated.",
+            code="wsl_mingw_libvmaf_cuda_mixed_role_unverified",
+        )
     libvmaf_cuda_enabled = builder.config.enable_libvmaf_cuda and inputs is not None
     libvmaf_cuda_reason = builder.platform_detector.platform_info.libvmaf_cuda_reason
 
@@ -132,7 +147,7 @@ def build_libvmaf(builder: FFmpegBuilder, component: Component, source_dir: Path
             env["NVCC_PREPEND_FLAGS"] += " -Xcompiler=-fopenmp"
 
         headers = _libvmaf_cuda_headers(builder, libvmaf_dir)
-        if headers != builder.workspace / "include" / "ffnvcodec":
+        if headers != builder.target_prefix / "include" / "ffnvcodec":
             env["CFLAGS"] = f"-I{headers.parent} {env.get('CFLAGS', '')}"
         _link_nv_codec_headers_into_source(builder, libvmaf_dir, headers)
 
@@ -160,6 +175,8 @@ def build_libvmaf(builder: FFmpegBuilder, component: Component, source_dir: Path
         meson_args.append("-Doptimization=0")
     if libvmaf_cuda_enabled:
         meson_args.append("-Denable_cuda=true")
+    if cross is not None and component.build_role.value == "target":
+        meson_args.extend(["--cross-file", str(cross.meson_cross_file)])
 
     if builder.on_log is not None and debug_build:
         builder.on_log("libvmaf debug build enabled: -Doptimization=0, no NDEBUG")

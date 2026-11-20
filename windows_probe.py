@@ -681,7 +681,7 @@ def _parse_cpu(raw: Any) -> CpuInfo:
     if not isinstance(features, Mapping) or not features:
         raise _fail_incomplete(
             "Required Windows target field cpu.isa_features is missing or empty "
-            "(OS-reported instruction-set state is needed for CPU specialisation)."
+            "(G1 CPU identity/runtime evidence is required)."
         )
     isa: Dict[str, bool] = {}
     for name, value in features.items():

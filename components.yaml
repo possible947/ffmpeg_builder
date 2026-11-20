@@ -873,6 +873,19 @@
   - vulkan-headers
   - glslang
   - fast-float
+  target_link_metadata:
+    private_transitive_link_requirements:
+    - -lc++
+    - -lunwind
+    runtime_dependencies:
+    - name: libc++.dll
+      classification: target-runtime
+      source_identity: llvm-mingw-ucrt-libc++
+    - name: libunwind.dll
+      classification: target-runtime
+      source_identity: llvm-mingw-ucrt-libunwind
+    provenance:
+    - G0A.5 static-libplacebo Windows runtime observation
   custom_build_fn: build_libplacebo
   ffmpeg_configure_flag: --enable-libplacebo
 - name: amf

@@ -994,13 +994,11 @@ class FFmpegBuilderApp:
             session = self.prepare_target(config, resume)
             if self._is_cross_mingw(config):
                 environment = self.prepare_cross_environment(config, session)
-                self.console.print(
-                    "[green]G3 pass-1 cross environment prepared and validated.[/green]"
-                )
+                self.console.print("[green]G3 cross-environment acceptance passed.[/green]")
                 self.console.print(
                     f"Target: {environment.target_triple}; workspace: "
-                    f"{environment.paths.workspace_root}. Component builds remain disabled "
-                    "until later G3/G4 work."
+                    f"{environment.paths.workspace_root}. Stopped before the G4 component "
+                    "graph; no full dependency-stack build was run."
                 )
                 return
             all_components = self._get_buildable_components(config)

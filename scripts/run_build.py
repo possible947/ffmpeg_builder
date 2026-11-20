@@ -95,12 +95,15 @@ def run_build(app: FFmpegBuilderApp, config: BuildConfig, resume: bool, no_relea
         if getattr(config, "target_backend", "native") == TARGET_BACKEND_CROSS_MINGW:
             environment = app.prepare_cross_environment(config, session)
             print(
-                "G3 pass-1 cross environment prepared and validated; "
+                "G3 cross-environment acceptance passed; "
                 f"target={environment.target_triple}, "
                 f"workspace={environment.paths.workspace_root}.",
                 flush=True,
             )
-            print("Component builds remain disabled until later G3/G4 work.", flush=True)
+            print(
+                "Stopped before the G4 component graph; no full dependency-stack build was run.",
+                flush=True,
+            )
             return 2
         all_components = app._get_buildable_components(config)
         cuda_inputs = getattr(app.platform_detector.platform_info, "cuda_build_host_inputs", None)
@@ -223,12 +226,12 @@ def dry_run_cross_backend(app: FFmpegBuilderApp, config: BuildConfig, resume: bo
     for note in session.notes:
         print(f"NOTE: {note}", flush=True)
     print(
-        "Dry-run passed: G3 pass-1 cross environment prepared and validated; "
+        "Dry-run passed: G3 cross-environment acceptance passed; "
         f"target={environment.target_triple}, "
         f"workspace={environment.paths.workspace_root}.",
         flush=True,
     )
-    print("Component builds remain disabled until later G3/G4 work.", flush=True)
+    print("Stopped before the G4 component graph; G4 has not started.", flush=True)
     return 0
 
 

@@ -20,12 +20,19 @@ from typing import Any, Mapping, Optional, Sequence
 from .build_types import CATEGORY_TARGET_DATA, CATEGORY_TOOLCHAIN_INSTALL, BuildError
 from .config import TARGET_BACKEND_CROSS_MINGW, BuildConfig
 from .components import ComponentRegistry
+from .cross_build_contracts import (
+    RuntimeDependency,
+    TargetInterfaceProjection,
+    TargetLinkMetadata,
+    compose_target_link_metadata,
+)
 from .target_inputs import materialize_target_inputs, validate_target_inputs_manifest
 from .wsl_mingw_environment import filter_wsl_mingw_target_environment
 from .wsl_mingw_preparation import WslMingwPreparation
 
 TARGET_TRIPLE = "x86_64-w64-mingw32"
 RUST_TARGET = "x86_64-pc-windows-gnullvm"
+CPU_TUNING_FLAGS = ("-march=native", "-mtune=native")
 _TARGET_ENV_VARS = (
     "CC",
     "CXX",
@@ -69,6 +76,11 @@ _TARGET_ENV_VARS = (
     "VK_ADD_LAYER_PATH",
     "VK_ICD_FILENAMES",
     "VK_DRIVER_FILES",
+    "RUSTFLAGS",
+    "CARGO_ENCODED_RUSTFLAGS",
+    "CARGO_BUILD_TARGET",
+    "CARGO_TARGET_X86_64_PC_WINDOWS_GNULLVM_LINKER",
+    "CARGO_TARGET_X86_64_PC_WINDOWS_GNULLVM_AR",
 )
 _FORBIDDEN_PATHS = ("/usr/include", "/usr/lib", "/usr/lib64", "/lib", "/lib64")
 
@@ -161,10 +173,32 @@ class DeferredCudaHostTools:
     """Validated host-only CUDA tools, intentionally not exported to target builds."""
 
     nvcc: Optional[Path] = None
+    toolkit_release: Optional[str] = None
     ccbin: Optional[Path] = None
     common_flags: tuple[str, ...] = ()
     compute_architecture: Optional[str] = None
+    compatibility_workaround: Optional[str] = None
     bin2c: Optional[Path] = None
+    diagnostics: tuple[str, ...] = ()
+
+    def device_mode_flags(self, mode: str) -> tuple[str, ...]:
+        """Return output-mode/device flags without host-compiler options."""
+        match = re.fullmatch(r"compute_(\d+)", self.compute_architecture or "")
+        if match is None:
+            raise ValueError("CUDA compute architecture is not validated")
+        if mode == "ptx":
+            return (
+                "--ptx",
+                "-gencode",
+                f"arch={self.compute_architecture},code={self.compute_architecture}",
+            )
+        if mode == "fatbin":
+            return (
+                "--fatbin",
+                "-gencode",
+                f"arch={self.compute_architecture},code=sm_{match.group(1)}",
+            )
+        raise ValueError(f"unsupported CUDA output mode: {mode}")
 
 
 @dataclass(frozen=True)
@@ -201,7 +235,7 @@ class AutotoolsProjection:
 
 @dataclass(frozen=True)
 class CrossEnvironment:
-    """Complete typed G3 pass-1 environment for one guarded identity workspace."""
+    """Typed host/target projections for one guarded cross-build workspace."""
 
     backend: str
     build_machine: str
@@ -210,6 +244,8 @@ class CrossEnvironment:
     paths: CrossPaths
     host_tools: HostTools
     target_tools: TargetTools
+    cpu_tuning_flags: tuple[str, ...]
+    host_environment: Mapping[str, str]
     compiler_environment: Mapping[str, str]
     target_discovery_environment: Mapping[str, str]
     pkg_config_wrapper: Path
@@ -218,7 +254,11 @@ class CrossEnvironment:
     target_input_manifest: Mapping[str, Any]
     rust_tools: RustTargetTools
     rust_environment: Mapping[str, str]
+    cargo_environment: Mapping[str, str]
     cuda_host_tools: DeferredCudaHostTools
+    cuda_environment: Mapping[str, str]
+    cuda_acceptance: Mapping[str, Any]
+    target_interfaces: TargetInterfaceProjection
     autotools: AutotoolsProjection
     approved_target_roots: tuple[Path, ...]
     diagnostics: tuple[CrossDiagnostic, ...] = ()
@@ -232,7 +272,12 @@ class CrossEnvironment:
             "host_machine": self.host_machine,
             "target_triple": self.target_triple,
             "target_tools": self.target_tools.as_dict(),
+            "cpu_tuning_flags": list(self.cpu_tuning_flags),
             "host_tools": dict(sorted(self.host_tools.paths.items())),
+            "target_interfaces": {
+                "prefix": str(self.target_interfaces.prefix),
+                "host_shader_tools": dict(sorted(self.target_interfaces.host_shader_tools.items())),
+            },
             "compiler_environment": dict(sorted(self.compiler_environment.items())),
             "target_discovery_environment": dict(sorted(self.target_discovery_environment.items())),
             "autotools": {
@@ -247,6 +292,86 @@ class CrossEnvironment:
 
 def _build_error(component: str, message: str, category: str, code: str) -> BuildError:
     return BuildError(component, message, category=category, code=code)
+
+
+def _clean_target_probe_environment(parent: Mapping[str, str]) -> dict[str, str]:
+    environment = dict(parent)
+    for name in _TARGET_ENV_VARS:
+        environment.pop(name, None)
+    for name in tuple(environment):
+        if name.startswith("PKG_CONFIG_"):
+            environment.pop(name, None)
+    environment.pop("CCACHE", None)
+    return environment
+
+
+def _host_environment(parent: Mapping[str, str]) -> dict[str, str]:
+    environment = dict(parent)
+    for name in _TARGET_ENV_VARS:
+        environment.pop(name, None)
+    for name in tuple(environment):
+        if name.startswith("CARGO_TARGET_") or name.startswith("CMAKE_CROSSCOMPILING"):
+            environment.pop(name, None)
+    return environment
+
+
+def _host_tool_path(
+    paths: Mapping[str, str],
+    parent_path: str,
+    external_sdk_roots: Sequence[str | Path] = (),
+) -> str:
+    directories = list(dict.fromkeys(str(Path(path).parent) for path in paths.values()))
+    if parent_path:
+        for item in parent_path.split(os.pathsep):
+            if not item or item in directories:
+                continue
+            if any(_inside(Path(item), Path(root)) for root in external_sdk_roots):
+                continue
+            directories.append(item)
+    return os.pathsep.join(directories)
+
+
+def _validate_cpu_tuning(
+    tools: TargetTools, flags: tuple[str, ...], parent_environment: Mapping[str, str]
+) -> None:
+    if not flags:
+        return
+    environment = _clean_target_probe_environment(parent_environment)
+    for language, compiler in (("C", tools.cc), ("C++", tools.cxx)):
+        command = [
+            str(compiler),
+            *flags,
+            "-fsyntax-only",
+            "-x",
+            "c" if language == "C" else "c++",
+            "-",
+        ]
+        try:
+            result = subprocess.run(
+                command,
+                input="",
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=30,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise _build_error(
+                f"LLVM-MinGW {language} compiler probe",
+                f"Could not run {' '.join(command)}: {exc}",
+                CATEGORY_TARGET_DATA,
+                "wsl_mingw_cpu_tuning_probe_failed",
+            ) from exc
+        if result.returncode:
+            output = (result.stdout + result.stderr).strip()
+            raise _build_error(
+                f"LLVM-MinGW {language} compiler probe",
+                f"The selected compiler rejected {' '.join(flags)}."
+                + (f"\n{output[-2000:]}" if output else ""),
+                CATEGORY_TARGET_DATA,
+                "wsl_mingw_cpu_tuning_probe_failed",
+            )
 
 
 def _inside(path: Path, root: Path) -> bool:
@@ -288,6 +413,8 @@ def _require_executable(path: Path, label: str, prefix: Optional[Path] = None) -
 def _resolve_host_tools(parent_environment: Mapping[str, str]) -> HostTools:
     path_value = parent_environment.get("PATH", os.defpath)
     required = (
+        "cc",
+        "c++",
         "cmake",
         "meson",
         "ninja",
@@ -499,11 +626,273 @@ def _cuda_host_tools(preparation: WslMingwPreparation) -> DeferredCudaHostTools:
         return DeferredCudaHostTools()
     nvcc = Path(cuda.nvcc_path).resolve(strict=True)
     ccbin = Path(cuda.ccbin_path).resolve(strict=True)
+    root = Path(cuda.cuda_root).resolve(strict=True)
+    bin2c = root / "bin" / "bin2c"
+    if not _inside(nvcc, root) or not ccbin.is_file() or not os.access(ccbin, os.X_OK):
+        raise _build_error(
+            "CUDA host tools",
+            "The selected NVCC escaped its SDK root or the prepared host compiler is unavailable.",
+            CATEGORY_TARGET_DATA,
+            "wsl_mingw_cuda_host_tool_outside_root",
+        )
+    if not bin2c.is_file() or not os.access(bin2c, os.X_OK) or not _inside(bin2c, root):
+        raise _build_error(
+            "CUDA host tools",
+            f"The selected CUDA toolkit does not provide an executable bin2c: {bin2c}.",
+            CATEGORY_TARGET_DATA,
+            "wsl_mingw_cuda_bin2c_missing",
+        )
     return DeferredCudaHostTools(
         nvcc=nvcc,
+        toolkit_release=cuda.detected_cuda_version,
         ccbin=ccbin,
         common_flags=tuple(cuda.common_flags()),
         compute_architecture=cuda.compute_architecture,
+        compatibility_workaround=cuda.compatibility_workaround,
+        bin2c=bin2c.resolve(strict=True),
+        diagnostics=tuple(cuda.probe_diagnostics),
+    )
+
+
+def _cuda_host_environment(
+    tools: DeferredCudaHostTools,
+    preparation: WslMingwPreparation,
+    host_environment: Mapping[str, str],
+) -> dict[str, str]:
+    if tools.nvcc is None or preparation.cuda is None:
+        return {}
+    environment = _host_environment(host_environment)
+    root = str(Path(preparation.cuda.cuda_root).resolve(strict=True))
+    environment.update(
+        {
+            "CUDA_HOME": root,
+            "CUDA_PATH": root,
+            "CUDACXX": str(tools.nvcc),
+            "CUDA_NVCC_CCBIN": str(tools.ccbin),
+            "NVCC_PREPEND_FLAGS": shlex.join(tools.common_flags),
+        }
+    )
+    if tools.nvcc.parent.is_dir():
+        path = environment.get("PATH", "")
+        environment["PATH"] = str(tools.nvcc.parent) + (os.pathsep + path if path else "")
+    return environment
+
+
+def _validate_cuda_host_tools(
+    tools: DeferredCudaHostTools,
+    environment: Mapping[str, str],
+    scratch_root: Path,
+    target_tools: TargetTools,
+    target_environment: Mapping[str, str],
+) -> Mapping[str, Any]:
+    if tools.nvcc is None:
+        return {"configured": False}
+    if (
+        re.fullmatch(r"compute_(\d+)", tools.compute_architecture or "") is None
+        or tools.bin2c is None
+        or tools.ccbin is None
+        or tools.toolkit_release is None
+    ):
+        raise _build_error(
+            "CUDA host tools",
+            "The prepared CUDA profile lacks its release, architecture, ccbin, or bin2c.",
+            CATEGORY_TARGET_DATA,
+            "wsl_mingw_cuda_host_tools_incomplete",
+        )
+    probe_environment = dict(environment)
+    probe_environment["NVCC_PREPEND_FLAGS"] = ""
+    with tempfile.TemporaryDirectory(prefix="cuda-consumer-probe-", dir=scratch_root) as temporary:
+        scratch = Path(temporary)
+        source = scratch / "probe.cu"
+        source.write_text(
+            'extern "C" __global__ void g3_probe() {}\n',
+            encoding="utf-8",
+        )
+        common = [str(tools.nvcc), *tools.common_flags]
+        outcomes: dict[str, Any] = {
+            "configured": True,
+            "toolkit_release": tools.toolkit_release,
+            "nvcc": str(tools.nvcc),
+            "ccbin": str(tools.ccbin),
+            "architecture": tools.compute_architecture,
+            "common_flags": list(tools.common_flags),
+            "compatibility_workaround": tools.compatibility_workaround,
+            "bin2c": str(tools.bin2c),
+            "diagnostics": list(tools.diagnostics),
+            "modes": [],
+        }
+        for mode, output, code in (
+            ("ptx", scratch / "probe.ptx", "ptx"),
+            ("fatbin", scratch / "probe.fatbin", "fatbin"),
+        ):
+            mode_args = list(tools.device_mode_flags(mode))
+            command = [*common, *mode_args, str(source), "-o", str(output)]
+            try:
+                result = subprocess.run(
+                    command,
+                    env=probe_environment,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=120,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                raise _build_error(
+                    f"CUDA {mode} consumer probe",
+                    f"Could not run selected NVCC: {exc}",
+                    CATEGORY_TARGET_DATA,
+                    f"wsl_mingw_cuda_{code}_probe_failed",
+                ) from exc
+            if result.returncode or not output.is_file() or output.stat().st_size == 0:
+                detail = (result.stdout + result.stderr).strip()[-2000:]
+                raise _build_error(
+                    f"CUDA {mode} consumer probe",
+                    f"Selected NVCC failed to produce {mode} using the prepared architecture."
+                    + (f"\n{detail}" if detail else ""),
+                    CATEGORY_TARGET_DATA,
+                    f"wsl_mingw_cuda_{code}_probe_failed",
+                )
+            outcomes["modes"].append(
+                {"mode": mode, "suffix": output.suffix, "size": output.stat().st_size}
+            )
+            if mode == "fatbin":
+                generated_c = scratch / "probe.c"
+                command = [
+                    str(tools.bin2c),
+                    "-c",
+                    "-n",
+                    "g3_probe",
+                    str(output),
+                ]
+                try:
+                    result = subprocess.run(
+                        command,
+                        env=probe_environment,
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                        timeout=30,
+                    )
+                except (OSError, subprocess.SubprocessError) as exc:
+                    raise _build_error(
+                        "CUDA bin2c consumer probe",
+                        f"Could not run selected bin2c: {exc}",
+                        CATEGORY_TARGET_DATA,
+                        "wsl_mingw_cuda_bin2c_probe_failed",
+                    ) from exc
+                if result.returncode or not result.stdout.strip():
+                    detail = (result.stdout + result.stderr).strip()[-2000:]
+                    raise _build_error(
+                        "CUDA bin2c consumer probe",
+                        "Selected bin2c failed to convert the NVCC fatbin."
+                        + (f"\n{detail}" if detail else ""),
+                        CATEGORY_TARGET_DATA,
+                        "wsl_mingw_cuda_bin2c_probe_failed",
+                    )
+                generated_c.write_text(result.stdout, encoding="utf-8")
+                if "g3_probe" not in result.stdout:
+                    raise _build_error(
+                        "CUDA bin2c consumer probe",
+                        "Selected bin2c output does not contain the requested data symbol.",
+                        CATEGORY_TARGET_DATA,
+                        "wsl_mingw_cuda_bin2c_probe_failed",
+                    )
+                object_file = scratch / "probe-coff.o"
+                target_cflags = shlex.split(target_environment.get("CFLAGS", ""))
+                try:
+                    compile_result = subprocess.run(
+                        [
+                            str(target_tools.cc),
+                            *target_cflags,
+                            "-c",
+                            str(generated_c),
+                            "-o",
+                            str(object_file),
+                        ],
+                        env=dict(target_environment),
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                        timeout=60,
+                    )
+                except (OSError, subprocess.SubprocessError) as exc:
+                    raise _build_error(
+                        "CUDA generated-C target probe",
+                        f"Could not run LLVM-MinGW: {exc}",
+                        CATEGORY_TARGET_DATA,
+                        "wsl_mingw_cuda_coff_probe_failed",
+                    ) from exc
+                if compile_result.returncode or not object_file.is_file():
+                    detail = (compile_result.stdout + compile_result.stderr).strip()[-2000:]
+                    raise _build_error(
+                        "CUDA generated-C target probe",
+                        "LLVM-MinGW failed to compile bin2c output to a target object."
+                        + (f"\n{detail}" if detail else ""),
+                        CATEGORY_TARGET_DATA,
+                        "wsl_mingw_cuda_coff_probe_failed",
+                    )
+                _inspect_artifact(target_tools, object_file, executable=False)
+                harness = scratch / "probe-main.c"
+                harness.write_text(
+                    "extern const unsigned char g3_probe[];\n"
+                    "int main(void) { return g3_probe[0] == 0; }\n",
+                    encoding="utf-8",
+                )
+                executable = scratch / "probe.exe"
+                _run(
+                    [
+                        str(target_tools.cc),
+                        *target_cflags,
+                        str(harness),
+                        str(object_file),
+                        "-o",
+                        str(executable),
+                    ],
+                    env=target_environment,
+                )
+                _inspect_artifact(target_tools, executable, executable=True)
+                imports = _run(
+                    [str(target_tools.objdump), "-p", str(executable)],
+                    env=target_environment,
+                ).stdout.lower()
+                if ".so" in imports or "/usr/lib" in imports or "/opt/cuda" in imports:
+                    raise _build_error(
+                        "CUDA generated-C target probe",
+                        "The PE link contains a Linux or CUDA SDK runtime dependency.",
+                        CATEGORY_TARGET_DATA,
+                        "wsl_mingw_cuda_target_link_contamination",
+                    )
+                outcomes["generated_c"] = generated_c.name
+                outcomes["target_object"] = "COFF-x86-64"
+                outcomes["target_executable"] = "PE32+ x86-64"
+                outcomes["linux_runtime_leakage"] = False
+        return outcomes
+
+
+def _target_interface_projection(
+    prefix: Path, preparation: WslMingwPreparation
+) -> TargetInterfaceProjection:
+    vulkan = preparation.vulkan
+    shader_tools = {}
+    if vulkan is not None:
+        shader_tools = {
+            name: str(path)
+            for name, path in (
+                ("shader_compiler", vulkan.shader_compiler_path),
+                ("spirv_validator", vulkan.spirv_validator_path),
+                ("spirv_optimizer", vulkan.spirv_optimizer_path),
+            )
+            if path is not None
+        }
+    return TargetInterfaceProjection(
+        prefix=prefix,
+        vulkan_headers=prefix / "include" / "vulkan",
+        vulkan_registry=prefix / "share" / "vulkan" / "registry" / "vk.xml",
+        vulkan_import_library=prefix / "lib" / "libvulkan.a",
+        opencl_headers=prefix / "include" / "CL",
+        opencl_import_library=prefix / "lib" / "libOpenCL.a",
+        host_shader_tools=shader_tools,
+        runtime_dependencies=(),
     )
 
 
@@ -521,7 +910,8 @@ def _build_tuple() -> str:
 
 
 def _autotools_projection(
-    target: TargetTools, environment: Mapping[str, str], build_tuple: str
+    environment: Mapping[str, str],
+    build_tuple: str,
 ) -> AutotoolsProjection:
     host_tuple = TARGET_TRIPLE
     projected = {
@@ -660,7 +1050,11 @@ def _write_pkg_config_wrapper(
     return libdirs
 
 
-def _cmake_toolchain_content(tools: TargetTools, paths: CrossPaths, roots: Sequence[Path]) -> str:
+def _cmake_toolchain_content(
+    tools: TargetTools,
+    paths: CrossPaths,
+    roots: Sequence[Path],
+) -> str:
     cmake_roots = ";".join(str(root) for root in roots)
     return (
         "set(CMAKE_SYSTEM_NAME Windows)\n"
@@ -778,6 +1172,9 @@ def _write_manifest(environment: CrossEnvironment, diagnostics: Mapping[str, Any
         "generated_files": file_hashes,
         "target_tools": environment.target_tools.as_dict(),
         "host_tools": dict(sorted(environment.host_tools.paths.items())),
+        "cpu_tuning_flags": list(environment.cpu_tuning_flags),
+        "cargo_target": environment.rust_tools.target,
+        "cuda_host_contract": dict(environment.cuda_acceptance),
         "approved_target_roots": [str(root) for root in environment.approved_target_roots],
         "pkg_config_policy": {
             "libdirs": [
@@ -802,12 +1199,9 @@ def _write_manifest(environment: CrossEnvironment, diagnostics: Mapping[str, Any
         "target_input_materialization_id": environment.target_input_manifest.get(
             "materialization_id"
         ),
-        "deferred_fields": [
-            "validated_cpu_flags",
-            "scoped_cuda_consumers",
-            "builder_integration",
-            "transitive_target_cxx_runtime_metadata",
-            "directly_relevant_legacy_path_migration",
+        "g4_boundary": [
+            "full configured component stack and per-component adapters",
+            "physical Windows runtime acceptance and packaging",
         ],
         "diagnostics": diagnostics,
     }
@@ -865,10 +1259,23 @@ def construct_cross_environment(
         directory.mkdir(parents=True, exist_ok=True)
 
     target_tools = _resolve_target_tools(preparation)
+    cpu_tuning_flags = CPU_TUNING_FLAGS if config.native_build else ()
+    _validate_cpu_tuning(target_tools, cpu_tuning_flags, parent)
     host_tools = _resolve_host_tools(parent)
     rust_tools = _resolve_rust_tools(preparation, target_tools)
     cuda_tools = _cuda_host_tools(preparation)
-
+    host_sdk_roots: list[Path] = []
+    if preparation.cuda is not None:
+        host_sdk_roots.append(Path(preparation.cuda.cuda_root))
+    if preparation.vulkan is not None:
+        host_sdk_roots.extend(
+            (preparation.vulkan.selected_root, preparation.vulkan.effective_sdk_root)
+        )
+    host_environment = _host_environment(parent)
+    host_environment["PATH"] = _host_tool_path(
+        host_tools.paths, host_environment.get("PATH", os.defpath), host_sdk_roots
+    )
+    cuda_environment = _cuda_host_environment(cuda_tools, preparation, host_environment)
     input_identity = preparation.identity_summary or {}
     expected_materialization = input_identity.get("target_input_materialization_id")
     manifest_path = paths.target_prefix / "target-inputs.json"
@@ -952,19 +1359,23 @@ def construct_cross_environment(
     cmake_file = paths.generated_files_root / "cmake-toolchain.cmake"
     meson_file = paths.generated_files_root / "meson-cross.ini"
     cmake_file.write_text(
-        _cmake_toolchain_content(target_tools, paths, approved_roots), encoding="utf-8"
+        _cmake_toolchain_content(target_tools, paths, approved_roots),
+        encoding="utf-8",
     )
     meson_file.write_text(_meson_cross_content(target_tools, paths), encoding="utf-8")
 
     explicit_tools = target_tools.as_dict()
+    include_flags = f"-I{paths.target_prefix / 'include'}"
+    tuning_flags = " ".join(cpu_tuning_flags)
+    target_cflags = " ".join(part for part in (tuning_flags, include_flags) if part)
     environment.update(
         {
             **explicit_tools,
             "CPP": f"{target_tools.cc} -E",
             "RC": str(target_tools.windres),
-            "CFLAGS": f"-I{paths.target_prefix / 'include'}",
-            "CXXFLAGS": f"-I{paths.target_prefix / 'include'}",
-            "CPPFLAGS": f"-I{paths.target_prefix / 'include'}",
+            "CFLAGS": target_cflags,
+            "CXXFLAGS": target_cflags,
+            "CPPFLAGS": include_flags,
             "LDFLAGS": f"-L{paths.target_prefix / 'lib'}",
             "LIBS": "",
             "PKG_CONFIG": str(pkg_config_wrapper),
@@ -976,13 +1387,37 @@ def construct_cross_environment(
         }
     )
     # Host PATH remains usable but is never used to select target tools.
-    if "PATH" in parent:
-        environment["PATH"] = parent["PATH"]
+    if "PATH" in host_environment:
+        environment["PATH"] = host_environment["PATH"]
     else:
         environment.pop("PATH", None)
 
     build_tuple = _build_tuple()
-    autotools = _autotools_projection(target_tools, environment, build_tuple)
+    autotools = _autotools_projection(environment, build_tuple)
+    cargo_environment = dict(host_environment)
+    cargo_environment.update(rust_tools.environment())
+    rust_bin = str(rust_tools.cargo.parent)
+    cargo_environment["PATH"] = rust_bin + (
+        os.pathsep + cargo_environment["PATH"] if cargo_environment.get("PATH") else ""
+    )
+    target_suffix = rust_tools.target.replace("-", "_")
+    cargo_environment.update(
+        {
+            "CARGO_HOME": str(paths.generated_files_root / "cargo-home"),
+            "CARGO_TARGET_DIR": str(paths.build_root / "cargo-target"),
+            "PKG_CONFIG": str(pkg_config_wrapper),
+            "PKG_CONFIG_LIBDIR": os.pathsep.join(str(item) for item in pkg_config_libdirs),
+            "PKG_CONFIG_ALLOW_CROSS": "1",
+            f"CC_{target_suffix}": str(target_tools.cc),
+            f"CXX_{target_suffix}": str(target_tools.cxx),
+            f"AR_{target_suffix}": str(target_tools.ar),
+            f"CFLAGS_{target_suffix}": target_cflags,
+            f"CXXFLAGS_{target_suffix}": target_cflags,
+        }
+    )
+    cuda_acceptance = _validate_cuda_host_tools(
+        cuda_tools, cuda_environment, paths.generated_files_root, target_tools, environment
+    )
     discovery_environment = {
         name: environment[name]
         for name in (
@@ -1009,6 +1444,8 @@ def construct_cross_environment(
         paths=paths,
         host_tools=host_tools,
         target_tools=target_tools,
+        cpu_tuning_flags=cpu_tuning_flags,
+        host_environment=host_environment,
         compiler_environment=environment,
         target_discovery_environment=discovery_environment,
         pkg_config_wrapper=pkg_config_wrapper,
@@ -1017,7 +1454,11 @@ def construct_cross_environment(
         target_input_manifest=manifest_payload,
         rust_tools=rust_tools,
         rust_environment=rust_tools.environment(),
+        cargo_environment=cargo_environment,
         cuda_host_tools=cuda_tools,
+        cuda_environment=cuda_environment,
+        cuda_acceptance=cuda_acceptance,
+        target_interfaces=_target_interface_projection(paths.target_prefix, preparation),
         autotools=autotools,
         approved_target_roots=approved_roots,
         diagnostics=diagnostics,
@@ -1056,7 +1497,8 @@ def _write_pkg_fixtures(environment: CrossEnvironment, host_root: Path) -> tuple
     (target_pc / "g3-probe.pc").write_text(
         "prefix=" + str(target_prefix) + "\n"
         "Name: g3-probe\nDescription: target fixture\nVersion: 1.0\n"
-        "Cflags: -I${prefix}/include\nLibs: -L${prefix}/lib -lg3probe\n",
+        "Cflags: -I${prefix}/include\n"
+        "Libs: -L${prefix}/lib -lg3probe -lvulkan\n",
         encoding="utf-8",
     )
     (target_pc / "g3-malicious.pc").write_text(
@@ -1207,11 +1649,16 @@ def _run_cmake_probe(environment: CrossEnvironment, scratch: Path) -> dict[str, 
         "set(G3HostOnly_FOUND TRUE)\n", encoding="utf-8"
     )
     (project / "main.c").write_text(
-        "#include <vulkan/vulkan.h>\nint main(void) { return VK_SUCCESS; }\n",
+        "#include <vulkan/vulkan.h>\n"
+        "int g3_probe(void);\n"
+        "int main(void) { (void)vkGetInstanceProcAddr(VK_NULL_HANDLE, "
+        '"vkCreateInstance"); return g3_probe(); }\n',
         encoding="utf-8",
     )
     (project / "main.cpp").write_text(
-        "#include <CL/cl.h>\nint main() { return CL_SUCCESS; }\n",
+        "#include <CL/cl.h>\n"
+        "int main() { cl_uint count = 0; "
+        "return clGetPlatformIDs(0, nullptr, &count); }\n",
         encoding="utf-8",
     )
     (project / "CMakeLists.txt").write_text(
@@ -1245,6 +1692,7 @@ def _run_cmake_probe(environment: CrossEnvironment, scratch: Path) -> dict[str, 
             str(build),
             "-G",
             "Ninja",
+            "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
             f"-DCMAKE_TOOLCHAIN_FILE={environment.cmake_toolchain_file}",
             f"-DCMAKE_PREFIX_PATH={host_prefix}",
         ],
@@ -1254,6 +1702,17 @@ def _run_cmake_probe(environment: CrossEnvironment, scratch: Path) -> dict[str, 
     c_exe, cpp_exe = build / "g3_c.exe", build / "g3_cpp.exe"
     _inspect_artifact(environment.target_tools, c_exe, executable=True)
     _inspect_artifact(environment.target_tools, cpp_exe, executable=True)
+    compile_commands = json.loads((build / "compile_commands.json").read_text(encoding="utf-8"))
+    if len(compile_commands) != 2 or any(
+        entry["command"].count("-march=native") != 1 or entry["command"].count("-mtune=native") != 1
+        for entry in compile_commands
+    ):
+        raise _build_error(
+            "G3 CMake acceptance",
+            "CMake did not apply each target CPU tuning flag exactly once to C and C++.",
+            CATEGORY_TARGET_DATA,
+            "wsl_mingw_cmake_target_flags_invalid",
+        )
     compiler_files = list((build / "CMakeFiles").rglob("CMakeCCompiler.cmake"))
     cxx_compiler_files = list((build / "CMakeFiles").rglob("CMakeCXXCompiler.cmake"))
     c_compiler_record = compiler_files[0].read_text(encoding="utf-8") if compiler_files else ""
@@ -1299,7 +1758,10 @@ def _run_meson_probe(environment: CrossEnvironment, scratch: Path) -> dict[str, 
     build = scratch / "meson-build"
     project.mkdir()
     (project / "main.c").write_text(
-        "#include <vulkan/vulkan.h>\nint main(void) { return VK_SUCCESS; }\n",
+        "#include <vulkan/vulkan.h>\n"
+        "int g3_probe(void);\n"
+        "int main(void) { (void)vkGetInstanceProcAddr(VK_NULL_HANDLE, "
+        '"vkCreateInstance"); return g3_probe(); }\n',
         encoding="utf-8",
     )
     (project / "meson.build").write_text(
@@ -1324,6 +1786,20 @@ def _run_meson_probe(environment: CrossEnvironment, scratch: Path) -> dict[str, 
         env=env,
     )
     _run([environment.host_tools["meson"], "compile", "-C", str(build)], env=env)
+    command_lines = _run(
+        [environment.host_tools["ninja"], "-C", str(build), "-t", "commands"], env=env
+    ).stdout.splitlines()
+    if len(command_lines) != 2 or any(
+        line.count("-march=native") != 1 or line.count("-mtune=native") != 1
+        for line in command_lines
+    ):
+        raise _build_error(
+            "G3 Meson acceptance",
+            "Meson did not apply each target CPU tuning flag exactly once.\n"
+            f"Commands:\n{chr(10).join(command_lines)[-3000:]}",
+            CATEGORY_TARGET_DATA,
+            "wsl_mingw_meson_target_flags_invalid",
+        )
     machines = json.loads(
         _run(
             [environment.host_tools["meson"], "introspect", "--machines", str(build)],
@@ -1405,16 +1881,487 @@ def _run_autotools_probe(environment: CrossEnvironment, scratch: Path) -> dict[s
     }
 
 
+def _run_mixed_role_probe(environment: CrossEnvironment, scratch: Path) -> dict[str, Any]:
+    host_environment = dict(environment.host_environment)
+    if any(name in host_environment for name in ("CC", "CFLAGS", "CXXFLAGS", "RUSTFLAGS")):
+        raise _build_error(
+            "G3 mixed-role acceptance",
+            "Host-tool environment contains target compiler or tuning variables.",
+            CATEGORY_TARGET_DATA,
+            "wsl_mingw_mixed_host_environment_contaminated",
+        )
+    generator_source = scratch / "host-generator.c"
+    generator_source.write_text(
+        "#include <stdio.h>\n"
+        "int main(int argc, char **argv) {\n"
+        "  if (argc != 2) return 2;\n"
+        '  FILE *out = fopen(argv[1], "w");\n'
+        "  if (!out) return 3;\n"
+        '  fputs("int g3_generated_value(void) { return 73; }\\n", out);\n'
+        "  return fclose(out) != 0;\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    generator = scratch / "host-generator"
+    _run(
+        [environment.host_tools["cc"], str(generator_source), "-o", str(generator)],
+        env=host_environment,
+    )
+    host_headers = _run(["readelf", "-h", str(generator)], env=host_environment).stdout
+    if "ELF64" not in host_headers or "Advanced Micro Devices X86-64" not in host_headers:
+        raise _build_error(
+            "G3 mixed-role acceptance",
+            "Host generator is not a WSL-runnable x86-64 ELF executable.",
+            CATEGORY_TARGET_DATA,
+            "wsl_mingw_mixed_host_artifact_invalid",
+        )
+    generated_source = scratch / "generated-target.c"
+    _run([str(generator), str(generated_source)], env=host_environment)
+    generated_text = generated_source.read_text(encoding="utf-8")
+    if generated_text != "int g3_generated_value(void) { return 73; }\n":
+        raise _build_error(
+            "G3 mixed-role acceptance",
+            "The host generator did not emit the expected source-only boundary artifact.",
+            CATEGORY_TARGET_DATA,
+            "wsl_mingw_mixed_generated_source_invalid",
+        )
+    target_flags = shlex.split(environment.compiler_environment.get("CFLAGS", ""))
+    target_object = scratch / "generated-target.o"
+    target_executable = scratch / "generated-target.exe"
+    target_main = scratch / "target-main.c"
+    target_main.write_text(
+        "int g3_generated_value(void);\n" "int main(void) { return g3_generated_value() != 73; }\n",
+        encoding="utf-8",
+    )
+    _run(
+        [
+            str(environment.target_tools.cc),
+            *target_flags,
+            "-c",
+            str(generated_source),
+            "-o",
+            str(target_object),
+        ],
+        env=environment.compiler_environment,
+    )
+    _run(
+        [
+            str(environment.target_tools.cc),
+            *target_flags,
+            str(target_main),
+            str(target_object),
+            "-o",
+            str(target_executable),
+        ],
+        env=environment.compiler_environment,
+        timeout=120,
+    )
+    _inspect_artifact(environment.target_tools, target_object, executable=False)
+    _inspect_artifact(environment.target_tools, target_executable, executable=True)
+    return {
+        "host_generator": "ELF64 x86-64 and executed on WSL",
+        "generated_boundary": "plain C source",
+        "target_object": "COFF-x86-64",
+        "target_executable": "PE32+ x86-64",
+        "target_compiler": str(environment.target_tools.cc),
+        "host_compiler": environment.host_tools["cc"],
+        "host_target_library_leakage": False,
+    }
+
+
+def _run_role_environment_probe(environment: CrossEnvironment) -> dict[str, Any]:
+    from .builder import FFmpegBuilder
+    from .components import BuildRole, BuildSystem, Component, ComponentCategory
+    from .platforms.linux_cross_mingw import LinuxCrossMingwPlatform
+
+    builder = object.__new__(FFmpegBuilder)
+    builder.platform_strategy = LinuxCrossMingwPlatform()
+    builder.platform_context = type("Context", (), {"cross_environment": environment})()
+    builder.toolchain_env = {}
+    builder.config = BuildConfig(target_backend=TARGET_BACKEND_CROSS_MINGW)
+    builder.env = {}
+    roles = {
+        system: Component(
+            name=f"g3-{system.value}",
+            version="1",
+            url="https://invalid.example/g3-probe.tar.gz",
+            category=ComponentCategory.BUILD_TOOL,
+            build_system=system,
+            build_role=BuildRole.TARGET,
+        )
+        for system in (
+            BuildSystem.AUTOTOOLS,
+            BuildSystem.CMAKE,
+            BuildSystem.MESON,
+            BuildSystem.MAKE_ONLY,
+        )
+    }
+    host_component = Component(
+        name="g3-host-generator",
+        version="1",
+        url="https://invalid.example/g3-generator.tar.gz",
+        category=ComponentCategory.BUILD_TOOL,
+        build_system=BuildSystem.CUSTOM,
+        build_role=BuildRole.HOST,
+    )
+    mixed_component = Component(
+        name="g3-mixed-recipe",
+        version="1",
+        url="https://invalid.example/g3-mixed.tar.gz",
+        category=ComponentCategory.OTHER_LIB,
+        build_system=BuildSystem.CUSTOM,
+        build_role=BuildRole.MIXED,
+    )
+    cargo_component = Component(
+        name="g3-cargo-target",
+        version="1",
+        url="https://invalid.example/g3-cargo.tar.gz",
+        category=ComponentCategory.OTHER_LIB,
+        build_system=BuildSystem.CARGO,
+        build_role=BuildRole.TARGET,
+    )
+    target_environments = {
+        system.value: builder.get_build_env(component) for system, component in roles.items()
+    }
+    for label, projected in target_environments.items():
+        if (
+            projected.get("CC") != str(environment.target_tools.cc)
+            or projected.get("CFLAGS", "").split().count("-march=native") != 1
+            or projected.get("CFLAGS", "").split().count("-mtune=native") != 1
+            or projected.get("PKG_CONFIG") != str(environment.pkg_config_wrapper)
+        ):
+            raise _build_error(
+                "G3 builder role acceptance",
+                f"The {label} target helper did not consume the target compiler, flags, "
+                "and target pkg-config projection.",
+                CATEGORY_TARGET_DATA,
+                "wsl_mingw_builder_target_projection_invalid",
+            )
+    host_environment = builder.get_build_env(host_component)
+    if (
+        "CC" in host_environment
+        or "PKG_CONFIG" in host_environment
+        or "-march=native" in host_environment.get("CFLAGS", "")
+        or "-mtune=native" in host_environment.get("CFLAGS", "")
+        or "-march=native" in host_environment.get("CXXFLAGS", "")
+        or "-mtune=native" in host_environment.get("CXXFLAGS", "")
+    ):
+        raise _build_error(
+            "G3 builder role acceptance",
+            "HOST_TOOL received target compiler, flags, or pkg-config settings.",
+            CATEGORY_TARGET_DATA,
+            "wsl_mingw_builder_host_projection_invalid",
+        )
+    cargo_environment = builder.get_build_env(cargo_component)
+    if (
+        cargo_environment.get("CARGO_BUILD_TARGET") != environment.rust_tools.target
+        or cargo_environment.get("RUSTC") != str(environment.rust_tools.rustc)
+        or "CFLAGS" in cargo_environment
+        or "RUSTFLAGS" in cargo_environment
+        or not _inside(
+            Path(cargo_environment["CARGO_TARGET_DIR"]), environment.paths.workspace_root
+        )
+    ):
+        raise _build_error(
+            "G3 Cargo builder acceptance",
+            "Cargo does not use the project-managed target contract and identity-local target dir.",
+            CATEGORY_TARGET_DATA,
+            "wsl_mingw_cargo_builder_projection_invalid",
+        )
+    try:
+        builder.get_build_env(mixed_component)
+    except BuildError as exc:
+        if exc.code != "wsl_mingw_mixed_role_requires_recipe":
+            raise
+    else:
+        raise _build_error(
+            "G3 mixed-role builder acceptance",
+            "MIXED components must not receive one ambiguous shared environment.",
+            CATEGORY_TARGET_DATA,
+            "wsl_mingw_mixed_role_projection_ambiguous",
+        )
+    mixed_host, mixed_target = builder.get_mixed_build_environments(mixed_component)
+    if (
+        "CC" in mixed_host
+        or "-march=native" in mixed_host.get("CFLAGS", "")
+        or mixed_target.get("CC") != str(environment.target_tools.cc)
+    ):
+        raise _build_error(
+            "G3 mixed-role builder acceptance",
+            "MIXED recipe contexts did not separate host and target tools.",
+            CATEGORY_TARGET_DATA,
+            "wsl_mingw_mixed_role_projection_invalid",
+        )
+    return {
+        "target_build_systems": sorted(target_environments),
+        "host_tool": "host environment and host prefix",
+        "mixed": "separate host and target environments",
+        "cargo": "project-managed target tools and identity-local Cargo target directory",
+        "msys_semantics": False,
+    }
+
+
+def _run_cargo_probe(environment: CrossEnvironment, scratch: Path) -> dict[str, Any]:
+    project = scratch / "cargo-project"
+    source_dir = project / "src"
+    source_dir.mkdir(parents=True)
+    (project / "Cargo.toml").write_text(
+        '[package]\nname = "g3_rust_probe"\nversion = "0.1.0"\nedition = "2021"\n'
+        '[lib]\ncrate-type = ["staticlib"]\n'
+        'build = "build.rs"\n',
+        encoding="utf-8",
+    )
+    (project / "build.rs").write_text(
+        "fn main() {\n"
+        '  let host = std::env::var("HOST").expect("Cargo HOST");\n'
+        '  let target = std::env::var("TARGET").expect("Cargo TARGET");\n'
+        '  assert_ne!(host, target, "Cargo build script must run for the host");\n'
+        '  println!("cargo:warning=G3_HOST_TARGET={host}|{target}");\n'
+        "}\n",
+        encoding="utf-8",
+    )
+    (source_dir / "lib.rs").write_text(
+        "#[no_mangle]\n" 'pub extern "C" fn g3_rust_value() -> i32 { 73 }\n',
+        encoding="utf-8",
+    )
+    cargo_environment = dict(environment.cargo_environment)
+    cargo_environment["CARGO_HOME"] = str(scratch / "cargo-home")
+    cargo_environment["CARGO_TARGET_DIR"] = str(scratch / "cargo-target")
+    cargo_environment["CARGO_NET_OFFLINE"] = "true"
+    if any(key in cargo_environment for key in ("CC", "CFLAGS", "CXXFLAGS", "RUSTFLAGS")):
+        raise _build_error(
+            "G3 Cargo acceptance",
+            "Cargo's host environment contains generic target compiler or tuning variables.",
+            CATEGORY_TARGET_DATA,
+            "wsl_mingw_cargo_host_environment_contaminated",
+        )
+    result = _run(
+        [
+            str(environment.rust_tools.cargo),
+            "build",
+            "--offline",
+            "--release",
+            "--target",
+            environment.rust_tools.target,
+            "--manifest-path",
+            str(project / "Cargo.toml"),
+            "-vv",
+        ],
+        env=cargo_environment,
+        timeout=180,
+    )
+    output = result.stdout + result.stderr
+    host_target_line = next((line for line in output.splitlines() if "G3_HOST_TARGET=" in line), "")
+    if not host_target_line or environment.rust_tools.target not in host_target_line:
+        raise _build_error(
+            "G3 Cargo acceptance",
+            "Cargo did not run its build script for the host while targeting Windows.",
+            CATEGORY_TARGET_DATA,
+            "wsl_mingw_cargo_host_target_boundary_invalid",
+        )
+    archive = (
+        Path(cargo_environment["CARGO_TARGET_DIR"])
+        / environment.rust_tools.target
+        / "release"
+        / "libg3_rust_probe.a"
+    )
+    if not archive.is_file():
+        raise _build_error(
+            "G3 Cargo acceptance",
+            "Cargo did not produce the expected Windows static library.",
+            CATEGORY_TARGET_DATA,
+            "wsl_mingw_cargo_staticlib_missing",
+        )
+    archive_headers = _run(
+        [str(environment.target_tools.readobj), "--file-headers", str(archive)],
+        env=environment.compiler_environment,
+    ).stdout
+    if "ELF" in archive_headers or "COFF-x86-64" not in archive_headers:
+        raise _build_error(
+            "G3 Cargo acceptance",
+            "The Rust static library contains non-Windows or non-x86-64 objects.",
+            CATEGORY_TARGET_DATA,
+            "wsl_mingw_cargo_staticlib_format_invalid",
+        )
+    harness = scratch / "rust-harness.c"
+    harness.write_text(
+        "extern int g3_rust_value(void);\n" "int main(void) { return g3_rust_value() != 73; }\n",
+        encoding="utf-8",
+    )
+    executable = scratch / "rust-harness.exe"
+    _run(
+        [
+            str(environment.target_tools.cc),
+            *shlex.split(environment.compiler_environment.get("CFLAGS", "")),
+            str(harness),
+            str(archive),
+            "-o",
+            str(executable),
+        ],
+        env=environment.compiler_environment,
+    )
+    _inspect_artifact(environment.target_tools, executable, executable=True)
+    return {
+        "cargo": str(environment.rust_tools.cargo),
+        "rustc": str(environment.rust_tools.rustc),
+        "target": environment.rust_tools.target,
+        "target_std": str(environment.rust_tools.target_std),
+        "identity_local_cargo_home": cargo_environment["CARGO_HOME"],
+        "identity_local_target_dir": cargo_environment["CARGO_TARGET_DIR"],
+        "build_script_host_target": host_target_line.rsplit("G3_HOST_TARGET=", 1)[-1],
+        "staticlib": "COFF-x86-64",
+        "c_harness": "PE32+ x86-64",
+        "ambient_rustup_used": False,
+    }
+
+
+def _run_cpp_metadata_probe(environment: CrossEnvironment, scratch: Path) -> dict[str, Any]:
+    include_flags = shlex.split(environment.compiler_environment.get("CXXFLAGS", ""))
+    cc = str(environment.target_tools.cc)
+    cxx = str(environment.target_tools.cxx)
+    source_b = scratch / "cpp-b.cpp"
+    source_a = scratch / "cpp-a.cpp"
+    source_main = scratch / "cpp-main.c"
+    source_b.write_text(
+        '#include <string>\nextern "C" int g3_b_value(void) '
+        '{ std::string text("g3"); return static_cast<int>(text.size()); }\n',
+        encoding="utf-8",
+    )
+    source_a.write_text(
+        'extern "C" int g3_b_value(void);\n'
+        'extern "C" int g3_a_value(void) { return g3_b_value(); }\n',
+        encoding="utf-8",
+    )
+    source_main.write_text(
+        "extern int g3_a_value(void);\n" "int main(void) { return g3_a_value() != 2; }\n",
+        encoding="utf-8",
+    )
+    object_b, object_a = scratch / "cpp-b.o", scratch / "cpp-a.o"
+    archive_b, archive_a = scratch / "libg3b.a", scratch / "libg3a.a"
+    _run(
+        [cxx, *include_flags, "-c", str(source_b), "-o", str(object_b)],
+        env=environment.compiler_environment,
+    )
+    _run(
+        [str(environment.target_tools.ar), "rcs", str(archive_b), str(object_b)],
+        env=environment.compiler_environment,
+    )
+    _run(
+        [cxx, *include_flags, "-c", str(source_a), "-o", str(object_a)],
+        env=environment.compiler_environment,
+    )
+    _run(
+        [str(environment.target_tools.ar), "rcs", str(archive_a), str(object_a)],
+        env=environment.compiler_environment,
+    )
+
+    metadata_a = TargetLinkMetadata(
+        library_roots=(str(scratch),),
+        public_link_requirements=("-lg3b",),
+        provenance=("G3 static A-to-B fixture",),
+    )
+    metadata_b = TargetLinkMetadata(
+        private_transitive_link_requirements=("-lc++", "-lunwind"),
+        runtime_dependencies=(
+            RuntimeDependency("libc++.dll", "target-runtime", "llvm-mingw-ucrt"),
+            RuntimeDependency("libunwind.dll", "target-runtime", "llvm-mingw-ucrt"),
+        ),
+        provenance=("G3 static C++ runtime fixture",),
+    )
+    metadata = compose_target_link_metadata(metadata_a, metadata_b)
+    roots = tuple(f"-L{root}" for root in metadata.library_roots)
+    executable = scratch / "cpp-metadata.exe"
+    link_command = [
+        cc,
+        *shlex.split(environment.compiler_environment.get("CFLAGS", "")),
+        str(source_main),
+        str(archive_a),
+        *roots,
+        *metadata.consumer_link_requirements,
+        "-o",
+        str(executable),
+    ]
+    _run(link_command, env=environment.compiler_environment)
+    _inspect_artifact(environment.target_tools, executable, executable=True)
+    negative = subprocess.run(
+        [
+            cc,
+            *shlex.split(environment.compiler_environment.get("CFLAGS", "")),
+            str(source_main),
+            str(archive_a),
+            *roots,
+            "-lg3b",
+            "-o",
+            str(scratch / "cpp-metadata-negative.exe"),
+        ],
+        env=dict(environment.compiler_environment),
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+    )
+    if negative.returncode == 0 or not any(
+        marker in negative.stderr for marker in ("std::__1", "_ZNSt3__1", "operator new")
+    ):
+        raise _build_error(
+            "G3 target-link metadata acceptance",
+            "Removing transitive C++ runtime metadata did not fail for a missing C++ runtime "
+            f"symbol as expected.\n{(negative.stdout + negative.stderr)[-2000:]}",
+            CATEGORY_TARGET_DATA,
+            "wsl_mingw_cpp_link_negative_case_invalid",
+        )
+    imports = _run(
+        [str(environment.target_tools.objdump), "-p", str(executable)],
+        env=environment.compiler_environment,
+    ).stdout
+    if any(value in imports.lower() for value in (".so", "/usr/lib", "/opt/cuda")):
+        raise _build_error(
+            "G3 target-link metadata acceptance",
+            "The PE output imports a Linux or CUDA SDK runtime dependency.",
+            CATEGORY_TARGET_DATA,
+            "wsl_mingw_cpp_link_contamination",
+        )
+    return {
+        "transitive_requirements": list(metadata.consumer_link_requirements),
+        "runtime_dependencies": [
+            {
+                "name": item.name,
+                "classification": item.classification,
+                "source_identity": item.source_identity,
+            }
+            for item in metadata.runtime_dependencies
+        ],
+        "positive_link": "PE32+ x86-64",
+        "negative_link": negative.stderr[-1500:],
+        "runtime_imports": [
+            line.strip() for line in imports.splitlines() if ".dll" in line.lower()
+        ],
+        "linux_runtime_leakage": False,
+    }
+
+
 def run_cross_environment_acceptance(environment: CrossEnvironment) -> Mapping[str, Any]:
-    """Run isolated real compiler, pkg-config, CMake, Meson, and Autotools probes."""
+    """Run isolated compiler, build-system, role, Rust, and target-link probes."""
     root = environment.paths.diagnostics_root
     outcome: dict[str, Any] = {}
     with tempfile.TemporaryDirectory(prefix="g3-acceptance-", dir=root) as temporary:
         scratch = Path(temporary)
         fixtures = _write_pkg_fixtures(environment, scratch / "host-pkgconfig")
+        probe_source = scratch / "g3probe.c"
+        probe_source.write_text("int g3_probe(void) { return 0; }\n", encoding="utf-8")
         probe_object = scratch / "g3probe.o"
-        probe_object.write_text("int g3_probe(void) { return 0; }\n", encoding="utf-8")
         probe_library = environment.paths.target_prefix / "lib" / "libg3probe.a"
+        _run(
+            [
+                str(environment.target_tools.cc),
+                *shlex.split(environment.compiler_environment.get("CFLAGS", "")),
+                "-c",
+                str(probe_source),
+                "-o",
+                str(probe_object),
+            ],
+            env=environment.compiler_environment,
+        )
         _run(
             [str(environment.target_tools.ar), "rcs", str(probe_library), str(probe_object)],
             env=environment.compiler_environment,
@@ -1422,9 +2369,14 @@ def run_cross_environment_acceptance(environment: CrossEnvironment) -> Mapping[s
         try:
             outcome["pkg_config"] = _run_pkg_config_probes(environment, scratch, fixtures)
             outcome["compiler"] = _run_compiler_probes(environment, scratch)
+            outcome["builder_roles"] = _run_role_environment_probe(environment)
             outcome["cmake"] = _run_cmake_probe(environment, scratch)
             outcome["meson"] = _run_meson_probe(environment, scratch)
             outcome["autotools"] = _run_autotools_probe(environment, scratch)
+            outcome["mixed_role"] = _run_mixed_role_probe(environment, scratch)
+            outcome["cargo"] = _run_cargo_probe(environment, scratch)
+            outcome["transitive_cpp_link"] = _run_cpp_metadata_probe(environment, scratch)
+            outcome["cuda"] = environment.cuda_acceptance
         finally:
             for path in fixtures:
                 path.unlink(missing_ok=True)

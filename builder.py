@@ -48,7 +48,7 @@ from .builders.network.srt import build_srt
 from .builders.network.zmq import build_libzmq
 from .builders.tools.meson import build_meson as build_meson_component
 from .builders.tools.ninja import build_ninja
-from .components import BuildSystem, Component, ComponentRegistry
+from .components import BuildRole, BuildSystem, Component, ComponentRegistry
 from .config import BuildConfig, TARGET_BACKEND_CROSS_MINGW
 from .downloader import AsyncDownloadManager, Downloader
 from .executor import CommandExecutor, ExecutionResult
@@ -129,6 +129,7 @@ class FFmpegBuilder:
         self.state_manager = state_manager
         self.platform_detector = platform_detector
         self.toolchain_env = toolchain_env or {}
+        self._active_build_component: Optional[Component] = None
 
         self.executor = CommandExecutor(self.workspace)
         self.downloader = Downloader(
@@ -425,7 +426,31 @@ class FFmpegBuilder:
 
         return None, None
 
-    def _ws_str(self) -> str:
+    @property
+    def target_prefix(self) -> Path:
+        """Return the prefix owned by the active cross identity, or native workspace."""
+        cross = self.platform_context.cross_environment
+        if isinstance(self.platform_strategy, LinuxCrossMingwPlatform) and cross is not None:
+            return cross.paths.target_prefix
+        return self.workspace
+
+    def _component_prefix(self, component: Optional[Component] = None) -> Path:
+        cross = self.platform_context.cross_environment
+        active = component or self._active_build_component
+        if not isinstance(self.platform_strategy, LinuxCrossMingwPlatform) or cross is None:
+            return self.workspace
+        role = active.build_role if active is not None else BuildRole.TARGET
+        if role == BuildRole.HOST:
+            return cross.paths.workspace_root / "host-prefix"
+        if role == BuildRole.MIXED:
+            raise BuildError(
+                active.name if active is not None else "mixed-role component",
+                "Mixed-role recipes must use separate host and target environments explicitly.",
+                code="wsl_mingw_mixed_role_requires_recipe",
+            )
+        return cross.paths.target_prefix
+
+    def _ws_str(self, component: Optional[Component] = None) -> str:
         """Return workspace path as a forward-slash string.
 
         On Windows backslashes in path strings can be interpreted as escape
@@ -435,8 +460,10 @@ class FFmpegBuilder:
         tool arguments (CMake, Meson prefix, pkg-config).
         """
         if self.platform_strategy is not None:
-            return self.platform_strategy.normalize_path(self.workspace, self.platform_context)
-        return str(self.workspace).replace("\\", "/")
+            return self.platform_strategy.normalize_path(
+                self._component_prefix(component), self.platform_context
+            )
+        return str(self._component_prefix(component)).replace("\\", "/")
 
     def _normalize_pkg_config_path_for_msys(self, value: str) -> str:
         """Normalize PKG_CONFIG_PATH to MSYS style for UCRT64 subprocesses.
@@ -715,9 +742,38 @@ class FFmpegBuilder:
         Returns:
             Environment dictionary.
         """
-        env = self.env.copy()
+        cross = self.platform_context.cross_environment
+        if isinstance(self.platform_strategy, LinuxCrossMingwPlatform) and cross is not None:
+            role = component.build_role if component is not None else BuildRole.TARGET
+            if role == BuildRole.MIXED:
+                raise BuildError(
+                    component.name if component is not None else "mixed-role component",
+                    "Mixed-role recipes must consume host and target environments separately.",
+                    code="wsl_mingw_mixed_role_requires_recipe",
+                )
+            if role == BuildRole.HOST:
+                env = dict(cross.host_environment)
+                prefix = cross.paths.workspace_root / "host-prefix"
+                env["CFLAGS"] = f"-I{prefix / 'include'}"
+                env["CXXFLAGS"] = f"-I{prefix / 'include'}"
+                env["CPPFLAGS"] = f"-I{prefix / 'include'}"
+                env["LDFLAGS"] = f"-L{prefix / 'lib'}"
+                env["CMAKE_PREFIX_PATH"] = str(prefix)
+                env["PKG_CONFIG_PATH"] = os.pathsep.join(
+                    (str(prefix / "lib" / "pkgconfig"), str(prefix / "lib64" / "pkgconfig"))
+                )
+            else:
+                env = dict(cross.compiler_environment)
+                if component is not None and component.build_system == BuildSystem.CARGO:
+                    env = dict(cross.cargo_environment)
+            if component is None:
+                return env
+        else:
+            env = self.env.copy()
 
-        if component:
+        if component and not (
+            isinstance(self.platform_strategy, LinuxCrossMingwPlatform) and cross is not None
+        ):
             if self.platform in component.platform_overrides:
                 override = component.platform_overrides[self.platform]
                 env.update(override.extra_env)
@@ -741,6 +797,35 @@ class FFmpegBuilder:
                         env[key] = extra[key]
 
         return env
+
+    def get_mixed_build_environments(
+        self, component: Component
+    ) -> Tuple[Dict[str, str], Dict[str, str]]:
+        """Return isolated host-tool and target-build environments for a mixed recipe."""
+        cross = self.platform_context.cross_environment
+        if not isinstance(self.platform_strategy, LinuxCrossMingwPlatform) or cross is None:
+            raise BuildError(
+                component.name,
+                "Separate host/target projections are available only for linux-cross-mingw.",
+                code="wsl_mingw_cross_environment_missing",
+            )
+        host_component = Component(
+            name=component.name,
+            version=component.version,
+            url=component.url,
+            category=component.category,
+            build_system=component.build_system,
+            build_role=BuildRole.HOST,
+        )
+        target_component = Component(
+            name=component.name,
+            version=component.version,
+            url=component.url,
+            category=component.category,
+            build_system=component.build_system,
+            build_role=BuildRole.TARGET,
+        )
+        return self.get_build_env(host_component), self.get_build_env(target_component)
 
     @staticmethod
     def _prepend_python_module_parent_to_pythonpath(
@@ -847,6 +932,15 @@ class FFmpegBuilder:
         Args:
             component: Component to build.
         """
+        previous = self._active_build_component
+        self._active_build_component = component
+        try:
+            self._build_component_impl(component)
+        finally:
+            self._active_build_component = previous
+
+    def _build_component_impl(self, component: Component) -> None:
+        """Run component build with its role-scoped environment and prefix."""
         if component.name == "vulkan-headers":
             invalidate_vulkan_resume(self.state_manager, self.workspace, [component])
         if self.state_manager.is_component_completed(component.name, component.version):

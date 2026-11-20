@@ -7,6 +7,11 @@ from typing import Any, Callable, Dict, List, Optional
 
 import yaml
 
+from .cross_build_contracts import (
+    RuntimeDependency,
+    TargetLinkMetadata,
+    compose_target_link_metadata,
+)
 from .config import SUPPORTED_TARGET_BACKENDS
 
 # Per-component toolchain gate used by get_buildable(): returns True when the
@@ -49,6 +54,14 @@ class ComponentCategory(str, Enum):
     OTHER_LIB = "other_lib"
     HW_ACCEL = "hw_accel"
     TARGET = "target"
+
+
+class BuildRole(str, Enum):
+    """Execution domain used by the cross backend."""
+
+    HOST = "host"
+    TARGET = "target"
+    MIXED = "mixed"
 
 
 @dataclass
@@ -139,6 +152,8 @@ class Component:
     target_backends: List[str] = field(default_factory=list)
     target_headers: List[TargetHeaderTree] = field(default_factory=list)
     target_import_interface: Optional[TargetImportInterface] = None
+    build_role: BuildRole = BuildRole.TARGET
+    target_link_metadata: TargetLinkMetadata = field(default_factory=TargetLinkMetadata)
 
     def with_version(self, version: str) -> "Component":
         """Return this component resolved to a declared source version."""
@@ -361,6 +376,59 @@ class ComponentRegistry:
                 output=output,
                 symbols=symbols,
             )
+        try:
+            build_role = BuildRole(data.get("build_role", BuildRole.TARGET.value))
+        except ValueError as exc:
+            raise ValueError(f"unknown build_role {data.get('build_role')!r}") from exc
+        link_data = data.get("target_link_metadata") or {}
+        if not isinstance(link_data, dict):
+            raise ValueError("target_link_metadata must be a mapping")
+
+        def _link_values(key: str) -> tuple[str, ...]:
+            values = link_data.get(key) or []
+            if not isinstance(values, list) or not all(
+                isinstance(value, str) and value for value in values
+            ):
+                raise ValueError(f"target_link_metadata.{key} must be a list of strings")
+            return tuple(values)
+
+        runtime_data = link_data.get("runtime_dependencies") or []
+        if not isinstance(runtime_data, list):
+            raise ValueError("target_link_metadata.runtime_dependencies must be a list")
+        runtime_dependencies = []
+        for item in runtime_data:
+            if (
+                not isinstance(item, dict)
+                or not isinstance(item.get("name"), str)
+                or not item["name"]
+                or not isinstance(item.get("classification"), str)
+                or not item["classification"]
+                or not isinstance(item.get("source_identity"), str)
+                or not item["source_identity"]
+            ):
+                raise ValueError(
+                    "each target runtime dependency needs name, classification, "
+                    "and source_identity"
+                )
+            runtime_dependencies.append(
+                RuntimeDependency(
+                    name=item["name"],
+                    classification=item["classification"],
+                    source_identity=item["source_identity"],
+                )
+            )
+        target_link_metadata = TargetLinkMetadata(
+            include_roots=_link_values("include_roots"),
+            library_roots=_link_values("library_roots"),
+            static_libraries=_link_values("static_libraries"),
+            import_interfaces=_link_values("import_interfaces"),
+            public_link_requirements=_link_values("public_link_requirements"),
+            private_transitive_link_requirements=_link_values(
+                "private_transitive_link_requirements"
+            ),
+            runtime_dependencies=tuple(runtime_dependencies),
+            provenance=_link_values("provenance"),
+        )
         return Component(
             name=data["name"],
             version=str(data["version"]),
@@ -404,6 +472,8 @@ class ComponentRegistry:
             target_backends=target_backends,
             target_headers=target_headers,
             target_import_interface=target_import_interface,
+            build_role=build_role,
+            target_link_metadata=target_link_metadata,
         )
 
     def _load_components(self, yaml_path: Path) -> None:
@@ -681,6 +751,27 @@ class ComponentRegistry:
             for component in self._components
             if target_backend in component.target_backends and component.target_headers
         ]
+
+    def get_target_link_metadata(self, component_names: List[str]) -> TargetLinkMetadata:
+        """Compose target link metadata for selected components and dependencies."""
+        selected = {component.name: component for component in self._components}
+        ordered: List[Component] = []
+        visited: set[str] = set()
+
+        def visit(name: str) -> None:
+            if name in visited or name not in selected:
+                return
+            visited.add(name)
+            component = selected[name]
+            for dependency in component.depends_on:
+                visit(dependency)
+            ordered.append(component)
+
+        for name in component_names:
+            visit(name)
+        return compose_target_link_metadata(
+            *(component.target_link_metadata for component in ordered)
+        )
 
     def get_ffmpeg_configure_flags(
         self,

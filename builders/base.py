@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Ty
 
 from ..build_steps import BuildStepContext, run_install, run_make, run_step
 from ..build_types import BuildError
+from ..config import TARGET_BACKEND_CROSS_MINGW
 from ..executor import CommandExecutor
 from ..state import ComponentStatus, StateManager
 
@@ -76,6 +77,11 @@ def build_autotools(
         build_dir = source_dir / component.workdir
 
     env = context.builder.get_build_env(component)
+    cross = context.builder.platform_context.cross_environment
+    cross_arguments: List[str] = []
+    if cross is not None and component.build_role.value == "target":
+        env.update(cross.autotools.environment)
+        cross_arguments.extend(cross.autotools.arguments)
 
     configure_args = [
         arg.replace("{workspace}", context.builder._ws_str()).replace(
@@ -101,7 +107,7 @@ def build_autotools(
         ComponentStatus.CONFIGURING,
         "./configure",
         "Configure failed",
-        ["./configure"] + configure_args,
+        ["./configure"] + cross_arguments + configure_args,
         "configure",
         build_dir,
         env,
@@ -165,6 +171,17 @@ def build_cmake(context: ComponentBuildContext, component: "Component", source_d
         ]
 
     env = context.builder.get_build_env(component)
+    cross = context.builder.platform_context.cross_environment
+    if cross is not None and component.build_role.value == "target":
+        cmake_args.extend(
+            [
+                f"-DCMAKE_TOOLCHAIN_FILE={cross.cmake_toolchain_file}",
+                "-DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER",
+                "-DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY",
+                "-DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY",
+                "-DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=ONLY",
+            ]
+        )
 
     if component.name == "opencl-icd-loader":
         # The project's global CFLAGS include "-I<cuda>/include" so
@@ -248,6 +265,10 @@ def build_meson(context: ComponentBuildContext, component: "Component", source_d
         # needs Windows-style paths (E:/...) with ';' as separator.
         ws = context.builder._ws_str()
         env["PKG_CONFIG_PATH"] = f"{ws}/lib/pkgconfig;{ws}/lib64/pkgconfig"
+
+    cross = context.builder.platform_context.cross_environment
+    if cross is not None and component.build_role.value == "target":
+        meson_args = ["--cross-file", str(cross.meson_cross_file), *meson_args]
 
     run_step(
         context,
@@ -341,7 +362,7 @@ def get_rustc_version(
         Tuple of (major, minor, patch) or None if not available.
     """
     env = context.builder.get_build_env(component)
-    result = context.executor.execute(["rustc", "--version"], env=env)
+    result = context.executor.execute([env.get("RUSTC", "rustc"), "--version"], env=env)
     if not result.success:
         return None
     match = re.search(r"rustc\s+(\d+)\.(\d+)\.(\d+)", result.stdout)
@@ -353,7 +374,8 @@ def get_rustc_version(
 def build_cargo(context: ComponentBuildContext, component: "Component", source_dir: Path) -> None:
     """Build component with Cargo."""
     env = context.builder.get_build_env(component)
-    env["RUSTFLAGS"] = "-C target-cpu=native"
+    if context.builder.config.target_backend != TARGET_BACKEND_CROSS_MINGW:
+        env["RUSTFLAGS"] = "-C target-cpu=native"
 
     if context.builder.platform == "linux" and "CFLAGS" in env:
         env["CFLAGS"] = env["CFLAGS"].replace("-std=c11", "-std=gnu11")
@@ -371,16 +393,30 @@ def build_cargo(context: ComponentBuildContext, component: "Component", source_d
 
     cargo_c_path = shutil.which("cargo-c", path=env.get("PATH"))
     if cargo_c_path is None:
+        install_env = env
+        cross = context.builder.platform_context.cross_environment
+        if (
+            cross is not None
+            and context.builder.config.target_backend == TARGET_BACKEND_CROSS_MINGW
+        ):
+            install_env = dict(cross.cargo_environment)
+            install_env.pop("CARGO_BUILD_TARGET", None)
+            install_env.pop("CARGO_TARGET_X86_64_PC_WINDOWS_GNULLVM_LINKER", None)
+            install_env.pop("CARGO_TARGET_X86_64_PC_WINDOWS_GNULLVM_AR", None)
+            rust_bin = str(cross.rust_tools.cargo.parent)
+            install_env["PATH"] = rust_bin + (
+                os.pathsep + install_env["PATH"] if install_env.get("PATH") else ""
+            )
         run_step(
             context,
             component,
             ComponentStatus.BUILDING,
             f"cargo install cargo-c --version {CARGO_C_VERSION}",
             "Failed to install cargo-c",
-            ["cargo", "install", "cargo-c", "--version", CARGO_C_VERSION],
+            [env.get("CARGO", "cargo"), "install", "cargo-c", "--version", CARGO_C_VERSION],
             "install-cargo-c",
             source_dir,
-            env,
+            install_env,
         )
 
     run_step(
@@ -409,7 +445,7 @@ def install_headers_only(
 ) -> None:
     """Install headers only."""
     if component.name == "VapourSynth":
-        dest = context.builder.workspace / "include" / "vapoursynth"
+        dest = context.builder._component_prefix(component) / "include" / "vapoursynth"
         dest.mkdir(parents=True, exist_ok=True)
         src = source_dir / "include"
         if src.exists():
@@ -421,7 +457,7 @@ def install_headers_only(
                     shutil.copytree(item, dest_item, dirs_exist_ok=True)
 
     elif component.name == "fast-float":
-        dest = context.builder.workspace / "include" / "fast_float"
+        dest = context.builder._component_prefix(component) / "include" / "fast_float"
         dest.mkdir(parents=True, exist_ok=True)
         src = source_dir / "include" / "fast_float"
         if src.exists():
@@ -430,7 +466,7 @@ def install_headers_only(
                 shutil.copy2(item, dest_item)
 
     elif component.name == "amf":
-        dest = context.builder.workspace / "include" / "AMF"
+        dest = context.builder._component_prefix(component) / "include" / "AMF"
         if dest.exists():
             _rmtree(dest)
         dest.mkdir(parents=True)

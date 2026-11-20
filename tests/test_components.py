@@ -6,6 +6,7 @@ import pytest
 import yaml
 
 from ffmpeg_builder.components import (
+    BuildRole,
     BuildSystem,
     Component,
     ComponentCategory,
@@ -250,6 +251,57 @@ class TestComponentRegistry:
         path.write_text(yaml.safe_dump(data), encoding="utf-8")
         with pytest.raises(ValueError, match="references missing definition source"):
             ComponentRegistry(yaml_path=path)
+
+    def test_build_role_and_transitive_target_link_metadata(self, tmp_path):
+        path = tmp_path / "components.yaml"
+        path.write_text(
+            yaml.safe_dump(
+                [
+                    {
+                        "name": "runtime",
+                        "version": "1",
+                        "url": "https://example.org/runtime.tar.gz",
+                        "category": "other_lib",
+                        "build_system": "cmake",
+                        "target_link_metadata": {
+                            "private_transitive_link_requirements": ["-lc++", "-lunwind"],
+                            "runtime_dependencies": [
+                                {
+                                    "name": "libc++.dll",
+                                    "classification": "target-runtime",
+                                    "source_identity": "llvm-mingw-libc++",
+                                }
+                            ],
+                        },
+                    },
+                    {
+                        "name": "consumer",
+                        "version": "1",
+                        "url": "https://example.org/consumer.tar.gz",
+                        "category": "other_lib",
+                        "build_system": "cmake",
+                        "build_role": "target",
+                        "depends_on": ["runtime"],
+                        "target_link_metadata": {"public_link_requirements": ["-lconsumer"]},
+                    },
+                    {
+                        "name": "shader-generator",
+                        "version": "1",
+                        "url": "https://example.org/shader.tar.gz",
+                        "category": "build_tool",
+                        "build_system": "cmake",
+                        "build_role": "host",
+                    },
+                ]
+            ),
+            encoding="utf-8",
+        )
+        registry = ComponentRegistry(yaml_path=path)
+
+        assert registry.get_by_name("shader-generator").build_role == BuildRole.HOST
+        metadata = registry.get_target_link_metadata(["consumer"])
+        assert metadata.consumer_link_requirements == ("-lc++", "-lunwind", "-lconsumer")
+        assert metadata.runtime_dependencies[0].name == "libc++.dll"
 
     def test_gmp_static_build_uses_pic(self):
         gmp = self.registry.get_by_name("gmp")

@@ -187,7 +187,7 @@ def build_x265(builder: FFmpegBuilder, component: Component, source_dir: Path) -
     )
 
     if builder.config.full_static and builder.platform == "linux":
-        x265_pc = builder.workspace / "lib" / "pkgconfig" / "x265.pc"
+        x265_pc = builder.target_prefix / "lib" / "pkgconfig" / "x265.pc"
         if x265_pc.exists():
             content = x265_pc.read_text()
             content = content.replace("-lgcc_s", "-lgcc_eh")

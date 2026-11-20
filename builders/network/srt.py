@@ -64,7 +64,7 @@ def build_srt(builder: FFmpegBuilder, component: Component, source_dir: Path) ->
     )
 
     if builder.config.full_static and builder.platform == "linux":
-        srt_pc = builder.workspace / "lib" / "pkgconfig" / "srt.pc"
+        srt_pc = builder.target_prefix / "lib" / "pkgconfig" / "srt.pc"
         if srt_pc.exists():
             content = srt_pc.read_text()
             content = content.replace("-lgcc_s", "-lgcc_eh")

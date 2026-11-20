@@ -1,3 +1,35 @@
+### Accepted — G3 pass 2 integrated cross-build contracts (2026-03-19)
+
+- Completed the role-scoped host, target, and mixed build contracts and
+  validated the shared Autotools, CMake, Meson, Make/custom, and Cargo
+  projections. Cargo uses project-managed Rust/Cargo, the Windows GNULLVM
+  target std, and identity-local target storage while build scripts remain
+  host-native.
+- Validated selected CUDA NVCC/GCC `-ccbin` PTX and fatbin generation,
+  selected host bin2c conversion, LLVM-MinGW generated-C COFF compilation,
+  and PE32+ linking without Linux object/runtime leakage. Audited libvmaf
+  3.2.0's explicit gencode list and Meson CUDA-language assumptions; full
+  component adaptation remains fail-closed for G4.
+- Added/validated generic transitive target-link/runtime metadata, positive
+  and negative libc++/libunwind link cases, Vulkan/OpenCL target import
+  interfaces, and the host-generator-to-target mixed-role pipeline. Reached
+  MSYS-specific behavior remains isolated to the legacy backend.
+- Final G3 acceptance and the regression/quality suite pass. G1/G2/G3 are
+  PASS; G4 has not started. No complete Windows dependency stack or FFmpeg
+  cross-build is claimed.
+
+### Corrective — G3 WSL-Mingw CPU tuning policy
+
+- When `native_build` is enabled, target C/C++ uses exactly
+  `-march=native -mtune=native`. LLVM-MinGW interprets `native`; the project
+  verifies compiler acceptance without expanding or validating its internal
+  feature selection. G1 CPU data remains physical-target identity/runtime
+  evidence, not a feature whitelist.
+- CPU tuning remains represented by the existing material `native_build`
+  configuration under identity schema 2. No compiler-resolved model or
+  feature list is persisted; binaries are not claimed portable to unrelated
+  Windows CPUs.
+
 ### Accepted — G3 pass 1 Linux-to-Windows cross environment foundation (2026-03-19)
 
 - Added a distinct `linux-cross-mingw` platform strategy that consumes the
