@@ -15,6 +15,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Type
 
 from .build_steps import run_install, run_make, run_step
 from .build_types import BuildError, SkipComponent
+from .cross_environment import CrossEnvironment
 from .builders.base import (
     CARGO_C_VERSION,
     ComponentBuildContext,
@@ -54,6 +55,7 @@ from .executor import CommandExecutor, ExecutionResult
 from .patches import get_patch_registry
 from .platform_detect import PlatformDetector
 from .platforms.context import PlatformContext
+from .platforms.linux_cross_mingw import LinuxCrossMingwPlatform
 from .platforms.resolver import PlatformStrategyResolver
 from .release_bundle import make_release_bundle as create_release_bundle
 from .state import ComponentStatus, StateManager
@@ -99,6 +101,7 @@ class FFmpegBuilder:
         on_log: Optional[Callable[[str], None]] = None,
         on_download_progress: Optional[Callable[[str, int, int], None]] = None,
         toolchain_env: Optional[Dict[str, Dict[str, str]]] = None,
+        cross_environment: Optional[CrossEnvironment] = None,
     ):
         """Initialize builder.
 
@@ -158,6 +161,7 @@ class FFmpegBuilder:
             platform_detector=self.platform_detector,
             platform_info=self.platform_detector.platform_info,
             num_jobs=self.num_jobs,
+            cross_environment=cross_environment,
         )
         self.platform_strategy = PlatformStrategyResolver().resolve(self.platform_context)
 
@@ -477,6 +481,15 @@ class FFmpegBuilder:
         """Setup build environment."""
         self.workspace.mkdir(parents=True, exist_ok=True)
         self.packages.mkdir(parents=True, exist_ok=True)
+
+        if isinstance(self.platform_strategy, LinuxCrossMingwPlatform):
+            self.env = self.platform_strategy.setup_environment(self.platform_context)
+            self.cflags = self.env["CFLAGS"]
+            self.cxxflags = self.env["CXXFLAGS"]
+            self.ldflags = self.env["LDFLAGS"]
+            self.ldexeflags = ""
+            self.extralibs = ""
+            return
 
         ws = self._ws_str()
         self.cflags = f"-I{ws}/include -Wno-int-conversion"

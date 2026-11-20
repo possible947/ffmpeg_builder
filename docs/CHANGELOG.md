@@ -1,3 +1,18 @@
+### Accepted — G3 pass 1 Linux-to-Windows cross environment foundation (2026-03-19)
+
+- Added a distinct `linux-cross-mingw` platform strategy that consumes the
+  identity-authorized G1/G2 preparation and resolves explicit LLVM-MinGW
+  compiler/binutils entrypoints without changing native Linux or legacy MSYS2
+  behavior.
+- Constructed an identity-local Windows target environment with filtered
+  target discovery, validated target pkg-config, generated CMake/Meson cross
+  files, and explicit Autotools/Rust projections. Headless `--dry-run` and TUI
+  preparation execute isolated compiler/resource/archive, PE/COFF/UCRT,
+  pkg-config, CMake, Meson, and Autotools acceptance probes before stopping.
+- Real acceptance fixtures and focused regression tests passed. No component
+  build or full Windows FFmpeg cross-build was run or claimed. G3 pass 2 and
+  G4 remain not started.
+
 ### Accepted — G2.8 final offline closure and live prerequisite acceptance
 
 - Resolved the complete project-owned G2 source closure from production
@@ -18,8 +33,9 @@
   Vulkan shader compilation/SPIR-V validation. Schema-2 identity was stable
   across independent same-input preparations and resumed the same workspace.
 - Full pytest (550 passed, 1 skipped), Black, and the mypy baseline passed.
-  G2 is closed and PASS; G3 has not started. No Windows FFmpeg cross-build is
-  claimed, and external SDK/runtime trees remain external.
+  G2 is closed and PASS; at G2.8 acceptance, G3 had not started. No Windows
+  FFmpeg cross-build is claimed, and external SDK/runtime trees remain
+  external.
 
 ### Accepted — G2.7 WSL-Mingw semantic build identity
 

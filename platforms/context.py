@@ -4,10 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from ffmpeg_builder.config import BuildConfig
 from ffmpeg_builder.platform_detect import PlatformDetector, PlatformInfo
+
+if TYPE_CHECKING:
+    from ffmpeg_builder.cross_environment import CrossEnvironment
 
 
 @dataclass(frozen=True)
@@ -21,6 +24,7 @@ class PlatformContext:
     platform_info: PlatformInfo
     num_jobs: int
     shell: Optional[str] = None
+    cross_environment: Optional["CrossEnvironment"] = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "workspace", Path(self.workspace).resolve())

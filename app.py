@@ -22,6 +22,10 @@ from .build_types import (
 )
 from .builder import FFmpegBuilder
 from .components import Component, ComponentRegistry
+from .cross_environment import (
+    CrossEnvironment,
+    run_cross_environment_acceptance,
+)
 from .build_identity import (
     MaterialBuildInputs,
     build_native_identity,
@@ -46,6 +50,9 @@ from .ffmpeg_policy import (
     evaluate_ffmpeg_policy,
 )
 from .platform_detect import PlatformDetector
+from .platforms.context import PlatformContext
+from .platforms.linux_cross_mingw import LinuxCrossMingwPlatform
+from .platforms.resolver import PlatformStrategyResolver
 from .state import ComponentStatus, StateManager
 from .target_guard import (
     IdentityError,
@@ -106,6 +113,7 @@ class FFmpegBuilderApp:
         self.windows_probe = probe_windows_target
         self.windows_target_state: Optional[WindowsTargetState] = None
         self.wsl_mingw_preparation: Optional[WslMingwPreparation] = None
+        self.cross_environment: Optional[CrossEnvironment] = None
 
         self.config_manager = ConfigManager(PROJECT_ROOT / "build_config.yaml")
         config = self.config_manager.load()
@@ -230,6 +238,15 @@ class FFmpegBuilderApp:
         if self._is_cross_mingw(config):
             self.windows_target_state = None
             self.wsl_mingw_preparation = None
+            self.cross_environment = None
+            platform_info = self.platform_detector.platform_info
+            if not getattr(platform_info, "is_linux", False):
+                raise BuildError(
+                    "WSL-Mingw cross environment",
+                    "The linux-cross-mingw target requires a Linux/WSL build host.",
+                    category=CATEGORY_TARGET_DATA,
+                    code="wsl_mingw_build_machine_unsupported",
+                )
             target_state = self._probe_windows_target(config)
             components = self._get_buildable_components(config)
             try:
@@ -429,6 +446,61 @@ class FFmpegBuilderApp:
         session = prepare_native_target(self.base_workspace, self.state_manager, identity, resume)
         self._prepare_native_cuda(config, session)
         return session
+
+    def prepare_cross_environment(
+        self, config: BuildConfig, session: TargetSession
+    ) -> CrossEnvironment:
+        """Materialize and validate G3 only after G1/G2 authorize the workspace."""
+        if not self._is_cross_mingw(config):
+            raise BuildError(
+                "WSL-Mingw cross environment",
+                "G3 environment preparation was requested for a native backend.",
+                category=CATEGORY_TARGET_DATA,
+                code="wsl_mingw_cross_environment_backend_mismatch",
+            )
+        if not session.uses_isolated_workspace or session.workspace != self.workspace:
+            raise BuildError(
+                "WSL-Mingw cross environment",
+                "The target workspace has not been authorized by the G1/G2 identity guard.",
+                category=CATEGORY_TARGET_DATA,
+                code="wsl_mingw_cross_environment_workspace_unauthorized",
+            )
+        if self.wsl_mingw_preparation is None:
+            raise BuildError(
+                "WSL-Mingw cross environment",
+                "G2 WSL-Mingw preparation is unavailable; target tools will not be rediscovered.",
+                category=CATEGORY_TARGET_DATA,
+                code="wsl_mingw_cross_environment_preparation_missing",
+            )
+        context = PlatformContext(
+            config=config,
+            workspace=self.workspace,
+            packages=self.packages,
+            platform_detector=self.platform_detector,
+            platform_info=self.platform_detector.platform_info,
+            num_jobs=self.platform_detector.get_num_jobs(config.num_jobs),
+        )
+        strategy = PlatformStrategyResolver().resolve(context)
+        if not isinstance(strategy, LinuxCrossMingwPlatform):
+            raise BuildError(
+                "WSL-Mingw cross environment",
+                "The linux-cross-mingw platform strategy is unavailable on this build host.",
+                category=CATEGORY_TARGET_DATA,
+                code="wsl_mingw_platform_strategy_missing",
+            )
+        archives = Path(config.source_archives_dir)
+        if not archives.is_absolute():
+            archives = PROJECT_ROOT / archives
+        environment = strategy.prepare_cross_environment(
+            self.wsl_mingw_preparation,
+            config,
+            self.workspace,
+            archives,
+            self.registry,
+        )
+        self.cross_environment = environment
+        run_cross_environment_acceptance(environment)
+        return environment
 
     def _prepare_native_cuda(self, config: BuildConfig, session: TargetSession) -> None:
         """Resolve and probe one NVCC profile before trusting saved consumers."""
@@ -920,6 +992,17 @@ class FFmpegBuilderApp:
         """
         try:
             session = self.prepare_target(config, resume)
+            if self._is_cross_mingw(config):
+                environment = self.prepare_cross_environment(config, session)
+                self.console.print(
+                    "[green]G3 pass-1 cross environment prepared and validated.[/green]"
+                )
+                self.console.print(
+                    f"Target: {environment.target_triple}; workspace: "
+                    f"{environment.paths.workspace_root}. Component builds remain disabled "
+                    "until later G3/G4 work."
+                )
+                return
             all_components = self._get_buildable_components(config)
             validate_required_cuda_components(
                 config, all_components, self.platform_info.cuda_build_host_inputs

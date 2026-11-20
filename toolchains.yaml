@@ -180,7 +180,9 @@ toolchains:
       strip: bin/x86_64-w64-mingw32-strip
       windres: bin/x86_64-w64-mingw32-windres
       dlltool: bin/x86_64-w64-mingw32-dlltool
+      as: bin/x86_64-w64-mingw32-as
       nm: bin/x86_64-w64-mingw32-nm
+      objcopy: bin/x86_64-w64-mingw32-objcopy
       objdump: bin/x86_64-w64-mingw32-objdump
       readobj: bin/llvm-readobj
     verify:
@@ -193,7 +195,9 @@ toolchains:
         - bin/x86_64-w64-mingw32-strip
         - bin/x86_64-w64-mingw32-windres
         - bin/x86_64-w64-mingw32-dlltool
+        - bin/x86_64-w64-mingw32-as
         - bin/x86_64-w64-mingw32-nm
+        - bin/x86_64-w64-mingw32-objcopy
         - bin/x86_64-w64-mingw32-objdump
         - bin/llvm-readobj
       version_checks:

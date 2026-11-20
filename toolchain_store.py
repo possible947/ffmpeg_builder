@@ -579,12 +579,11 @@ class ToolchainStore:
         return env or None
 
     def profile_paths(self, registry: ToolchainRegistry, profile_name: str) -> Dict[str, str]:
-        """Resolve absolute tool paths (CC/CXX/bin dir) for an installed profile.
+        """Resolve absolute paths declared by an installed profile.
 
-        Returns a mapping with any of ``CC``, ``CXX``, ``BIN_DIR`` keys, or an
-        empty dict when the profile is not installed, failed verification, or
-        declares no materialization. Used by the CUDA host-compiler selection
-        (``-ccbin``) as well as :meth:`component_env`.
+        ``bin_subdir`` is exposed as ``BIN_DIR``; every other materialization
+        key (for example ``cc`` or ``ar``) is returned uppercased. Paths are
+        derived only from the verified profile prefix.
         """
         installed = self.installed(profile_name, registry)
         if installed is None:
@@ -594,15 +593,11 @@ class ToolchainStore:
             return {}
         prefix = self.resolve_entry_path(installed)
         paths: Dict[str, str] = {}
-        bin_subdir = profile.materialize.get("bin_subdir")
-        if bin_subdir:
-            paths["BIN_DIR"] = str(prefix / bin_subdir)
-        cc = profile.materialize.get("cc")
-        if cc:
-            paths["CC"] = str(prefix / cc)
-        cxx = profile.materialize.get("cxx")
-        if cxx:
-            paths["CXX"] = str(prefix / cxx)
+        for key, relative in profile.materialize.items():
+            if not relative:
+                continue
+            name = "BIN_DIR" if key == "bin_subdir" else key.upper()
+            paths[name] = str(prefix / relative)
         return paths
 
     def cuda_host_compiler(

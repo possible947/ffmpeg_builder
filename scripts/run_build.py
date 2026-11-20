@@ -32,7 +32,10 @@ from ffmpeg_builder.app import FFmpegBuilderApp, PROJECT_ROOT as APP_ROOT  # noq
 from ffmpeg_builder.build_types import BuildError, SkipComponent  # noqa: E402
 from ffmpeg_builder.builder import FFmpegBuilder  # noqa: E402
 from ffmpeg_builder.builders.graphics.vulkan_headers import invalidate_vulkan_resume  # noqa: E402
-from ffmpeg_builder.config import BuildConfig  # noqa: E402
+from ffmpeg_builder.config import (  # noqa: E402
+    TARGET_BACKEND_CROSS_MINGW,
+    BuildConfig,
+)
 from ffmpeg_builder.cuda_prerequisites import (  # noqa: E402
     cuda_nv_codec_identity,
     cuda_profile_identity,
@@ -60,7 +63,10 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="List the buildable components with their toolchain env and exit.",
+        help=(
+            "Validate the configured environment and show its plan; "
+            "cross builds stop after G3 acceptance."
+        ),
     )
     parser.add_argument(
         "--no-release",
@@ -86,6 +92,16 @@ def run_build(app: FFmpegBuilderApp, config: BuildConfig, resume: bool, no_relea
     """Execute the build; return an exit code."""
     try:
         session = app.prepare_target(config, resume)
+        if getattr(config, "target_backend", "native") == TARGET_BACKEND_CROSS_MINGW:
+            environment = app.prepare_cross_environment(config, session)
+            print(
+                "G3 pass-1 cross environment prepared and validated; "
+                f"target={environment.target_triple}, "
+                f"workspace={environment.paths.workspace_root}.",
+                flush=True,
+            )
+            print("Component builds remain disabled until later G3/G4 work.", flush=True)
+            return 2
         all_components = app._get_buildable_components(config)
         cuda_inputs = getattr(app.platform_detector.platform_info, "cuda_build_host_inputs", None)
         validate_required_cuda_components(config, all_components, cuda_inputs)
@@ -196,6 +212,26 @@ def run_build(app: FFmpegBuilderApp, config: BuildConfig, resume: bool, no_relea
     return 0
 
 
+def dry_run_cross_backend(app: FFmpegBuilderApp, config: BuildConfig, resume: bool) -> int:
+    """Run G1/G2 authorization and G3 acceptance without selecting components."""
+    try:
+        session = app.prepare_target(config, resume)
+        environment = app.prepare_cross_environment(config, session)
+    except BuildError as exc:
+        print(f"BLOCKED by identity guard or cross-environment acceptance: {exc}", flush=True)
+        return 2
+    for note in session.notes:
+        print(f"NOTE: {note}", flush=True)
+    print(
+        "Dry-run passed: G3 pass-1 cross environment prepared and validated; "
+        f"target={environment.target_triple}, "
+        f"workspace={environment.paths.workspace_root}.",
+        flush=True,
+    )
+    print("Component builds remain disabled until later G3/G4 work.", flush=True)
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     args = parse_args(argv)
     app = FFmpegBuilderApp()
@@ -205,6 +241,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     app._sync_workspace(config)
 
     if args.dry_run:
+        if getattr(config, "target_backend", "native") == TARGET_BACKEND_CROSS_MINGW:
+            return dry_run_cross_backend(app, config, resume=args.resume)
         describe_plan(app, config)
         return 0
     return run_build(app, config, resume=args.resume, no_release=args.no_release)

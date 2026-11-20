@@ -9,7 +9,9 @@ external `nix shell` environment: compilers are built on the host for the
 host, and both FFmpeg versions build end-to-end (Linux, GCC 16.2.1 host: 8.1
 with deployed gcc12 12.5.0 and 9.0 with the system GCC — 58/58 components
 each, smoke-tested). WSL-Mingw G1/G2 preparation and offline-closure
-acceptance are complete; the G3 Windows cross-build backend has not started.
+acceptance are complete; G3 pass 1 has established and validated the
+`linux-cross-mingw` cross-environment foundation. G3 remains in progress; G4
+and component-wide Windows cross-build support have not started.
 See `CHANGELOG.md` for the release history.
 
 ## Architecture Overview
@@ -69,14 +71,35 @@ and the pre-reuse guard used by `app.prepare_target()` and
 projection without changing native identity requirements. Details:
 `docs/windows_build_strategy.md`, "G1 implementation notes" and §6.
 
-### `target_inputs.py`, `scripts/prepare_target_inputs.py` (G2.6/G2.8)
+### `target_inputs.py`, `scripts/prepare_target_inputs.py` (G2.6/G2.8/G3)
 
 Resolve and stage the checksum-pinned NVIDIA, Vulkan, and OpenCL target headers
 plus the generated Windows Vulkan/OpenCL import interfaces. The disposable
 target prefix and manifest are reproduced offline from `third_party/sources`;
 their provenance and materialisation ID feed the schema-2 identity. G2.8
 verified independent reproducibility and target contamination boundaries.
-This does not create the G3 compiler environment or build Windows components.
+After the identity guard authorizes the target workspace, G3 materializes or
+revalidates the same manifest under that workspace's `prefix/`. It does not
+stage the G4 dependency stack or build Windows components.
+
+### `cross_environment.py`, `platforms/linux_cross_mingw.py` (G3 pass 1)
+
+The resolver selects a distinct Linux/WSL-to-Windows strategy for
+`target_backend: linux-cross-mingw`. The strategy consumes the existing
+`WslMingwPreparation`; it does not re-probe Windows or rediscover toolchains.
+`construct_cross_environment()` creates identity-local target/build/generated/
+diagnostic paths, resolves target tools from the verified LLVM-MinGW profile,
+keeps host build tools separate, filters target-sensitive inherited state,
+generates a target-only pkg-config wrapper plus deterministic CMake/Meson
+cross files, and exposes Autotools and Rust projections. The accepted target
+prefix contains only G2.6 headers/interfaces at this stage.
+
+`run_cross_environment_acceptance()` executes temporary C/C++/resource and
+static-archive probes, target pkg-config isolation, and minimal CMake, Meson,
+and Autotools fixtures. The TUI and headless routes run these checks and stop
+before component selection; this is not a Windows FFmpeg build. CPU
+specialization, CUDA consumer integration, builder-wide consumption, and
+transitive C++ runtime metadata remain deferred to G3 pass 2.
 
 ### `__main__.py`
 
@@ -377,9 +400,9 @@ Store behaviour (all profiles, not just LLVM-MinGW):
   `FFmpegBuilder` and the Linux platform strategy also avoid injecting Linux
   Vulkan SDK headers, libraries, pkg-config paths, or `VULKAN_SDK` into the
   `linux-cross-mingw` environment.
-  The helper is not the final G3 environment: G3 must use it with explicit
-  target roots and construct compiler, pkg-config, CMake, and Meson inputs.
-  Native Linux/WSL and macOS SDK wiring is unchanged.
+  G3 consumes this filtering primitive and constructs explicit target compiler,
+  pkg-config, CMake, Meson, and Autotools inputs. Native Linux/WSL and macOS SDK
+  wiring is unchanged.
 
 - **WSL-Mingw preparation result:** TUI and `scripts/run_build.py` call the
   same `FFmpegBuilderApp.prepare_target()` path. It performs the fresh G1
@@ -396,8 +419,9 @@ Store behaviour (all profiles, not just LLVM-MinGW):
   CUDA ccbin/profile, target
   architecture, effective PTX flags/workaround, and validated Vulkan
   capabilities; SDK roots, tool versions, resolution provenance and raw
-  diagnostics remain diagnostic-only. It does not define the G3 compiler
-  environment or add Linux SDK libraries to Windows-target discovery.
+  diagnostics remain diagnostic-only. `prepare_cross_environment()` consumes
+  this result only after the guard selects the workspace and runs G3 pass-1
+  validation without adding Linux SDK libraries to Windows-target discovery.
   Configure optional roots as:
 
   ```yaml
@@ -442,8 +466,9 @@ Store behaviour (all profiles, not just LLVM-MinGW):
 
   Both `scripts/run_build.py`'s headless `run_build()` and the TUI
   `_run_build()` path reached the same successful preparation result and were
-  deliberately stopped at builder construction, before components or a G3
-  build. This does not claim that either path can yet build a Windows target.
+  now continue through identity-local G3 environment generation and real
+  configure/link acceptance, then stop before components. This does not claim
+  that either path can yet build a Windows target.
 
 Isolated offline provisioning (does not touch the normal store):
 
@@ -793,9 +818,10 @@ Built with the `rich` library. Static screens use `Table`, `Panel`, and `Prompt`
 The Windows build route is **WSL-Mingw**: a Windows host runs a WSL2 Ubuntu
 build environment, which uses the LLVM-MinGW/UCRT cross toolchain to produce
 a Windows FFmpeg target. **WSL-Mingw** is the user-facing name; the backend
-identifier is **`linux-cross-mingw`**. G1/G2 target preparation and offline
-closure acceptance are complete, but the G3 cross-build backend and full
-component stack are **not implemented yet**. The gates
+identifier is **`linux-cross-mingw`**. G1 and G2 pass; G3 pass 1's strategy,
+isolated target environment, cross files, and real minimal acceptance probes
+are complete. G3 remains in progress and the full component stack is **not
+implemented**. The gates
 G1–G7, verified early-PoC results and open issues are in
 [`windows_build_strategy.md`](windows_build_strategy.md), which is the
 authoritative plan. The previous MSYS2-based Windows build path was replaced
@@ -829,6 +855,11 @@ Implementer rules:
   files; `/usr/lib`, WSL CUDA libraries and Vulkan SDK native libraries must
   never satisfy a Windows target link. Do not globally source LunarG
   `setup-env.sh` for cross-builds.
+- **G3 pass-1 execution boundary:** application preparation materializes the
+  G2.6 prefix, generates the target-only pkg-config wrapper, CMake toolchain,
+  Meson cross file and Autotools projection, and runs isolated configure/link
+  acceptance. It then stops before component building. Do not claim a complete
+  Windows FFmpeg build until G4–G7 acceptance.
 - **Windows runtime probing goes through Windows interop** (fresh probe of CPU
   features, GPU, drivers, Vulkan/OpenCL runtimes), never through WSL's Linux
   view. Drivers/runtimes (NVIDIA driver, Windows Vulkan loader/ICD, OpenCL
@@ -905,7 +936,8 @@ acceptance, and diagnostic-only changes do not prevent reuse. Live acceptance
 covered fresh/same preparation, material and diagnostic drift, and rejection
 of G1-only saved state on the physical Windows/WSL host. This establishes
 identity safety, not a production cross-build; G2.8 final acceptance is
-recorded below and G3 has not started.
+recorded below. G3 pass 1 is recorded in its own section; G3 pass 2 and G4
+remain incomplete.
 
 #### G2.8 — final offline closure and live prerequisites (PASS)
 

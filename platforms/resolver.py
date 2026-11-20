@@ -9,6 +9,7 @@ from .context import PlatformContext
 from .darwin import MacOSPlatform
 from .linux_gcc13 import LinuxGcc13Platform
 from .linux_gcc15 import LinuxGcc15Platform
+from .linux_cross_mingw import LinuxCrossMingwPlatform
 from .windows_ucrt64 import WindowsUcrt64Platform
 
 
@@ -23,6 +24,9 @@ class PlatformStrategyResolver:
         is_ucrt64 = getattr(info, "is_ucrt64", False)
         is_linux = getattr(info, "is_linux", False)
         gcc_major_version = getattr(info, "gcc_major_version", None)
+
+        if context.config.target_backend == "linux-cross-mingw":
+            return LinuxCrossMingwPlatform() if is_linux else None
 
         if is_macos:
             return MacOSPlatform()

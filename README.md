@@ -2,8 +2,9 @@
 
 Interactive Python-based build system for FFmpeg 8.1 (default) and 9.0 on
 macOS and Linux. Windows builds follow the **WSL-Mingw** route (WSL2 Ubuntu →
-LLVM-MinGW/UCRT cross toolchain); its G2 preparation gates have passed, but
-the production cross-build backend is not implemented — see
+LLVM-MinGW/UCRT cross toolchain). G1/G2 pass and G3 pass 1's environment
+foundation is complete; G3 remains in progress and component cross-builds are
+not enabled — see
 [Windows (WSL-Mingw)](#windows-wsl-mingw).
 
 FFmpeg Builder replaces the traditional bash `build-ffmpeg` script with a modern, interactive interface featuring real-time progress tracking, configuration management, platform-aware hardware acceleration detection, and resumable builds.
@@ -35,7 +36,7 @@ guide.
 - **~60 Components** — All codecs, libraries, and tools built from source in correct dependency order
 - **macOS Support** — Macports clang detection, OpenMP, VideoToolbox, glibtool handling
 - **Linux Support** — GCC/Clang detection, C11/C++17 standards, host-tuned (`-march=native -mtune=native -fopenmp`) builds
-- **Windows (WSL-Mingw) — preparation accepted** — G1 and G2 pass; G3 has not started, and the `linux-cross-mingw` build backend is not implemented yet
+- **Windows (WSL-Mingw) — G3 pass 1 complete** — G1/G2 pass; G3 remains in progress; environment acceptance stops before component builds; G4 has not started
 
 ## Requirements
 
@@ -156,14 +157,15 @@ Or use the environment check script:
 
 ## Windows (WSL-Mingw)
 
-> **Status: preparation accepted; build backend not implemented.** The
-> WSL-Mingw route is the only Windows build
-> route going forward, but its production backend (`linux-cross-mingw`) is
-> **not implemented yet**; there is no supported end-to-end Windows build
-> workflow today. Early feasibility experiments succeeded on one specific
+> **Status: G3 pass 1 complete; G3 in progress; G4 not started.** The
+> production `linux-cross-mingw` strategy, isolated target environment,
+> target-only pkg-config wrapper, CMake/Meson cross files, Autotools baseline,
+> and minimal real configure/link acceptance are implemented. The TUI and
+> headless route stop before component building; there is no supported
+> end-to-end Windows FFmpeg build workflow today. Early feasibility experiments succeeded on one specific
 > host (see [`docs/windows_build_strategy.md`](docs/windows_build_strategy.md));
-> G1 and the complete G2 preparation/acceptance gate are PASS; G3 has not
-> started. WSL-Mingw resume is guarded by a full semantic target-and-input
+> G1 and G2 are PASS; G3 pass 1 is complete, while G3 remains in progress.
+> WSL-Mingw resume is guarded by a full semantic target-and-input
 > identity; changed or legacy input identity is never silently adopted. The
 > previous MSYS2-based Windows build path was replaced by this route and is no longer documented
 > or supported; any MSYS2 code still in the repository is legacy and is
@@ -243,8 +245,9 @@ prerequisites, not project-managed Windows target libraries.
 
 G2.4/G2.5 prerequisite preparation, G2.6 target-input staging, G2.7 semantic
 identity, and G2.8 offline-closure acceptance have passed on the validated
-host. G2 is closed. The Windows cross-build backend and end-to-end Windows
-FFmpeg build are not implemented; G3 has not started.
+host. G2 is closed. G3 pass 1 adds the isolated environment and minimal
+configure/link acceptance, but does not build components or FFmpeg. G3 remains
+in progress; G4 has not started.
 
 ### Windows runtime prerequisites
 
@@ -506,8 +509,9 @@ macos:
 
 ```
 
-There is no supported `windows:` configuration block; the WSL-Mingw backend
-(`linux-cross-mingw`) is not implemented yet.
+There is no supported `windows:` configuration block. Selecting
+`linux-cross-mingw` prepares and validates the G3 pass-1 environment, then
+stops before component builds; it is not an end-to-end Windows build backend.
 
 Supported `ffmpeg_version` values are `8.1` (the default) and `9.0`. Each version
 uses a separately verified source archive checksum. Add its archive to the local
@@ -584,7 +588,7 @@ The builder automatically detects available hardware acceleration and configures
 | **OpenCL** | Linux/macOS | Runtime+dev readiness model: pkg-config (`OpenCL`/`opencl`) or headers (including `/opt/rocm` and `/usr/local/cuda`) plus ICD loader and vendor ICD files; macOS uses `OpenCL.framework` |
 | **VideoToolbox** | macOS | Always available |
 
-Windows hardware acceleration (CUDA/NVENC, Vulkan, OpenCL) is planned for the WSL-Mingw backend (`linux-cross-mingw`) and is not implemented yet; see `docs/windows_build_strategy.md`.
+Windows hardware acceleration (CUDA/NVENC, Vulkan, OpenCL) is planned for later WSL-Mingw work; G3 pass 1 does not integrate CUDA consumers or build Windows components. See `docs/windows_build_strategy.md`.
 
 Build backends are explicit: `linux-native` and `linux-wsl2` are distinct modes with different component eligibility rules (`linux-wsl2` builds Linux binaries for WSL itself, not Windows binaries).
 

@@ -1,10 +1,10 @@
 # Windows FFmpeg cross-build strategy
 
-**Status:** G1 **PASS**; G2.1–G2.8 **PASS** (G2 closed); G3 **not started**.
-G2.4/G2.5 passed final live acceptance in issue #16; G2.6/G2.7 and the G2.8
-offline-closure/live-prerequisite acceptance also passed. The
-`linux-cross-mingw` cross-build backend and full Windows component stack remain
-unimplemented; this is not an end-to-end Windows FFmpeg build acceptance.
+**Status:** G1 **PASS**; G2.1–G2.8 **PASS**; G3 pass 1 **complete**; G3
+**in progress**; G4 **not started**. G3 pass 1 adds the production
+`linux-cross-mingw` strategy, identity-local target environment and cross
+files, plus real compiler/pkg-config/CMake/Meson/Autotools acceptance. It stops
+before component builders; no Windows FFmpeg build is claimed.
 
 **Naming.** The user-facing Windows build route is **WSL-Mingw**: Windows host
 → WSL2 Ubuntu build environment → LLVM-MinGW/UCRT cross toolchain → Windows
@@ -155,9 +155,9 @@ not as a presumed way to complete Variant 1.
 
 ### 3.3 Repository facts to account for [REPO]
 
-The repository currently has native Linux/WSL strategies and a **legacy**
-MSYS2-UCRT64 strategy. `linux-cross-mingw` has G1/G2 preparation, but not a
-production component backend. The legacy code (`platforms/windows_ucrt64.py`,
+The repository has native Linux/WSL strategies, a **legacy** MSYS2-UCRT64
+strategy, and the G3 pass-1 `linux-cross-mingw` environment foundation. It is
+not yet a production component backend. The legacy code (`platforms/windows_ucrt64.py`,
 UCRT64-specific branches in `builder.py`,
 `executor.py` sh-wrapping, `scripts/setup_windows_msys2_ucrt64.ps1`, registry
 `windows_ucrt64_supported` overrides, and related tests) is migration/removal
@@ -247,8 +247,8 @@ or `rsqrt` and their float variants. Unrelated or mixed errors are not retried;
 failed retries retain both diagnostics. Effective flags and workaround state
 are recorded for later identity projection. `--allow-unsupported-compiler`
 is not a compatibility test or a substitute. CUDA Linux libraries are not
-automatically added by this prerequisite flow; inherited variables and generic
-Linux pkg-config paths are not yet fully sanitized (G3).
+automatically added by this prerequisite flow. G3 pass 1 now removes ambient
+target-sensitive SDK/compiler and pkg-config state before target discovery.
 
 ### Layer B — project-managed/versioned tools and inputs
 
@@ -383,8 +383,8 @@ interfaces, and G0A.5 is a separate early Windows feature slice. None
 establishes a production Windows libvmaf CUDA build, its fatbin/runtime path,
 or a Windows cross-build. G2.7 protects resume identity for these inputs, and
 G2.8 accepted the complete offline G2 closure and live prerequisite path. G2
-is closed; G3 remains not started. The following is implementation work, not a
-gate-status change.
+is closed; G3 pass 1 is complete and the backend remains in progress. The
+following is pass-2/G4 implementation work, not a full-build acceptance.
 The module-level mapping is in
 [DeveloperReadme.md](DeveloperReadme.md#reusing-the-native-cudavulkan-work-for-wsl-mingw).
 
@@ -675,9 +675,9 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
   `PATH` remains available for tools. The Linux Vulkan SDK is no longer wired
   into the `linux-cross-mingw` builder or Linux platform-strategy environment;
   native Linux/WSL and macOS behavior is unchanged. This establishes the
-  filtering contract only: G3 must still construct the actual target
-  pkg-config/CMake/Meson environment and must not treat preserved host or system
-  paths as target inputs.
+  filtering contract; G3 pass 1 now constructs the target pkg-config,
+  CMake/Meson, Autotools, and Rust projections and validates the discovery
+  boundary without treating preserved host or system paths as target inputs.
 - **G2.4/G2.5/G2.7 preparation integration:** `prepare_target()` shares the
   same WSL-Mingw preparation path between the TUI and headless runner. Fresh G1
   target probing, project/external prerequisite resolution, and verified G2.6
@@ -750,18 +750,29 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
 
 ### G3 — `linux-cross-mingw` backend and platform strategy
 
-- **Scope / code:** Add backend selection and platform strategy, e.g.
-  `platforms/linux_cross_mingw.py`; resolver/config integration; explicit
-  host-native build tools; Windows target compilers; target prefix; target-only
-  pkg-config; CMake toolchain and Meson cross files; target runtime settings;
-  NVCC and explicit `-ccbin`; SDK host-tool paths; Windows-host-derived CPU
-  specialization; import-library/dynamic-loader strategy.
-- **Status:** [IMPLEMENTATION] The production backend is not implemented.
-- **Isolation:** No MSYS path rewriting. Do not reuse legacy `windows-ucrt64` path
-  separators, shell wrapping, or package discovery; where this gate touches
-  that legacy code, remove or migrate it rather than extending it. Keep host and target
-  compilers/tools distinct. Prevent Linux SDK/library paths from target
-  pkg-config, CMake and Meson.
+- **Status:** G1 **PASS**; G2 **PASS**; G3 pass 1 **complete**; G3 **in
+  progress**; G4 **not started**.
+- **Pass 1 completed:** production strategy selection; typed host/target tool
+  projections; identity-workspace `prefix/`, `build/`, `generated/`,
+  `packages/`, and `diagnostics/`; safe G2.6 target-input reuse; explicit
+  LLVM-MinGW compiler/binutils mapping; host-native tool separation;
+  target-only pkg-config wrapper and contamination checks; deterministic CMake
+  and Meson cross files; Autotools tuples/environment; and identity-local Rust
+  and deferred CUDA host-tool projections. TUI and headless routes prepare and
+  validate this foundation, then stop before component selection/building.
+- **Real pass-1 acceptance:** C/C++ and resource compile/link, static archive
+  link, PE32+ x86-64/COFF/UCRT inspection, pkg-config isolation and malicious
+  metadata rejection, minimal CMake configure/build, Meson setup/build, and
+  Autotools cross-mode configure all pass with project-managed LLVM-MinGW.
+- **Isolation:** No MSYS path rewriting or shell wrapping is used. Linux
+  libraries, headers and SDK metadata are not target discovery roots; the
+  target compiler/binutils are absolute paths and host executables remain
+  separate.
+- **Deferred to pass 2:** validated host-specific CPU flags; scoped CUDA
+  consumer/host-tool integration; builder-wide consumption; transitive static
+  C++ runtime metadata; remaining directly relevant legacy migration; final
+  G3 acceptance. G4 component adapters and full dependency builds have not
+  started.
 - **Link requirements:** Model libc++/libunwind and other static C++ runtime
   needs transitively in target metadata/link composition. Handle Vulkan and
   OpenCL target interfaces only where the actual dependency requires them.
@@ -910,8 +921,10 @@ project-owned artifact and never a Windows target component.
 2. **G2 — PASS:** Register/provision the complete project-managed input
    closure offline; validate explicit installed CUDA/Vulkan SDK prerequisites
    and selected host compiler; establish reproducible schema-2 identity.
-3. **G3:** Add `linux-cross-mingw`, isolated target environment and cross files;
-   verify dry-run commands and host/target isolation.
+3. **G3 pass 1 — complete; G3 remains in progress:** establish the backend
+   strategy, isolated target environment/cross files, and real configure/link
+   acceptance. **G3 pass 2:** add CPU specialization, scoped CUDA handling,
+   builder consumption, runtime metadata, and final acceptance.
 4. **G4:** Cross-build the full configured software dependency stack; verify
    PE/COFF, no Linux leakage, runtime and resume.
 5. **G5:** Build-assert every configured hardware feature and run only

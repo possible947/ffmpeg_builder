@@ -660,6 +660,7 @@ def test_cuda_preparation_reuses_single_g1_probe_for_ptx_validation(tmp_path, mo
     class _Detector:
         def __init__(self):
             self.platform_info = PlatformInfo(
+                is_linux=True,
                 build_backend=TARGET_BACKEND_CROSS_MINGW,
                 cuda_available=True,
                 cuda_build_host_inputs=inputs,
@@ -853,7 +854,7 @@ def test_vulkan_preparation_keeps_host_sdk_separate_from_windows_runtime(tmp_pat
     app = app_module.FFmpegBuilderApp.__new__(app_module.FFmpegBuilderApp)
     app.base_workspace = tmp_path
     app.platform_detector = SimpleNamespace(
-        platform_info=PlatformInfo(build_backend=TARGET_BACKEND_CROSS_MINGW),
+        platform_info=PlatformInfo(is_linux=True, build_backend=TARGET_BACKEND_CROSS_MINGW),
         get_build_backend_name=lambda: TARGET_BACKEND_CROSS_MINGW,
     )
     app.system_report = SimpleNamespace(wsl_mingw_preparation=None)
