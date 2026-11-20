@@ -31,6 +31,7 @@ from .build_identity import (
     Compatibility,
     IdentityComparison,
     IdentityLoadStatus,
+    MaterialBuildInputs,
     TargetIdentity,
     build_windows_identity,
     compare_identities,
@@ -123,6 +124,7 @@ def probe_current_identity(
     components: Optional[Mapping[str, str]] = None,
     toolchains: Optional[Mapping[str, str]] = None,
     host: Optional[Mapping[str, Any]] = None,
+    material_inputs: MaterialBuildInputs,
     interop: Optional[WindowsInterop] = None,
     probe: Callable[..., WindowsTargetState] = probe_windows_target,
 ) -> TargetIdentity:
@@ -131,7 +133,7 @@ def probe_current_identity(
         state = probe(override, interop=interop)
     else:
         state = probe(override)
-    return build_windows_identity(config_dict, state, components, toolchains, host)
+    return build_windows_identity(config_dict, state, components, toolchains, host, material_inputs)
 
 
 def _write_marker(path: Path, identity: TargetIdentity) -> None:
@@ -172,6 +174,14 @@ def prepare_windows_target(
     Raises :class:`IdentityError` (before touching any saved state) when reuse
     would be unsafe.
     """
+    loaded_current = parse_identity(current.to_dict())
+    if loaded_current.status != IdentityLoadStatus.OK:
+        raise IdentityError(
+            "invalid_current_identity",
+            f"The current WSL-Mingw identity is not trustworthy ({loaded_current.reason}); "
+            "no workspace was selected or changed.",
+            path=base_workspace,
+        )
     workspace = identity_workspace(base_workspace, current)
     marker = workspace / MARKER_NAME
     notes = _legacy_notes(base_workspace)

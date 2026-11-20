@@ -1,5 +1,6 @@
 import hashlib
 import json
+import copy
 import tarfile
 from pathlib import Path
 
@@ -8,7 +9,11 @@ import yaml
 
 from ffmpeg_builder.build_types import BuildError
 from ffmpeg_builder.components import ComponentRegistry
-from ffmpeg_builder.target_inputs import _validate_target_tree, materialize_target_inputs
+from ffmpeg_builder.target_inputs import (
+    _validate_target_tree,
+    materialize_target_inputs,
+    validate_target_inputs_manifest,
+)
 
 
 def _archive(root: Path, archive: Path) -> str:
@@ -159,6 +164,27 @@ output.write_bytes(b"!<arch>\\nwindows-coff-import-library")
         json.loads((prefix / "target-inputs.json").read_text())["materialization_id"]
         == manifest["materialization_id"]
     )
+    validate_target_inputs_manifest(manifest, prefix)
+
+    tampered_id = copy.deepcopy(manifest)
+    tampered_id["materialization_id"] = "0" * 64
+    with pytest.raises(BuildError, match="ID does not match"):
+        validate_target_inputs_manifest(tampered_id)
+
+    tampered_interface = copy.deepcopy(manifest)
+    tampered_interface["interfaces"][0]["output_sha256"] = "0" * 64
+    unsigned = {
+        key: tampered_interface[key] for key in ("target_backend", "sources", "interfaces", "files")
+    }
+    tampered_interface["materialization_id"] = hashlib.sha256(
+        json.dumps(unsigned, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    with pytest.raises(BuildError, match="Generated interface hash disagrees"):
+        validate_target_inputs_manifest(tampered_interface)
+
+    (prefix / "include" / "CL" / "cl.h").write_text("tampered\n", encoding="utf-8")
+    with pytest.raises(BuildError, match="do not match manifest hashes"):
+        validate_target_inputs_manifest(manifest, prefix)
 
 
 def test_target_prefix_contamination_is_rejected(tmp_path: Path):

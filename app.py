@@ -4,6 +4,7 @@ import os
 import platform as _platform
 import shutil
 import sys
+import tempfile
 from dataclasses import replace
 from pathlib import Path
 from types import TracebackType
@@ -21,7 +22,13 @@ from .build_types import (
 )
 from .builder import FFmpegBuilder
 from .components import Component, ComponentRegistry
-from .build_identity import build_native_identity
+from .build_identity import (
+    MaterialBuildInputs,
+    build_native_identity,
+    build_windows_identity,
+    compare_identities,
+    runtime_identity,
+)
 from .config import TARGET_BACKEND_CROSS_MINGW, BuildConfig, ConfigManager
 from .cuda_prerequisites import (
     ResolvedCudaBuildHostInputs,
@@ -48,7 +55,6 @@ from .target_guard import (
     mark_state_verified,
     prepare_native_target,
     prepare_windows_target,
-    probe_current_identity,
     recheck_runtime_identity,
 )
 from .system_report import SystemReportGenerator
@@ -63,8 +69,10 @@ from .vulkan_prerequisites import (
 )
 from .wsl_mingw_preparation import (
     WslMingwPreparation,
+    project_material_build_inputs,
     resolve_wsl_mingw_project_toolchains,
 )
+from .target_inputs import materialize_target_inputs, validate_target_inputs_manifest
 from .ui.dashboard import BuildDashboard
 from .ui.error_handler import ErrorHandler
 from .ui.screens import (
@@ -139,26 +147,69 @@ class FFmpegBuilderApp:
     def _is_cross_mingw(config: BuildConfig) -> bool:
         return config.target_backend == TARGET_BACKEND_CROSS_MINGW
 
-    def current_windows_identity(self, config: BuildConfig) -> Any:
-        """Freshly probe the Windows target (or apply the override) -> identity."""
-        components = self._get_buildable_components(config)
+    def _probe_windows_target(self, config: BuildConfig) -> WindowsTargetState:
+        """Freshly probe the physical Windows target (or apply its explicit override)."""
         windows = config.windows
-        probe = self.windows_probe
-
-        def _probe(override: Any, **kwargs: Any) -> Any:
-            self.windows_target_state = probe(
-                override, timeout=windows.probe_timeout_seconds, **kwargs
-            )
-            return self.windows_target_state
-
-        return probe_current_identity(
-            config.to_dict(),
-            windows.target_override,
-            components={c.name: c.version for c in components},
-            toolchains={c.name: c.toolchain for c in components},
-            host={"platform": self.platform_detector.get_build_backend_name()},
-            probe=_probe,
+        self.windows_target_state = self.windows_probe(
+            windows.target_override, timeout=windows.probe_timeout_seconds
         )
+        return self.windows_target_state
+
+    def current_windows_identity(
+        self,
+        config: BuildConfig,
+        material_inputs: MaterialBuildInputs,
+        *,
+        target_state: Optional[WindowsTargetState] = None,
+        components: Optional[List[Component]] = None,
+    ) -> Any:
+        """Create a full semantic identity from the current target and resolved inputs."""
+        target_state = target_state or self._probe_windows_target(config)
+        components = (
+            components if components is not None else self._get_buildable_components(config)
+        )
+        try:
+            return build_windows_identity(
+                config.to_dict(),
+                target_state,
+                components={c.name: c.version for c in components},
+                toolchains={c.name: c.toolchain for c in components},
+                host={"platform": self.platform_detector.get_build_backend_name()},
+                material_inputs=material_inputs,
+            )
+        except (TypeError, ValueError) as exc:
+            raise BuildError(
+                "WSL-Mingw identity",
+                f"Resolved material inputs cannot form a trusted semantic identity: {exc}",
+                category=CATEGORY_TARGET_DATA,
+                code="wsl_mingw_identity_construction_failed",
+            ) from exc
+
+    def _materialize_target_input_manifest(
+        self,
+        config: BuildConfig,
+        project_toolchains: Dict[str, Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Generate and verify G2.6 identity metadata in a disposable prefix."""
+        self.base_workspace.mkdir(parents=True, exist_ok=True)
+        archives = Path(config.source_archives_dir)
+        if not archives.is_absolute():
+            archives = PROJECT_ROOT / archives
+        llvm_prefix = Path(project_toolchains["llvm-mingw"]["prefix"])
+        with tempfile.TemporaryDirectory(
+            prefix=".target-input-identity-", dir=self.base_workspace
+        ) as temporary:
+            root = Path(temporary)
+            manifest = materialize_target_inputs(
+                registry=self.registry,
+                target_backend=TARGET_BACKEND_CROSS_MINGW,
+                source_archives_dir=archives,
+                packages_dir=root / "packages",
+                target_prefix=root / "target-prefix",
+                toolchain_root=llvm_prefix,
+                allow_network_downloads=config.allow_network_downloads,
+            )
+            return validate_target_inputs_manifest(manifest, root / "target-prefix")
 
     def prepare_target(self, config: BuildConfig, resume: bool) -> TargetSession:
         """Validate prerequisites and target identity before any state mutation.
@@ -179,22 +230,8 @@ class FFmpegBuilderApp:
         if self._is_cross_mingw(config):
             self.windows_target_state = None
             self.wsl_mingw_preparation = None
-            current = self.current_windows_identity(config)
-            session = prepare_windows_target(self.base_workspace, current, resume)
-            self.workspace = session.workspace
-            self.packages = self.workspace / "packages"
-            self.state_manager = StateManager(self.workspace / "build_state.json")
-            self.state_manager.require_verified_identity = True
-
-            target_state = self.windows_target_state
-            if target_state is None:
-                raise BuildError(
-                    "Windows target",
-                    "The G1 target probe returned no structured Windows target state.",
-                    category=CATEGORY_TARGET_DATA,
-                    code="windows_target_state_missing",
-                )
-            platform_info = self.platform_detector.platform_info
+            target_state = self._probe_windows_target(config)
+            components = self._get_buildable_components(config)
             try:
                 registry = ToolchainRegistry()
             except (OSError, ValueError) as exc:
@@ -206,7 +243,7 @@ class FFmpegBuilderApp:
                 ) from exc
             store = ToolchainStore(
                 resolve_store_root(PROJECT_ROOT),
-                workspace=self.workspace,
+                workspace=self.base_workspace,
                 source_archives_dir=PROJECT_ROOT / config.source_archives_dir,
                 allow_network_downloads=config.allow_network_downloads,
                 backend=TARGET_BACKEND_CROSS_MINGW,
@@ -237,6 +274,49 @@ class FFmpegBuilderApp:
                     )
                 else:
                     cuda_inputs = validate_cuda_ptx_compatibility(cuda_inputs, target_state)
+
+            vulkan: Optional[ResolvedVulkanSdk] = None
+            if config.enable_libplacebo_vulkan:
+                vulkan = resolve_wsl_mingw_vulkan_sdk(
+                    config,
+                    required=True,
+                    required_capabilities=(
+                        CAPABILITY_SHADER_COMPILATION,
+                        CAPABILITY_SPIRV_VALIDATION,
+                    ),
+                )
+                if vulkan is None:
+                    raise BuildError(
+                        "Vulkan SDK",
+                        "Required Vulkan SDK resolution returned no prerequisite.",
+                        category=CATEGORY_EXTERNAL_PREREQUISITE,
+                        code="vulkan_sdk_missing",
+                    )
+
+            target_input_manifest = self._materialize_target_input_manifest(
+                config, project_toolchains
+            )
+            material_inputs = project_material_build_inputs(
+                config,
+                components,
+                project_toolchains,
+                cuda_inputs,
+                vulkan,
+                target_input_manifest,
+            )
+            current = self.current_windows_identity(
+                config,
+                material_inputs,
+                target_state=target_state,
+                components=components,
+            )
+            session = prepare_windows_target(self.base_workspace, current, resume)
+            self.workspace = session.workspace
+            self.packages = self.workspace / "packages"
+            self.state_manager = StateManager(self.workspace / "build_state.json")
+            self.state_manager.require_verified_identity = True
+
+            platform_info = self.platform_detector.platform_info
             platform_info.cuda_build_host_inputs = cuda_inputs
             platform_info.cuda_available = cuda_inputs is not None
             if cuda_inputs is not None:
@@ -278,23 +358,6 @@ class FFmpegBuilderApp:
                 platform_info.libvmaf_cuda_supported = False
                 platform_info.libvmaf_cuda_reason = "CUDA capability is disabled by configuration."
 
-            vulkan: Optional[ResolvedVulkanSdk] = None
-            if config.enable_libplacebo_vulkan:
-                vulkan = resolve_wsl_mingw_vulkan_sdk(
-                    config,
-                    required=True,
-                    required_capabilities=(
-                        CAPABILITY_SHADER_COMPILATION,
-                        CAPABILITY_SPIRV_VALIDATION,
-                    ),
-                )
-                if vulkan is None:
-                    raise BuildError(
-                        "Vulkan SDK",
-                        "Required Vulkan SDK resolution returned no prerequisite.",
-                        category=CATEGORY_EXTERNAL_PREREQUISITE,
-                        code="vulkan_sdk_missing",
-                    )
             platform_info.vulkan_available = vulkan is not None
             platform_info.vulkan_dev_available = vulkan is not None
             platform_info.vulkan_runtime_available = False
@@ -319,8 +382,40 @@ class FFmpegBuilderApp:
                     f"{', '.join(sorted(vulkan.validated_capabilities))}. "
                     "Windows runtime/device facts remain separate."
                 )
+            identity_summary = {
+                "schema_version": session.identity.schema_version,
+                "digest": session.identity.build_fingerprint,
+                "build_key": session.identity.build_key,
+                "backend": session.identity.backend,
+                "target": dict(session.identity.build.get("target", {})),
+                "toolchains": {
+                    name: {
+                        "profile": value.get("profile", name),
+                        "version": value.get("version", value.get("release")),
+                        "target": value.get("target"),
+                    }
+                    for name, value in material_inputs.toolchains.items()
+                    if isinstance(value, dict)
+                },
+                "cuda_architecture": (
+                    material_inputs.effective_cuda.get("architecture")
+                    if material_inputs.effective_cuda is not None
+                    else None
+                ),
+                "target_input_materialization_id": target_input_manifest["materialization_id"],
+                "configured_capabilities": dict(material_inputs.configured_capabilities),
+            }
+            session.notes.append(
+                f"Semantic identity schema {session.identity.schema_version}, "
+                f"key {session.identity.build_key}; target inputs "
+                f"{target_input_manifest['materialization_id']}."
+            )
             self.wsl_mingw_preparation = WslMingwPreparation.create(
-                target_state, cuda_inputs, vulkan, project_toolchains
+                target_state,
+                cuda_inputs,
+                vulkan,
+                project_toolchains,
+                identity_summary=identity_summary,
             )
             self.system_report.wsl_mingw_preparation = self.wsl_mingw_preparation.to_dict()
             mark_state_verified(self.state_manager)
@@ -511,7 +606,8 @@ class FFmpegBuilderApp:
             return None
         baseline = baseline_from_state(self.state_manager.get()) or session.identity
         try:
-            current = self.current_windows_identity(config)
+            target = self._probe_windows_target(config)
+            current = baseline.with_runtime(runtime_identity(target))
         except BuildError as exc:
             invalidate_acceptance(self.state_manager, f"re-probe failed: {exc}", [])
             return f"Windows target re-probe failed; runtime acceptance invalid: {exc}"

@@ -417,6 +417,7 @@ class ToolchainStore:
             "targets": sorted(item["target"] for item in entry.extras),
             "extras": [dict(item) for item in entry.extras],
             "verified": entry.verified,
+            "provenance": entry.provenance(),
         }
 
     def resolve_entry_path(self, entry: InstalledToolchain) -> Path:

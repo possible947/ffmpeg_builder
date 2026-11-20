@@ -157,7 +157,9 @@ Or use the environment check script:
 > **not implemented yet**; there is no supported end-to-end Windows build
 > workflow today. Early feasibility experiments succeeded on one specific
 > host (see [`docs/windows_build_strategy.md`](docs/windows_build_strategy.md));
-> the implementation gates G1–G7 are still open. The previous MSYS2-based
+> G1 and G2.1–G2.7 preparation gates are complete, while G2.8 and G3–G7 remain
+> open. WSL-Mingw resume is guarded by a full semantic target-and-input
+> identity; changed or legacy input identity is never silently adopted. The previous MSYS2-based
 > Windows build path was replaced by this route and is no longer documented
 > or supported; any MSYS2 code still in the repository is legacy and is
 > being removed/migrated.
@@ -234,9 +236,10 @@ resolves `VULKAN_SDK`; an invalid explicit root fails rather than falling back
 to the environment or `PATH`. These are externally managed WSL host
 prerequisites, not project-managed Windows target libraries.
 
-G2.4/G2.5 prerequisite preparation has passed live acceptance on the validated
-host. The Windows cross-build backend and end-to-end Windows FFmpeg build are
-not implemented; G2.6–G2.8 and G3 remain unstarted.
+G2.4/G2.5 prerequisite preparation and G2.7 semantic identity have passed live
+acceptance on the validated host; G2.6 target-input staging has passed
+isolated acceptance. The Windows cross-build backend and end-to-end Windows
+FFmpeg build are not implemented; G2.8 and G3 remain unstarted.
 
 ### Windows runtime prerequisites
 

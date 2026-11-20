@@ -1,3 +1,26 @@
+### Accepted — G2.7 WSL-Mingw semantic build identity
+
+- Integrated the freshly probed G1 Windows target with resolved LLVM-MinGW,
+  Rust and target-std provenance, configured capabilities, effective CUDA
+  architecture/workaround and reported NVCC release, artifact-producing
+  shader-compiler version, and verified G2.6 target-input manifest into the
+  WSL-Mingw build identity. Absolute store/SDK paths and diagnostic-only
+  metadata do not affect reuse; G1-only or incomplete WSL-Mingw identities
+  cannot authorize reuse, while native schema-1 identity remains supported.
+- Moved project toolchain/prerequisite resolution and isolated G2.6
+  target-input materialization before identity comparison and workspace
+  selection. Material changes select an isolated workspace; unchanged inputs
+  and diagnostic-only drift reuse the compatible workspace; prior data is
+  preserved. Runtime drift retains compiled artifacts but invalidates prior
+  acceptance.
+- Live acceptance used fresh physical-Windows probing and disposable identity
+  workspaces: fresh schema-2 preparation, same-input resume, diagnostic-only
+  drift resume, material nv-codec provenance drift isolation with an old
+  workspace artifact preserved, and rejection of G1-only legacy WSL-Mingw
+  state. No saved build configuration, real workspace, external SDK, system
+  compiler, Windows host, or installed toolchain was changed. No complete
+  Windows FFmpeg cross-build is claimed; G2.8 and G3 remain open.
+
 ### Accepted — G2.6 Windows target inputs and link interfaces
 
 - Added independent `target_backends` eligibility and offline staging for the

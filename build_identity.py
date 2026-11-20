@@ -31,7 +31,8 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from .windows_probe import FeatureState, WindowsTargetState
 
-IDENTITY_SCHEMA_VERSION = 1
+IDENTITY_SCHEMA_VERSION = 2
+LEGACY_IDENTITY_SCHEMA_VERSION = 1
 BACKEND_CROSS_MINGW = "linux-cross-mingw"
 
 # BuildConfig fields that do not change produced artifacts (execution tuning,
@@ -125,7 +126,8 @@ def normalize(value: Any) -> Any:
     Strings are whitespace-collapsed (case is preserved here; identifiers that
     are case-insensitive are lower-cased by the identity builders). ``None`` and
     ``""`` stay distinct. Dict keys are sorted at serialisation time. Floats are
-    rendered as strings so no binary rounding leaks into comparisons.
+    rendered as strings so no binary rounding leaks into comparisons. Mapping
+    keys are emitted in sorted order so persisted identity evidence is canonical.
     """
     if value is None or isinstance(value, bool) or isinstance(value, int):
         return value
@@ -134,7 +136,9 @@ def normalize(value: Any) -> Any:
     if isinstance(value, str):
         return _collapse(value)
     if isinstance(value, Mapping):
-        return {str(k): normalize(v) for k, v in value.items()}
+        return {
+            str(k): normalize(v) for k, v in sorted(value.items(), key=lambda item: str(item[0]))
+        }
     if isinstance(value, (list, tuple)):
         return [normalize(v) for v in value]
     raise TypeError(f"Unsupported identity value type: {type(value).__name__}")
@@ -147,6 +151,17 @@ def canonical_json(value: Any) -> str:
 
 def fingerprint(value: Any) -> str:
     return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def target_manifest_fingerprint(value: Mapping[str, Any]) -> str:
+    """Hash G2.6 manifest content using its canonical compact JSON encoding."""
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _is_sha256(value: Any) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value.lower()) is not None
 
 
 def _sorted_items(items: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
@@ -190,9 +205,9 @@ class TargetIdentity:
         return {
             "schema_version": self.schema_version,
             "backend": self.backend,
-            "build": self.build,
-            "runtime": self.runtime,
-            "diagnostics": self.diagnostics,
+            "build": normalize(self.build),
+            "runtime": normalize(self.runtime),
+            "diagnostics": normalize(self.diagnostics),
             "fingerprints": {
                 "build": self.build_fingerprint,
                 "runtime": self.runtime_fingerprint,
@@ -209,6 +224,53 @@ class TargetIdentity:
             diagnostics=self.diagnostics if diagnostics is None else diagnostics,
             schema_version=self.schema_version,
         )
+
+
+@dataclass(frozen=True)
+class MaterialBuildInputs:
+    """Canonical G2 material-input projection for the WSL-Mingw build."""
+
+    target_backend: str
+    configured_capabilities: Mapping[str, Any]
+    toolchains: Mapping[str, Any]
+    effective_cuda: Optional[Mapping[str, Any]]
+    target_inputs: Mapping[str, Any]
+
+    def to_dict(self) -> Dict[str, Any]:
+        if self.target_backend != BACKEND_CROSS_MINGW:
+            raise ValueError(f"unsupported material-input backend: {self.target_backend}")
+        if not {"llvm_mingw", "rust", "rust_target_std"} <= set(self.toolchains):
+            raise ValueError("material toolchain identity is incomplete")
+        if not self.configured_capabilities:
+            raise ValueError("configured capability identity is missing")
+        manifest = self.target_inputs.get("manifest")
+        materialization_id = self.target_inputs.get("materialization_id")
+        if not isinstance(materialization_id, str) or not isinstance(manifest, Mapping):
+            raise ValueError("target-input materialisation identity is missing")
+        manifest_identity = {
+            key: manifest.get(key) for key in ("target_backend", "sources", "interfaces", "files")
+        }
+        if (
+            manifest.get("target_backend") != BACKEND_CROSS_MINGW
+            or not isinstance(manifest.get("sources"), dict)
+            or not isinstance(manifest.get("interfaces"), list)
+            or not isinstance(manifest.get("files"), dict)
+        ):
+            raise ValueError("target-input manifest is incomplete or has the wrong backend")
+        if target_manifest_fingerprint(manifest_identity) != materialization_id:
+            raise ValueError("target-input materialisation ID does not match its manifest")
+        normalized = normalize(
+            {
+                "target_backend": self.target_backend,
+                "configured_capabilities": self.configured_capabilities,
+                "toolchains": self.toolchains,
+                "effective_cuda": self.effective_cuda,
+                "target_inputs": self.target_inputs,
+            }
+        )
+        if not isinstance(normalized, dict):
+            raise TypeError("normalized material-input identity must be an object")
+        return normalized
 
 
 class IdentityLoadStatus(str, Enum):
@@ -242,12 +304,13 @@ def parse_identity(data: Any) -> IdentityLoad:
     version = data.get("schema_version")
     if isinstance(version, bool) or not isinstance(version, int):
         return corrupt("identity has no integer schema_version")
-    if version != IDENTITY_SCHEMA_VERSION:
+    if version not in (LEGACY_IDENTITY_SCHEMA_VERSION, IDENTITY_SCHEMA_VERSION):
         return IdentityLoad(
             IdentityLoadStatus.UNSUPPORTED_SCHEMA,
             None,
             f"identity schema_version {version} is not supported "
-            f"(this version understands {IDENTITY_SCHEMA_VERSION})",
+            f"(this version understands {LEGACY_IDENTITY_SCHEMA_VERSION} and "
+            f"{IDENTITY_SCHEMA_VERSION})",
         )
     backend = data.get("backend")
     build = data.get("build")
@@ -262,6 +325,180 @@ def parse_identity(data: Any) -> IdentityLoad:
         return corrupt("identity.runtime must be an object or null")
     if backend == BACKEND_CROSS_MINGW and not runtime:
         return corrupt("identity.runtime is required for the linux-cross-mingw backend")
+    if backend == BACKEND_CROSS_MINGW:
+        if version != IDENTITY_SCHEMA_VERSION:
+            return IdentityLoad(
+                IdentityLoadStatus.UNSUPPORTED_SCHEMA,
+                None,
+                "saved linux-cross-mingw identity is G1-only and has no G2 material-input "
+                "projection; mutable artifacts cannot be proven compatible",
+            )
+        material_inputs = build.get("material_inputs")
+        if not isinstance(material_inputs, dict):
+            return corrupt("identity.build.material_inputs is missing")
+        required_material = {
+            "target_backend",
+            "configured_capabilities",
+            "toolchains",
+            "effective_cuda",
+            "target_inputs",
+        }
+        if not required_material <= set(material_inputs):
+            return corrupt("identity.build.material_inputs is incomplete")
+        if material_inputs.get("target_backend") != BACKEND_CROSS_MINGW:
+            return corrupt("identity.build.material_inputs.target_backend is inconsistent")
+        if not isinstance(material_inputs.get("configured_capabilities"), dict):
+            return corrupt("identity.build.material_inputs.configured_capabilities is invalid")
+        capabilities = material_inputs["configured_capabilities"]
+        if not {"cuda", "vulkan", "opencl", "nvidia_codec"} <= set(capabilities):
+            return corrupt("identity.build.material_inputs.configured_capabilities is incomplete")
+        toolchains = material_inputs.get("toolchains")
+        if not isinstance(toolchains, dict) or not {
+            "llvm_mingw",
+            "rust",
+            "rust_target_std",
+        } <= set(toolchains):
+            return corrupt("identity.build.material_inputs.toolchains is incomplete")
+        expected_profiles = {"llvm_mingw": "llvm-mingw", "rust": "rust"}
+        for name, expected_profile in expected_profiles.items():
+            identity = toolchains.get(name)
+            provenance = identity.get("provenance") if isinstance(identity, dict) else None
+            if (
+                not isinstance(identity, dict)
+                or identity.get("profile") != expected_profile
+                or not identity.get("version")
+                or not isinstance(provenance, dict)
+                or provenance.get("profile") != expected_profile
+                or provenance.get("version") != identity.get("version")
+                or not _is_sha256(provenance.get("source_sha256"))
+            ):
+                return corrupt(f"identity.build.material_inputs.toolchains.{name} is incomplete")
+        llvm_target = toolchains["llvm_mingw"].get("target")
+        if (
+            not isinstance(llvm_target, dict)
+            or llvm_target.get("triple") != "x86_64-w64-mingw32"
+            or llvm_target.get("runtime") != "ucrt"
+        ):
+            return corrupt("identity.build.material_inputs LLVM-MinGW target is invalid")
+        rust_std = toolchains.get("rust_target_std")
+        if (
+            not isinstance(rust_std, dict)
+            or rust_std.get("target") != "x86_64-pc-windows-gnullvm"
+            or rust_std.get("release") != toolchains["rust"].get("version")
+            or not _is_sha256(rust_std.get("sha256"))
+        ):
+            return corrupt("identity.build.material_inputs Rust target std is incomplete")
+        cuda = material_inputs.get("effective_cuda")
+        cuda_capability = capabilities.get("cuda")
+        if not isinstance(cuda_capability, dict):
+            return corrupt("identity.build.material_inputs CUDA capability is invalid")
+        if cuda_capability.get("effective"):
+            ccbin = toolchains.get("cuda_ccbin")
+            if (
+                not isinstance(cuda, dict)
+                or not isinstance(cuda.get("architecture"), str)
+                or not cuda.get("architecture")
+                or not isinstance(cuda.get("compatibility_flags"), list)
+                or not isinstance(cuda.get("external_nvcc"), dict)
+                or not cuda["external_nvcc"].get("nvcc_version")
+                or not isinstance(ccbin, dict)
+                or not ccbin.get("profile")
+                or not ccbin.get("role_path")
+                or not isinstance(ccbin.get("provenance"), dict)
+                or ccbin["provenance"].get("profile") != ccbin.get("profile")
+                or ccbin["provenance"].get("version") != ccbin.get("version")
+                or not _is_sha256(ccbin["provenance"].get("source_sha256"))
+            ):
+                return corrupt(
+                    "identity.build.material_inputs effective CUDA inputs are incomplete"
+                )
+        elif cuda is not None:
+            return corrupt("identity.build.material_inputs has CUDA inputs while CUDA is disabled")
+        target_inputs = material_inputs.get("target_inputs")
+        if (
+            not isinstance(target_inputs, dict)
+            or not isinstance(target_inputs.get("materialization_id"), str)
+            or not _is_sha256(target_inputs.get("materialization_id"))
+            or not isinstance(target_inputs.get("manifest"), dict)
+        ):
+            return corrupt("identity.build.material_inputs.target_inputs is incomplete")
+        manifest = target_inputs["manifest"]
+        manifest_identity = {
+            key: manifest.get(key) for key in ("target_backend", "sources", "interfaces", "files")
+        }
+        sources = manifest.get("sources")
+        interfaces = manifest.get("interfaces")
+        files = manifest.get("files")
+        if (
+            manifest.get("target_backend") != BACKEND_CROSS_MINGW
+            or not isinstance(sources, dict)
+            or not isinstance(interfaces, list)
+            or not isinstance(files, dict)
+        ):
+            return corrupt("identity.build.material_inputs target-input manifest is invalid")
+        required_sources = {"nv-codec", "vulkan-headers", "opencl-headers"}
+        if not required_sources <= set(sources):
+            return corrupt("identity target-input manifest is missing required header sources")
+        if target_manifest_fingerprint(manifest_identity) != target_inputs["materialization_id"]:
+            return corrupt(
+                "identity.build.material_inputs.target_inputs materialisation ID does not "
+                "match its manifest"
+            )
+        for source_name, source in sources.items():
+            digest = source.get("sha256") if isinstance(source, dict) else None
+            if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+                return corrupt(f"identity target source checksum is invalid: {source_name}")
+        for interface in interfaces:
+            if not isinstance(interface, dict):
+                return corrupt("identity target interface metadata is invalid")
+            output = interface.get("output")
+            output_digest = interface.get("output_sha256")
+            if (
+                not isinstance(output, str)
+                or not isinstance(interface.get("recipe"), str)
+                or not isinstance(output_digest, str)
+                or files.get(output) != output_digest
+            ):
+                return corrupt("identity generated interface hash disagrees with its file identity")
+        if any(
+            not isinstance(path, str)
+            or path.startswith("/")
+            or ".." in path.split("/")
+            or not path.startswith(("include/", "lib/"))
+            or not _is_sha256(digest)
+            for path, digest in files.items()
+        ):
+            return corrupt("identity target-input file hashes are invalid")
+        if not {"lib/libvulkan.a", "lib/libOpenCL.a"} <= {
+            interface.get("output") for interface in interfaces if isinstance(interface, dict)
+        }:
+            return corrupt("identity target-input manifest is missing generated interfaces")
+        opencl_interface = next(
+            (
+                interface
+                for interface in interfaces
+                if isinstance(interface, dict) and interface.get("output") == "lib/libOpenCL.a"
+            ),
+            None,
+        )
+        if (
+            opencl_interface is None
+            or opencl_interface.get("definition_source_component") != "opencl-icd-loader"
+            or not _is_sha256(opencl_interface.get("definition_source_sha256"))
+        ):
+            return corrupt("identity OpenCL interface definition source is incomplete")
+        vulkan_capability = capabilities.get("vulkan")
+        shader_compiler = target_inputs.get("vulkan_shader_compiler")
+        if (
+            isinstance(vulkan_capability, dict)
+            and vulkan_capability.get("effective")
+            and (
+                not isinstance(shader_compiler, dict)
+                or not shader_compiler.get("tool")
+                or not shader_compiler.get("version")
+            )
+        ):
+            return corrupt("identity Vulkan shader compiler material identity is incomplete")
     if not isinstance(diagnostics, dict):
         return corrupt("identity.diagnostics must be an object")
     if not isinstance(fingerprints, dict):
@@ -285,11 +522,14 @@ def parse_identity(data: Any) -> IdentityLoad:
 # --------------------------------------------------------------------------
 
 
-def _material_config(config_dict: Mapping[str, Any]) -> Dict[str, Any]:
+def _material_config(
+    config_dict: Mapping[str, Any], *, omit_external_prerequisite_paths: bool = False
+) -> Dict[str, Any]:
     return {
         key: normalize(value)
         for key, value in sorted(config_dict.items())
         if key not in NON_MATERIAL_CONFIG_FIELDS
+        and not (omit_external_prerequisite_paths and key == "external_prerequisite_paths")
     }
 
 
@@ -457,16 +697,17 @@ def build_windows_identity(
     components: Optional[Mapping[str, str]] = None,
     toolchains: Optional[Mapping[str, str]] = None,
     host: Optional[Mapping[str, Any]] = None,
+    material_inputs: Optional[MaterialBuildInputs] = None,
 ) -> TargetIdentity:
     """Identity for the WSL-Mingw (``linux-cross-mingw``) route.
 
-    ``components`` (name -> version) and ``toolchains`` (component -> profile)
-    are the project-selected inputs already resolved by the application. Later
-    gates add their material fields (LLVM-MinGW, Rust target std, CUDA
-    architecture, ``-ccbin``, ...) under new keys; an old saved identity then
-    lacks them and is treated as build-incompatible rather than accidentally
-    compatible.
+    ``material_inputs`` is required for a current reusable WSL-Mingw identity.
+    Omitting it creates a G1-only identity solely for legacy diagnostics; its
+    schema is rejected by :func:`parse_identity` for reuse.
     """
+    if material_inputs is None:
+        raise ValueError("linux-cross-mingw identity requires resolved G2 material inputs")
+    material_projection = material_inputs.to_dict()
     native = bool(config_dict.get("native_build"))
     cpu_spec: Dict[str, Any]
     if native:
@@ -477,10 +718,11 @@ def build_windows_identity(
         "backend": BACKEND_CROSS_MINGW,
         "target": {"os": state.os.platform, "architecture": state.os.architecture},
         "ffmpeg_version": normalize(config_dict.get("ffmpeg_version")),
-        "config": _material_config(config_dict),
+        "config": _material_config(config_dict, omit_external_prerequisite_paths=True),
         "cpu_specialization": cpu_spec,
         "components": {k: normalize(v) for k, v in sorted((components or {}).items())},
         "toolchains": {k: normalize(v) for k, v in sorted((toolchains or {}).items())},
+        "material_inputs": material_projection,
     }
     return TargetIdentity(
         backend=BACKEND_CROSS_MINGW,
@@ -585,6 +827,19 @@ def _show(value: Any) -> str:
 def _diff(
     saved: Any, current: Any, path: str, category: Category, out: List[IdentityDifference]
 ) -> None:
+    if path.endswith(".manifest.files") and isinstance(saved, dict) and isinstance(current, dict):
+        if canonical_json(saved) != canonical_json(current):
+            out.append(
+                IdentityDifference(
+                    category,
+                    path,
+                    {"count": len(saved), "sha256": fingerprint(saved)},
+                    {"count": len(current), "sha256": fingerprint(current)},
+                    _REASON_BY_CATEGORY[category],
+                    _ACTION_BY_CATEGORY[category],
+                )
+            )
+        return
     if isinstance(saved, dict) and isinstance(current, dict):
         for key in sorted(set(saved) | set(current)):
             sub = f"{path}.{key}" if path else key

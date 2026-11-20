@@ -59,11 +59,13 @@ each, smoke-tested). See `CHANGELOG.md` for the release history.
 
 ## Module Reference
 
-### `windows_probe.py`, `build_identity.py`, `target_guard.py` (G1)
+### `windows_probe.py`, `build_identity.py`, `target_guard.py` (G1/G2.7)
 
 Windows target probe (WSL interop, overrides), semantic build/runtime identity
-and the reuse guard used by `app.prepare_target()` and `scripts/run_build.py`.
-Details: `docs/windows_build_strategy.md`, "G1 implementation notes".
+and the pre-reuse guard used by `app.prepare_target()` and
+`scripts/run_build.py`. G2.7 adds the resolved WSL-Mingw material-input
+projection without changing native identity requirements. Details:
+`docs/windows_build_strategy.md`, "G1 implementation notes" and §6.
 
 ### `__main__.py`
 
@@ -848,20 +850,57 @@ Run `python scripts/prepare_target_inputs.py --target-prefix <fresh-path>
 --toolchain-root <installed-llvm-mingw>` to stage the declared inputs offline.
 The output contains only target headers, the two proven import libraries, and
 `target-inputs.json`; its source and file hashes, backend, and interface recipe
-identities are available for later G2.7 build-identity integration. G2.6 does
+identities feed the G2.7 semantic build identity. G2.6 does
 not construct the final cross compiler environment, target pkg-config/CMake/
 Meson configuration, full target dependency prefix, or FFmpeg build. The
 isolated acceptance compiled representative NVENC/NVDEC/CUDA, Vulkan, and
 OpenCL headers with LLVM-MinGW and linked Vulkan/OpenCL smoke programs; the
 staged tree passed contamination inspection.
 
+#### G2.7 — semantic material-input identity
+
+The WSL-Mingw `prepare_target()` sequence is: fresh G1 Windows target probe;
+resolve required project toolchains and selected external prerequisites;
+validate effective CUDA inputs and configured capabilities; materialise and
+verify G2.6 target headers/interfaces in a disposable prefix; construct the
+complete identity; then compare saved state and select the identity workspace.
+TUI and headless builds use this same path. Native backends do not require a
+Windows probe, LLVM-MinGW, Rust target std, CUDA policy, or Windows target
+inputs.
+
+Identity schema 2 persists deterministic, structured evidence. SHA-256 over
+canonical build JSON supplies the full digest and the first 16 hex characters
+form the workspace key. The target-input manifest (including its file hashes)
+is retained and revalidated against its materialisation ID; generated
+interface outputs must agree with manifest hashes. Large file-set differences
+are summarized in mismatch output. G1-only/incomplete WSL-Mingw identities are
+legacy and cannot authorize reuse; native schema-1 identity remains readable.
+
+Material fields include backend and configured capabilities; LLVM-MinGW and
+Rust source/version provenance; the Rust `x86_64-pc-windows-gnullvm` std
+identity; selected project GCC `-ccbin` provenance/role; effective CUDA
+architecture and compatibility workaround; external NVCC/toolkit release;
+pinned NVIDIA/Vulkan/OpenCL headers; generated Vulkan/OpenCL interface
+recipes/output hashes; target-input materialisation ID; and the selected
+shader compiler version. CUDA/Vulkan SDK roots, the temporary target prefix,
+SPIR-V validator version, and detailed probe dumps are diagnostic-only.
+External SDK trees and Windows runtime DLLs are never hashed or copied into
+project provenance.
+
+Same semantic inputs permit reuse. A material change selects an isolated
+workspace and leaves old artifacts untouched; runtime-only G1 drift invalidates
+acceptance, and diagnostic-only changes do not prevent reuse. Live acceptance
+covered fresh/same preparation, material and diagnostic drift, and rejection
+of G1-only saved state on the physical Windows/WSL host. This gate establishes
+identity safety, not a production cross-build; G2.8 and G3 remain open.
+
 #### Reusing the native CUDA/Vulkan work for WSL-Mingw
 
 Commit `447b555` provides reusable build-input mechanisms, not a completed
 Windows component build. Native FFmpeg 8.1 and 9.0 builds used the shared CUDA
 profile and matched Vulkan headers/XML; the separate Windows G0A.5 PoC and
-G2.4/G2.5 preparation do not validate Windows libvmaf CUDA or the new Windows
-resume flow. The authoritative gate requirements and acceptance cases are in
+G2.4/G2.5 preparation do not validate Windows libvmaf CUDA or a complete
+Windows build/resume workflow. The authoritative gate requirements and acceptance cases are in
 [`windows_build_strategy.md`](windows_build_strategy.md), §5.7.
 
 | Area | Existing mechanism | Windows adaptation still required |
@@ -871,7 +910,7 @@ resume flow. The authoritative gate requirements and acceptance cases are in
 | Environment | `wsl_mingw_environment.filter_wsl_mingw_target_environment()` filters selected host SDK variables and discovery paths; it is not a complete target environment. | Do not apply native `cuda_profile_environment()` wholesale to target discovery: it reintroduces SDK selectors. The filter does not remove `CUDACXX` or sanitize `PATH`; pass selected executables in a host-tool scope and construct isolated target pkg-config/CMake/Meson inputs. |
 | NVIDIA headers | `components.py` maps declared NVENC API majors; `_libvmaf_cuda_headers()` and `_link_nv_codec_headers_into_source()` keep libvmaf's CUDA headers separate from driver-compatible FFmpeg headers. | Obtain or explicitly specify Windows target API compatibility; the G1 probe currently records DLL file versions, not `NvEncodeAPIGetMaxSupportedVersion()`. Keep both archive identities, verify target includes and runtime entry points, and do not silently drop requested NVENC/NVDEC when hardware is absent. |
 | Vulkan inputs | `builders/graphics/vulkan_headers.py` verifies project headers and matching registry; `builders/graphics/placebo.py` stages the pair and passes `-Dvulkan-registry`. | Use a verified pair in the isolated Windows target prefix and matching bundled dependency; keep Linux SDK shader tools host-only, target glslang/import interfaces target-only, and the Windows loader/ICD external. |
-| Resume | Native `cuda_profile_identity()`, `invalidate_cuda_resume()` and Vulkan manifest checks invalidate consumers and protect mutable build trees. | G2.7 must incorporate effective target inputs into G1 identity **before** trusting status or artifacts. Do not copy the native identity wholesale: external SDK path/version is diagnostic unless proven material. Incompatible or unknown Windows identity requires a separate prefix or a safe stop. |
+| Resume | G2.7 schema-2 identity combines fresh G1 target facts with resolved project toolchains, effective CUDA, configured capabilities, shader compiler version, and verified G2.6 manifest evidence before the guard selects a workspace. | Same semantic inputs reuse state; material drift selects an isolated workspace; diagnostic-only drift does not block reuse. Legacy/incomplete WSL-Mingw identity is rejected. External SDK roots and the SDK tree remain diagnostic/unhashed; the reported NVCC release and artifact-producing shader compiler version are external material fields. |
 
 Current cross preparation enables the CUDA prerequisite when
 `cuda_build_mode: required`, or in `auto` when libvmaf CUDA is requested; in

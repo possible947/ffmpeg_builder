@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import tarfile
@@ -215,6 +216,89 @@ def _validate_target_tree(root: Path) -> None:
                 )
 
 
+def validate_target_inputs_manifest(
+    manifest: object, target_prefix: Optional[Path] = None
+) -> Dict[str, object]:
+    """Validate G2.6 identity metadata and, when supplied, its staged files."""
+    if not isinstance(manifest, dict):
+        raise BuildError("target-inputs", "Target-input manifest must be a JSON object")
+    target_backend = manifest.get("target_backend")
+    sources = manifest.get("sources")
+    interfaces = manifest.get("interfaces")
+    files = manifest.get("files")
+    materialization_id = manifest.get("materialization_id")
+    if (
+        not isinstance(target_backend, str)
+        or target_backend != "linux-cross-mingw"
+        or not isinstance(sources, dict)
+        or not isinstance(interfaces, list)
+        or not isinstance(files, dict)
+        or not isinstance(materialization_id, str)
+    ):
+        raise BuildError("target-inputs", "Target-input manifest is incomplete")
+    identity = {
+        "target_backend": target_backend,
+        "sources": sources,
+        "interfaces": interfaces,
+        "files": files,
+    }
+    expected_id = hashlib.sha256(
+        json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    if materialization_id != expected_id:
+        raise BuildError("target-inputs", "Target-input materialisation ID does not match content")
+    for name, source in sources.items():
+        if (
+            not isinstance(source, dict)
+            or not isinstance(source.get("sha256"), str)
+            or re.fullmatch(r"[0-9a-f]{64}", source["sha256"].lower()) is None
+        ):
+            raise BuildError("target-inputs", f"Target source identity is incomplete: {name}")
+    for relative, digest in files.items():
+        if (
+            not isinstance(relative, str)
+            or Path(relative).is_absolute()
+            or ".." in Path(relative).parts
+            or not relative.startswith(("include/", "lib/"))
+            or not isinstance(digest, str)
+            or re.fullmatch(r"[0-9a-f]{64}", digest.lower()) is None
+        ):
+            raise BuildError("target-inputs", f"Target-input file identity is invalid: {relative}")
+    for interface in interfaces:
+        if (
+            not isinstance(interface, dict)
+            or not isinstance(interface.get("output"), str)
+            or not isinstance(interface.get("recipe"), str)
+            or not isinstance(interface.get("output_sha256"), str)
+            or re.fullmatch(r"[0-9a-f]{64}", interface["output_sha256"].lower()) is None
+        ):
+            raise BuildError("target-inputs", "Generated interface identity is incomplete")
+        if files.get(interface["output"]) != interface["output_sha256"]:
+            raise BuildError(
+                "target-inputs",
+                f"Generated interface hash disagrees with file identity: {interface['output']}",
+            )
+        if (
+            re.fullmatch(
+                r"[0-9a-f]{64}", str(interface.get("definition_source_sha256", "")).lower()
+            )
+            is None
+        ):
+            raise BuildError(
+                "target-inputs", "Generated interface definition-source checksum is invalid"
+            )
+    if target_prefix is not None:
+        _validate_target_tree(target_prefix)
+        actual_files = {
+            path.relative_to(target_prefix).as_posix(): _sha256(path)
+            for path in sorted(target_prefix.rglob("*"))
+            if path.is_file() and path.name != "target-inputs.json"
+        }
+        if actual_files != files:
+            raise BuildError("target-inputs", "Target-input files do not match manifest hashes")
+    return manifest
+
+
 def materialize_target_inputs(
     registry: ComponentRegistry,
     target_backend: str,
@@ -301,7 +385,10 @@ def materialize_target_inputs(
                     "sha256": component.sha256 or "",
                     "headers": [
                         {"source": tree.source, "destination": tree.destination}
-                        for tree in component.target_headers
+                        for tree in sorted(
+                            component.target_headers,
+                            key=lambda item: (item.destination, item.source),
+                        )
                     ],
                 }
 
@@ -329,6 +416,9 @@ def materialize_target_inputs(
                         toolchain_root,
                     )
                 )
+            interfaces.sort(
+                key=lambda item: (str(item.get("output", "")), str(item.get("dll", "")))
+            )
 
         files = {
             path.relative_to(staging_root).as_posix(): _sha256(path)
@@ -351,7 +441,7 @@ def materialize_target_inputs(
         (staging_root / "target-inputs.json").write_text(
             json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
-        _validate_target_tree(staging_root)
+        validate_target_inputs_manifest(manifest, staging_root)
         staging_root.rename(target_prefix)
         return manifest
     except BuildError:

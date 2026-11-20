@@ -9,10 +9,14 @@ import pytest
 
 from ffmpeg_builder.build_identity import (
     Compatibility,
+    MaterialBuildInputs,
+    TargetIdentity,
+    fingerprint,
     build_native_identity,
     build_windows_identity,
     compare_identities,
     compare_saved,
+    target_manifest_fingerprint,
 )
 from ffmpeg_builder.state import ComponentStatus, StateManager
 from ffmpeg_builder.target_guard import (
@@ -55,7 +59,142 @@ CONFIG = {"ffmpeg_version": "8.1", "native_build": False, "num_jobs": 8}
 
 def _identity(override=None, config=None, components=None):
     state = probe_windows_target(copy.deepcopy(override or OVERRIDE))
-    return build_windows_identity(config or CONFIG, state, components or {"x264": "1"})
+    return build_windows_identity(
+        config or CONFIG,
+        state,
+        components or {"x264": "1"},
+        material_inputs=_test_material_inputs(),
+    )
+
+
+def _material_manifest():
+    sources = {
+        "nv-codec": {"version": "13.0.19.1", "sha256": "b" * 64},
+        "vulkan-headers": {"version": "1.4.357.0", "sha256": "c" * 64},
+        "opencl-headers": {"version": "2026.05.29", "sha256": "d" * 64},
+    }
+    interfaces = [
+        {
+            "dll": "vulkan-1.dll",
+            "definition_source_component": "vulkan-headers",
+            "definition_source_version": "1.4.357.0",
+            "definition_source_sha256": "c" * 64,
+            "definition_path": "registry/vk.xml",
+            "definition_format": "vulkan_registry",
+            "symbols": ["vkGetInstanceProcAddr"],
+            "definition_sha256": "e" * 64,
+            "recipe": "llvm-dlltool-x86_64-v1",
+            "output": "lib/libvulkan.a",
+            "output_sha256": "f" * 64,
+        },
+        {
+            "dll": "OpenCL.dll",
+            "definition_source_component": "opencl-icd-loader",
+            "definition_source_version": "2026.05.29",
+            "definition_source_sha256": "a" * 64,
+            "definition_path": "loader/windows/OpenCL.def",
+            "definition_format": "def",
+            "symbols": ["clGetPlatformIDs"],
+            "definition_sha256": "1" * 64,
+            "recipe": "llvm-dlltool-x86_64-v1",
+            "output": "lib/libOpenCL.a",
+            "output_sha256": "2" * 64,
+        },
+    ]
+    identity = {
+        "target_backend": "linux-cross-mingw",
+        "sources": sources,
+        "interfaces": interfaces,
+        "files": {
+            "lib/libvulkan.a": "f" * 64,
+            "lib/libOpenCL.a": "2" * 64,
+        },
+    }
+    return {**identity, "materialization_id": target_manifest_fingerprint(identity)}
+
+
+def _test_material_inputs():
+    manifest = _material_manifest()
+    return MaterialBuildInputs(
+        target_backend="linux-cross-mingw",
+        configured_capabilities={
+            "cuda": {"effective": False},
+            "vulkan": {"configured": False, "effective": False},
+            "opencl": {"registry_selected": False},
+            "nvidia_codec": {"registry_selected": False},
+        },
+        toolchains={
+            "llvm_mingw": {
+                "profile": "llvm-mingw",
+                "version": "20261104",
+                "target": {"triple": "x86_64-w64-mingw32", "runtime": "ucrt"},
+                "provenance": {
+                    "profile": "llvm-mingw",
+                    "version": "20261104",
+                    "source_sha256": "3" * 64,
+                },
+            },
+            "rust": {
+                "profile": "rust",
+                "version": "1.99.0",
+                "target": None,
+                "provenance": {
+                    "profile": "rust",
+                    "version": "1.99.0",
+                    "source_sha256": "4" * 64,
+                },
+            },
+            "rust_target_std": {
+                "target": "x86_64-pc-windows-gnullvm",
+                "release": "1.99.0",
+                "sha256": "5" * 64,
+            },
+            "cuda_ccbin": None,
+        },
+        effective_cuda=None,
+        target_inputs={
+            "materialization_id": manifest["materialization_id"],
+            "manifest": {
+                key: manifest[key] for key in ("target_backend", "sources", "interfaces", "files")
+            },
+            "vulkan_shader_compiler": None,
+        },
+    )
+
+
+def _cuda_test_material_inputs():
+    base = _test_material_inputs()
+    toolchains = copy.deepcopy(base.toolchains)
+    toolchains["cuda_ccbin"] = {
+        "profile": "gcc12",
+        "version": "12.5.0",
+        "role_path": "bin/gcc",
+        "provenance": {
+            "profile": "gcc12",
+            "version": "12.5.0",
+            "source_sha256": "6" * 64,
+        },
+    }
+    capabilities = copy.deepcopy(base.configured_capabilities)
+    capabilities["cuda"]["effective"] = True
+    capabilities["vulkan"].update(configured=True, effective=True)
+    target_inputs = copy.deepcopy(base.target_inputs)
+    target_inputs["vulkan_shader_compiler"] = {
+        "tool": "glslc",
+        "version": ["2023.8"],
+    }
+    return MaterialBuildInputs(
+        target_backend=base.target_backend,
+        configured_capabilities=capabilities,
+        toolchains=toolchains,
+        effective_cuda={
+            "architecture": "compute_70",
+            "compatibility_flags": ["-Xcompiler=-U_GNU_SOURCE"],
+            "compatibility_workaround": "-Xcompiler=-U_GNU_SOURCE",
+            "external_nvcc": {"toolkit_version": "12.4", "nvcc_version": "12.4.99"},
+        },
+        target_inputs=target_inputs,
+    )
 
 
 # --- probe / transport / overrides ----------------------------------------
@@ -140,9 +279,171 @@ def test_missing_corrupt_and_tampered_identity_is_unknown():
     tampered = current.to_dict()
     tampered["build"]["ffmpeg_version"] = "9.0"
     assert compare_saved(tampered, current).result == Compatibility.UNKNOWN
+    broken_manifest = current.to_dict()
+    broken_manifest["build"]["material_inputs"]["target_inputs"]["manifest"]["files"][
+        "include/vulkan/vulkan.h"
+    ] = ("9" * 64)
+    broken_manifest["fingerprints"]["build"] = fingerprint(broken_manifest["build"])
+    assert compare_saved(broken_manifest, current).result == Compatibility.UNKNOWN
+    inconsistent_provenance = current.to_dict()
+    inconsistent_provenance["build"]["material_inputs"]["toolchains"]["llvm_mingw"]["provenance"][
+        "version"
+    ] = "20270101"
+    inconsistent_provenance["fingerprints"]["build"] = fingerprint(inconsistent_provenance["build"])
+    assert compare_saved(inconsistent_provenance, current).result == Compatibility.UNKNOWN
+
+
+def test_g1_only_cross_identity_is_legacy_but_native_schema_one_remains_compatible():
+    current = _identity()
+    legacy = current.to_dict()
+    legacy["schema_version"] = 1
+    legacy["build"] = copy.deepcopy(legacy["build"])
+    legacy["build"].pop("material_inputs")
+    legacy["fingerprints"]["build"] = fingerprint(legacy["build"])
+    assert compare_saved(legacy, current).result == Compatibility.UNKNOWN
+
+    native = build_native_identity(CONFIG, "linux-native", "linux", "x86_64")
+    native_legacy = native.to_dict()
+    native_legacy["schema_version"] = 1
+    assert compare_saved(native_legacy, native).build_compatible
+
+
+def test_external_sdk_paths_are_diagnostic_and_material_input_drift_changes_key():
+    base = _identity(config={**CONFIG, "external_prerequisite_paths": {"cuda": "/opt/cuda-a"}})
+    moved = _identity(config={**CONFIG, "external_prerequisite_paths": {"cuda": "/opt/cuda-b"}})
+    assert base.build_key == moved.build_key
+
+    inputs = _test_material_inputs()
+    rust = copy.deepcopy(inputs.toolchains)
+    rust["rust_target_std"]["sha256"] = "9" * 64
+    changed = MaterialBuildInputs(
+        target_backend=inputs.target_backend,
+        configured_capabilities=inputs.configured_capabilities,
+        toolchains=rust,
+        effective_cuda=inputs.effective_cuda,
+        target_inputs=inputs.target_inputs,
+    )
+    other = build_windows_identity(
+        CONFIG, probe_windows_target(copy.deepcopy(OVERRIDE)), material_inputs=changed
+    )
+    assert other.build_key != _identity().build_key
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        lambda value: (
+            value.toolchains["llvm_mingw"].update(version="20270101"),
+            value.toolchains["llvm_mingw"]["provenance"].update(version="20270101"),
+        ),
+        lambda value: value.toolchains["llvm_mingw"]["provenance"].update(source_sha256="7" * 64),
+        lambda value: (
+            value.toolchains["rust"].update(version="2.0.0"),
+            value.toolchains["rust"]["provenance"].update(version="2.0.0"),
+            value.toolchains["rust_target_std"].update(release="2.0.0"),
+        ),
+        lambda value: value.toolchains["rust_target_std"].update(sha256="8" * 64),
+        lambda value: (
+            value.toolchains["cuda_ccbin"].update(profile="gcc13"),
+            value.toolchains["cuda_ccbin"]["provenance"].update(profile="gcc13"),
+        ),
+        lambda value: value.toolchains["cuda_ccbin"].update(role_path="tool/bin/gcc"),
+        lambda value: value.toolchains["cuda_ccbin"]["provenance"].update(source_sha256="7" * 64),
+        lambda value: value.effective_cuda.update(architecture="compute_75"),
+        lambda value: value.effective_cuda.update(compatibility_flags=[]),
+        lambda value: value.effective_cuda.update(compatibility_workaround=None),
+        lambda value: value.effective_cuda["external_nvcc"].update(nvcc_version="13.1.0"),
+        lambda value: value.configured_capabilities["nvidia_codec"].update(registry_selected=True),
+        lambda value: value.target_inputs["vulkan_shader_compiler"].update(version=["2024.1"]),
+    ],
+)
+def test_each_material_toolchain_cuda_and_capability_change_changes_build_key(change):
+    baseline = _cuda_test_material_inputs()
+    altered = copy.deepcopy(baseline)
+    change(altered)
+    original = build_windows_identity(
+        CONFIG, probe_windows_target(copy.deepcopy(OVERRIDE)), material_inputs=baseline
+    )
+    changed = build_windows_identity(
+        CONFIG, probe_windows_target(copy.deepcopy(OVERRIDE)), material_inputs=altered
+    )
+    assert compare_saved(original.to_dict(), original).result == Compatibility.COMPATIBLE
+    assert original.build_key != changed.build_key
+
+
+def test_material_target_drift_isolated_and_diagnostics_do_not_block_resume(tmp_path):
+    baseline = _identity()
+    old_workspace = _seed(tmp_path, baseline)
+
+    diagnostic_change = baseline.with_runtime(
+        baseline.runtime,
+        {**baseline.diagnostics, "diagnostic_probe_dump": {"detail": "changed"}},
+    )
+    reused = prepare_windows_target(tmp_path, diagnostic_change, resume=True)
+    assert reused.workspace == old_workspace and reused.resumed
+    assert reused.comparison.result == Compatibility.DIAGNOSTIC_ONLY
+
+    changed_build = copy.deepcopy(baseline.build)
+    changed_build["material_inputs"]["target_inputs"]["manifest"]["sources"]["nv-codec"][
+        "sha256"
+    ] = ("8" * 64)
+    changed_manifest = changed_build["material_inputs"]["target_inputs"]["manifest"]
+    changed_build["material_inputs"]["target_inputs"]["materialization_id"] = (
+        target_manifest_fingerprint(
+            {
+                key: changed_manifest[key]
+                for key in ("target_backend", "sources", "interfaces", "files")
+            }
+        )
+    )
+    changed_identity = TargetIdentity(
+        backend=baseline.backend,
+        build=changed_build,
+        runtime=baseline.runtime,
+        diagnostics=baseline.diagnostics,
+    )
+    isolated = prepare_windows_target(tmp_path, changed_identity, resume=True)
+    assert isolated.workspace != old_workspace and not isolated.resumed
+    assert (old_workspace / "bin" / "ffmpeg.exe").exists()
+
+    changed_interface_build = copy.deepcopy(baseline.build)
+    manifest = changed_interface_build["material_inputs"]["target_inputs"]["manifest"]
+    manifest["interfaces"][0]["recipe"] = "llvm-dlltool-x86_64-v2"
+    changed_interface_build["material_inputs"]["target_inputs"]["materialization_id"] = (
+        target_manifest_fingerprint(
+            {key: manifest[key] for key in ("target_backend", "sources", "interfaces", "files")}
+        )
+    )
+    changed_interface = TargetIdentity(
+        backend=baseline.backend,
+        build=changed_interface_build,
+        runtime=baseline.runtime,
+        diagnostics=baseline.diagnostics,
+    )
+    interface_isolated = prepare_windows_target(tmp_path, changed_interface, resume=True)
+    assert interface_isolated.workspace != old_workspace and not interface_isolated.resumed
 
 
 # --- guard: workspace/state isolation --------------------------------------
+
+
+def test_invalid_current_identity_does_not_create_workspace(tmp_path):
+    baseline = _identity()
+    incomplete_build = copy.deepcopy(baseline.build)
+    incomplete_build.pop("material_inputs")
+    incomplete = TargetIdentity(
+        backend=baseline.backend,
+        build=incomplete_build,
+        runtime=baseline.runtime,
+        diagnostics=baseline.diagnostics,
+    )
+    workspace = identity_workspace(tmp_path, incomplete)
+
+    with pytest.raises(IdentityError) as exc:
+        prepare_windows_target(tmp_path, incomplete, resume=False)
+
+    assert exc.value.kind == "invalid_current_identity"
+    assert not workspace.exists()
 
 
 def _seed(base: Path, identity) -> Path:
@@ -413,6 +714,16 @@ def test_cuda_preparation_reuses_single_g1_probe_for_ptx_validation(tmp_path, mo
             for name in ("llvm-mingw", "rust")
         },
     )
+    monkeypatch.setattr(
+        app,
+        "_materialize_target_input_manifest",
+        lambda *args: _material_manifest(),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "project_material_build_inputs",
+        lambda *args: _test_material_inputs(),
+    )
     config = BuildConfig(
         target_backend=TARGET_BACKEND_CROSS_MINGW,
         enable_libvmaf=True,
@@ -568,6 +879,16 @@ def test_vulkan_preparation_keeps_host_sdk_separate_from_windows_runtime(tmp_pat
             }
             for name in ("llvm-mingw", "rust")
         },
+    )
+    monkeypatch.setattr(
+        app,
+        "_materialize_target_input_manifest",
+        lambda *args: _material_manifest(),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "project_material_build_inputs",
+        lambda *args: _test_material_inputs(),
     )
     config = BuildConfig(
         target_backend=TARGET_BACKEND_CROSS_MINGW,
