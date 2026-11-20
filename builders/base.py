@@ -69,7 +69,10 @@ class ComponentBuildContext(BuildStepContext):
 
 
 def build_autotools(
-    context: ComponentBuildContext, component: "Component", source_dir: Path
+    context: ComponentBuildContext,
+    component: "Component",
+    source_dir: Path,
+    unset_environment: tuple[str, ...] = (),
 ) -> None:
     """Build component with autotools."""
     build_dir = source_dir
@@ -77,6 +80,8 @@ def build_autotools(
         build_dir = source_dir / component.workdir
 
     env = context.builder.get_build_env(component)
+    for name in unset_environment:
+        env.pop(name, None)
     cross = context.builder.platform_context.cross_environment
     cross_arguments: List[str] = []
     if cross is not None and component.build_role.value == "target":

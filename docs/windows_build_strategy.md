@@ -1,9 +1,37 @@
 # Windows FFmpeg cross-build strategy
 
 **Status:** G1 **PASS**; G2.1–G2.8 **PASS**; G3 **PASS**; G4 **in progress**
-(Waves 0–2 complete). Wave 1 accepted seven and Wave 2 accepted eleven real
-Windows target dependencies; Wave 3 and the full Windows FFmpeg build remain
-incomplete.
+(Waves 0–3B complete). Wave 1 accepted seven, Wave 2 eleven, Wave 3A six,
+and Wave 3B two real Windows target dependencies. Wave 4 and the full Windows
+FFmpeg build remain incomplete.
+
+### G4 Wave 3B — Ogg, Vorbis, and Theora
+
+The Wave-1 `libogg` 1.3.6 target outputs were revalidated and reused for
+`libvorbis` 1.3.7 and `libtheora` 1.2.0. Vorbis uses the shared Autotools
+cross projection; both recipes preflight target-only pkg-config dependencies.
+The cross-only library recipes exclude upstream documentation, test, and
+training subdirectories that are not reliably excluded by configure options.
+The installed Vorbis, Vorbis encoder and Vorbis file archives, and the Theora,
+Theora encoder and Theora decoder archives were verified as x86-64 COFF.
+Their target pkg-config static closures and individual and combined Windows
+target link smokes passed, as did the full target-prefix contamination scan.
+The same-identity rerun revalidated and reused both components. Sources were
+local and checksum-verified; no FFmpeg or Wave-4 component was built.
+
+### G4 Wave 3A — LV2 dependencies
+
+Accepted `lv2` 1.18.10, `serd` 0.32.10, `zix` 0.8.0, `sord` 0.16.22,
+`sratom` 0.6.22, and `lilv` 0.28.0 through the production Meson path. The
+declared dependency order is `lv2`, `serd`, `zix`, then `sord` (using `zix`
+and `serd`), `sratom` (using `serd`, `sord`, and `lv2`), and `lilv` (using
+all five preceding components). Acceptance verified local source checksums,
+target headers and LV2 data, static COFF archives, target pkg-config closure,
+component link smokes, and the full prefix contamination scan. The repeat
+same-identity invocation reused all six accepted outputs. LV2's unconditional
+validator utility is omitted from the target install.
+
+G4 remains in progress; Wave 4 and FFmpeg integration have not started.
 
 ### G4 Wave 2 — static media and utility dependencies
 
@@ -29,8 +57,9 @@ toolchain-runtime DLL and G6 packaging input.
 
 All eleven registered source archives were already present in the
 project-managed offline mirror and passed their declared SHA-256 checks; no
-source or validation-tool downloads were needed. Wave 3 and FFmpeg integration
-have not started. G4 remains in progress.
+source or validation-tool downloads were needed. Wave 3A is now accepted as
+described above; Wave 4 and FFmpeg integration have not started. G4 remains
+in progress.
 
 ### G4 Wave 1 — first production target dependencies
 

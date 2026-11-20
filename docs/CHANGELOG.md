@@ -1,3 +1,34 @@
+### Accepted — G4 Wave 3B Vorbis/Theora target dependencies
+
+- Built `libvorbis` 1.3.7 and `libtheora` 1.2.0 offline for the identity-local
+  Windows target prefix, reusing validated Wave-1 `libogg` 1.3.6. The declared
+  build order is Ogg, Vorbis, Theora; Vorbis is optional to upstream Theora's
+  libraries but remains a required project dependency.
+- The Vorbis cross adapter and Theora target preflight use the shared
+  Autotools cross projection and target-only pkg-config; the cross-only
+  library recipes omit upstream documentation, test, and training subdirectories.
+  Acceptance verified
+  all six installed static archives as x86-64 COFF, their headers and target
+  pkg-config closure, individual and combined target link smokes, and the
+  prefix contamination scan. Same-identity reruns revalidate and reuse them.
+- G4 Waves 0–3B are complete; G4 remains in progress. Wave 4 and Windows
+  FFmpeg integration have not started.
+
+### Accepted — G4 Wave 3A LV2 target dependencies
+
+- Built and accepted `lv2` 1.18.10, `serd` 0.32.10, `zix` 0.8.0,
+  `sord` 0.16.22, `sratom` 0.6.22, and `lilv` 0.28.0 through the production
+  Meson path for the identity-specific `linux-cross-mingw` target prefix.
+- Verified all six local source archives against their registered SHA-256
+  checksums. Acceptance checked installed target headers/data, static COFF
+  archives, target pkg-config dependency closure, per-component LLVM-MinGW
+  link smokes, and the complete target-prefix contamination scan.
+- Declared the verified `sord`, `sratom`, and `lilv` dependency edges. LV2's
+  unconditional host validator utility is excluded from the cross install.
+  The repeated same-identity run revalidated and reused all six Wave-3A
+  components. No downloads were needed.
+- G4 remains in progress and is not marked PASS.
+
 ### Accepted — G4 Wave 2 real target dependency cross-builds
 
 - Built and accepted gettext 0.26, pcre 8.45, xvidcore 1.3.7, opencore 0.1.6,
@@ -20,7 +51,7 @@
 - Compatibility/portable mode is `native_build=false`, `openmp=false` for
   portable releases or diagnostics; its success does not replace primary
   profile acceptance or convert a primary failure into a pass.
-- G4 Waves 0–2 are complete; Wave 3 and FFmpeg integration have not started.
+- G4 Waves 0–3B are complete; Wave 4 and FFmpeg integration have not started.
   G4 remains in progress and is not marked PASS.
 
 ### Accepted — G4 Wave 1 real target dependency cross-builds

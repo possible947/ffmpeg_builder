@@ -396,11 +396,13 @@
   - --buildtype=release
   - --default-library=static
   - --libdir={workspace}/lib
+  - --wrap-mode=nofallback
   requires_tools:
   - python3
   - meson
   - ninja
   skip_condition: disable_lv2
+  custom_build_fn: build_lv2_target
 - name: serd
   sha256: d17b99ef250e4dffcdd08c8eaad2459a1519c1ff2553fa91176ce71ac0dd0739
   version: 0.32.10
@@ -416,6 +418,7 @@
   - --buildtype=release
   - --default-library=static
   - --libdir={workspace}/lib
+  - --wrap-mode=nofallback
   requires_tools:
   - python3
   - meson
@@ -456,6 +459,7 @@
   - --buildtype=release
   - --default-library=static
   - --libdir={workspace}/lib
+  - --wrap-mode=nofallback
   requires_tools:
   - python3
   - meson
@@ -477,6 +481,10 @@
   - --buildtype=release
   - --default-library=static
   - --libdir={workspace}/lib
+  - --wrap-mode=nofallback
+  depends_on:
+  - zix
+  - serd
   requires_tools:
   - python3
   - meson
@@ -495,6 +503,11 @@
   - --buildtype=release
   - --default-library=static
   - --libdir={workspace}/lib
+  - --wrap-mode=nofallback
+  depends_on:
+  - serd
+  - sord
+  - lv2
   requires_tools:
   - python3
   - meson
@@ -517,6 +530,14 @@
   - --default-library=static
   - --libdir={workspace}/lib
   - -Dcpp_std=c++11
+  - -Ddynmanifest=disabled
+  - --wrap-mode=nofallback
+  depends_on:
+  - zix
+  - serd
+  - sord
+  - lv2
+  - sratom
   requires_tools:
   - python3
   - meson
@@ -598,6 +619,7 @@
   url: https://ftp.osuosl.org/pub/xiph/releases/theora/libtheora-{version}.tar.gz
   category: audio_codec
   build_system: autotools
+  custom_build_fn: build_libtheora
   configure_args:
   - --prefix={workspace}
   - --with-ogg-libraries={workspace}/lib

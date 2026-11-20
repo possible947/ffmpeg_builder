@@ -6,10 +6,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Dict, Optional
 
 from .builders.codecs.jxl import build_libjxl
+from .builders.codecs.lv2 import build_lv2_target
 from .builders.codecs.lcms2 import build_lcms2
 from .builders.codecs.soxr import build_soxr
 from .builders.codecs.tiff import build_libtiff
-from .builders.codecs.vorbis import build_libvorbis
+from .builders.codecs.vorbis import build_libtheora, build_libvorbis
 from .builders.codecs.vpx import build_libvpx
 from .builders.codecs.x264 import build_x264
 from .builders.codecs.x265 import build_x265
@@ -47,6 +48,7 @@ CUSTOM_BUILDERS: Dict[str, CustomBuilder] = {
     "build_libvpx": build_libvpx,
     "build_zimg": build_zimg,
     "build_libvorbis": build_libvorbis,
+    "build_libtheora": build_libtheora,
     "build_libjxl": build_libjxl,
     "build_libtiff": build_libtiff,
     "build_libvmaf": build_libvmaf,
@@ -57,6 +59,7 @@ CUSTOM_BUILDERS: Dict[str, CustomBuilder] = {
     "build_ninja": build_ninja,
     "build_gettext": build_gettext,
     "build_lcms2": build_lcms2,
+    "build_lv2_target": build_lv2_target,
     "build_pcre": build_pcre,
     "build_soxr": build_soxr,
     "build_ffmpeg": build_ffmpeg,

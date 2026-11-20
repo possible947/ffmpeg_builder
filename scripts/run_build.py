@@ -38,6 +38,8 @@ from ffmpeg_builder.config import (  # noqa: E402
 )
 from ffmpeg_builder.g4_wave1 import run_g4_wave1  # noqa: E402
 from ffmpeg_builder.g4_wave2 import run_g4_wave2  # noqa: E402
+from ffmpeg_builder.g4_wave3a import run_g4_wave3a  # noqa: E402
+from ffmpeg_builder.g4_wave3b import run_g4_wave3b  # noqa: E402
 from ffmpeg_builder.platform_detect import PlatformDetector  # noqa: E402
 from ffmpeg_builder.cuda_prerequisites import (  # noqa: E402
     cuda_nv_codec_identity,
@@ -91,6 +93,16 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
             "Build and accept only the fixed eleven-component G4 Wave-2 subset "
             "with the required primary OpenMP profile."
         ),
+    )
+    parser.add_argument(
+        "--g4-wave3a",
+        action="store_true",
+        help=("Build and accept only the fixed six-component G4 Wave-3A LV2 " "dependency subset."),
+    )
+    parser.add_argument(
+        "--g4-wave3b",
+        action="store_true",
+        help="Build and accept only the G4 Wave-3B Vorbis/Theora target subset.",
     )
     return parser.parse_args(argv)
 
@@ -281,19 +293,28 @@ def dry_run_cross_backend(app: FFmpegBuilderApp, config: BuildConfig, resume: bo
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = parse_args(argv)
-    if args.g4_wave1 and args.g4_wave2:
-        raise SystemExit("--g4-wave1 and --g4-wave2 are mutually exclusive.")
+    if sum((args.g4_wave1, args.g4_wave2, args.g4_wave3a, args.g4_wave3b)) > 1:
+        raise SystemExit("G4 wave options are mutually exclusive.")
     if args.g4_wave1 and args.dry_run:
         raise SystemExit("--g4-wave1 performs real builds and cannot be combined with --dry-run.")
     if args.g4_wave2 and args.dry_run:
         raise SystemExit("--g4-wave2 performs real builds and cannot be combined with --dry-run.")
-    if (args.g4_wave1 or args.g4_wave2) and args.ffmpeg_version not in (None, "9.0"):
-        raise SystemExit("--g4-wave1 and --g4-wave2 are fixed to FFmpeg 9.0.")
+    if args.g4_wave3a and args.dry_run:
+        raise SystemExit("--g4-wave3a performs real builds and cannot be combined with --dry-run.")
+    if args.g4_wave3b and args.dry_run:
+        raise SystemExit("--g4-wave3b performs real builds and cannot be combined with --dry-run.")
+    if (
+        args.g4_wave1 or args.g4_wave2 or args.g4_wave3a or args.g4_wave3b
+    ) and args.ffmpeg_version not in (
+        None,
+        "9.0",
+    ):
+        raise SystemExit("G4 wave options are fixed to FFmpeg 9.0.")
     app = FFmpegBuilderApp()
     config = app.config_manager.get()
     if args.ffmpeg_version:
         config.ffmpeg_version = args.ffmpeg_version
-    if args.g4_wave1 or args.g4_wave2:
+    if args.g4_wave1 or args.g4_wave2 or args.g4_wave3a or args.g4_wave3b:
         config.ffmpeg_version = "9.0"
         config.target_backend = TARGET_BACKEND_CROSS_MINGW
         config.make_release = False
@@ -305,6 +326,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         return run_g4_wave1(app, config)
     if args.g4_wave2:
         return run_g4_wave2(app, config)
+    if args.g4_wave3a:
+        return run_g4_wave3a(app, config)
+    if args.g4_wave3b:
+        return run_g4_wave3b(app, config)
     if args.dry_run:
         if getattr(config, "target_backend", "native") == TARGET_BACKEND_CROSS_MINGW:
             return dry_run_cross_backend(app, config, resume=args.resume)

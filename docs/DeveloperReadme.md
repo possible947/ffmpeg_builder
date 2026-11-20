@@ -11,12 +11,16 @@ with deployed gcc12 12.5.0 and 9.0 with the system GCC — 58/58 components
 each, smoke-tested). WSL-Mingw G1/G2 preparation and offline-closure
 acceptance are complete; G3 has established and validated the
 `linux-cross-mingw` cross-environment and shared build contracts. G3 is PASS;
-G4 Waves 0–2 are complete. Wave 1 accepted seven Windows target dependencies;
+G4 Waves 0–3B are complete. Wave 1 accepted seven Windows target dependencies;
 Wave 2 accepted eleven more through production Autotools and CMake paths with
-the mandatory primary profile (`native_build=true`, `openmp=true`). The
-LLVM-MinGW `libomp.dll` runtime was confirmed on physical Windows. Wave 3, the
-complete configured dependency stack, and FFmpeg integration remain in
-progress. The compatibility/portable profile is `native_build=false`,
+the mandatory primary profile (`native_build=true`, `openmp=true`), and Wave
+3A accepted six LV2 dependencies through Meson. Wave 3B reused target libogg
+and accepted libvorbis 1.3.7 and libtheora 1.2.0 through Autotools, validating
+their COFF archives, target pkg-config closure, link smokes, and same-identity
+reuse. The LLVM-MinGW `libomp.dll` runtime was confirmed on physical Windows.
+Wave 4, the complete configured
+dependency stack, and FFmpeg integration remain in progress. The
+compatibility/portable profile is `native_build=false`,
 `openmp=false`; it is for portable releases/diagnostics and cannot substitute
 for a failed primary-profile build.
 See `CHANGELOG.md` for the release history.
@@ -839,10 +843,12 @@ Built with the `rich` library. Static screens use `Table`, `Panel`, and `Prompt`
 The Windows build route is **WSL-Mingw**: a Windows host runs a WSL2 Ubuntu
 build environment, which uses the LLVM-MinGW/UCRT cross toolchain to produce
 a Windows FFmpeg target. **WSL-Mingw** is the user-facing name; the backend
-identifier is **`linux-cross-mingw`**. G1, G2, and G3 are PASS; G4 Waves 0–2
+identifier is **`linux-cross-mingw`**. G1, G2, and G3 are PASS; G4 Waves 0–3B
 are accepted, including eleven Wave-2 target dependencies cross-built and
-validated with the required primary OpenMP profile. Wave 3, the full component
-stack, and FFmpeg integration remain **in progress**. The gates
+validated with the required primary OpenMP profile and six Wave-3A LV2
+dependencies built through Meson, followed by the Ogg/Vorbis/Theora chain.
+Wave 4, the full component stack, and
+FFmpeg integration remain **in progress**. The gates
 G1–G7, verified early-PoC results and open issues are in
 [`windows_build_strategy.md`](windows_build_strategy.md), which is the
 authoritative plan. The previous MSYS2-based Windows build path was replaced
