@@ -301,6 +301,20 @@
   requires_tools:
   - cargo
   - rustc
+  target_link_metadata:
+    private_transitive_link_requirements:
+    - -lkernel32
+    - -lntdll
+    - -luserenv
+    - -lws2_32
+    - -ldbghelp
+    - -lunwind
+    runtime_dependencies:
+    - name: libunwind.dll
+      classification: toolchain-runtime-dll
+      source_identity: llvm-mingw-20261104
+    provenance:
+    - LLVM-MinGW rav1e static C-consumer link and Windows runtime probe
   ffmpeg_configure_flag: --enable-librav1e
 - name: x264
   sha256: cd71a7515b0e9a012e1ac9b1f8415bebcaf6fc97d4db32286642ac4c0fbe24f9

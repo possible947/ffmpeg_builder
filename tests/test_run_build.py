@@ -24,6 +24,7 @@ def test_parse_args_defaults():
     assert args.ffmpeg_version is None
     assert args.dry_run is False
     assert args.no_release is False
+    assert args.g4_wave6 is False
 
 
 def test_parse_args_accepts_all_options():
@@ -34,6 +35,61 @@ def test_parse_args_accepts_all_options():
     assert args.ffmpeg_version == "9.0"
     assert args.dry_run is True
     assert args.no_release is True
+
+
+def test_parse_args_accepts_g4_wave6():
+    assert run_build.parse_args(["--g4-wave6"]).g4_wave6 is True
+
+
+def test_main_g4_wave6_configures_fixed_cross_target(monkeypatch):
+    seen = {}
+
+    class FakeConfigManager:
+        def get(self):
+            return _config()
+
+    class FakeApp:
+        def __init__(self):
+            self.config_manager = FakeConfigManager()
+
+        def _sync_workspace(self, config):
+            seen["workspace_version"] = config.ffmpeg_version
+
+    class FakeDetector:
+        def __init__(self, config):
+            seen["backend"] = config.target_backend
+
+        def detect_all(self):
+            return ("system", "platform", "tools")
+
+    monkeypatch.setattr(run_build, "FFmpegBuilderApp", FakeApp)
+    monkeypatch.setattr(run_build, "PlatformDetector", FakeDetector)
+    monkeypatch.setattr(
+        run_build,
+        "run_g4_wave6",
+        lambda app, config: seen.update(
+            version=config.ffmpeg_version,
+            backend=config.target_backend,
+            release=config.make_release,
+        )
+        or 0,
+    )
+    assert run_build.main(["--g4-wave6"]) == 0
+    assert seen == {
+        "workspace_version": "9.0",
+        "backend": run_build.TARGET_BACKEND_CROSS_MINGW,
+        "version": "9.0",
+        "release": False,
+    }
+
+
+def test_main_rejects_g4_wave6_dry_run_and_multiple_waves():
+    import pytest
+
+    with pytest.raises(SystemExit, match="cannot be combined with --dry-run"):
+        run_build.main(["--g4-wave6", "--dry-run"])
+    with pytest.raises(SystemExit, match="mutually exclusive"):
+        run_build.main(["--g4-wave6", "--g4-wave5c"])
 
 
 def _config(**overrides):

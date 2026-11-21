@@ -1417,7 +1417,9 @@ def construct_cross_environment(
             "CARGO_HOME": str(paths.generated_files_root / "cargo-home"),
             "CARGO_TARGET_DIR": str(paths.build_root / "cargo-target"),
             "PKG_CONFIG": str(pkg_config_wrapper),
-            "PKG_CONFIG_LIBDIR": os.pathsep.join(str(item) for item in pkg_config_libdirs),
+            "HOST_PKG_CONFIG": host_tools.paths["pkg-config"],
+            "TARGET_PKG_CONFIG": str(pkg_config_wrapper),
+            "TARGET_PKG_CONFIG_LIBDIR": os.pathsep.join(str(item) for item in pkg_config_libdirs),
             "PKG_CONFIG_ALLOW_CROSS": "1",
             f"CC_{target_suffix}": str(target_tools.cc),
             f"CXX_{target_suffix}": str(target_tools.cxx),
@@ -1426,6 +1428,7 @@ def construct_cross_environment(
             f"CXXFLAGS_{target_suffix}": target_cflags,
         }
     )
+    cargo_environment.pop("PKG_CONFIG_LIBDIR", None)
     cuda_acceptance = _validate_cuda_host_tools(
         cuda_tools, cuda_environment, paths.generated_files_root, target_tools, environment
     )

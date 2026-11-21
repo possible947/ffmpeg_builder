@@ -1,3 +1,13 @@
+### Accepted — G4 Wave 6 rav1e
+
+- Built rav1e 0.8.1 offline with the project Rust gnullvm target, LLVM-MinGW,
+  pinned cargo-c and locked, locally cached crates. Isolated host pkg-config
+  from target discovery and staged the static installation.
+- Accepted the C header, pkg-config metadata and 614-member Windows COFF
+  archive. The target PE C-interface lifecycle passed on Windows with
+  `libunwind.dll`; same-identity reuse and 571 prior file hashes passed.
+- Wave 7 and the full Windows FFmpeg build have not started.
+
 ### Accepted — G4 Wave 5C libjxl and VapourSynth
 
 - Built libjxl 0.12.0 with pinned Brotli and Highway sources, accepted target
@@ -7,7 +17,7 @@
 - Accepted the R78 headers using FFmpeg 9.0's target preprocessing contract;
   `VSScript.dll` remains an external runtime prerequisite. Both components
   passed same-identity reuse, and all 487 prior manifest files retained hashes.
-- Wave 6 and the full Windows FFmpeg build have not started.
+- At that acceptance point Wave 6 and the full Windows FFmpeg build had not started.
 
 ### Accepted — G4 Wave 5B libzmq
 

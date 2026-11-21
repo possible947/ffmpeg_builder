@@ -7,6 +7,7 @@ import re
 import shutil
 import stat
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
@@ -394,8 +395,14 @@ def get_rustc_version(
 def build_cargo(context: ComponentBuildContext, component: "Component", source_dir: Path) -> None:
     """Build component with Cargo."""
     env = context.builder.get_build_env(component)
-    if context.builder.config.target_backend != TARGET_BACKEND_CROSS_MINGW:
+    cross = context.builder.config.target_backend == TARGET_BACKEND_CROSS_MINGW
+    if not cross:
         env["RUSTFLAGS"] = "-C target-cpu=native"
+    else:
+        if context.builder.config.native_build:
+            env["CARGO_TARGET_X86_64_PC_WINDOWS_GNULLVM_RUSTFLAGS"] = "-C target-cpu=native"
+        if not context.builder.config.allow_network_downloads:
+            env["CARGO_NET_OFFLINE"] = "true"
 
     if context.builder.platform == "linux" and "CFLAGS" in env:
         env["CFLAGS"] = env["CFLAGS"].replace("-std=c11", "-std=gnu11")
@@ -411,7 +418,42 @@ def build_cargo(context: ComponentBuildContext, component: "Component", source_d
             "cargo-c requires rustc 1.95 or newer",
         )
 
-    cargo_c_path = shutil.which("cargo-c", path=env.get("PATH"))
+    cargo_c_path = None
+    version_found = None
+    version_unavailable = False
+    if cross:
+        seen = set()
+        for directory in env.get("PATH", os.defpath).split(os.pathsep):
+            candidate = shutil.which("cargo-cinstall", path=directory)
+            if candidate is None or candidate in seen:
+                continue
+            seen.add(candidate)
+            result = context.executor.execute([candidate, "--version"], env=env)
+            match = re.search(r"\b(\d+\.\d+\.\d+)\b", result.stdout)
+            if not result.success or not match:
+                version_unavailable = True
+                continue
+            version_found = match.group(1)
+            if version_found == CARGO_C_VERSION:
+                cargo_c_path = candidate
+                break
+        if cargo_c_path is None and version_found is not None:
+            raise BuildError(
+                component.name,
+                f"Prepared WSL host cargo-c version {version_found} does not match "
+                f"the required pinned version {CARGO_C_VERSION}.",
+                category=CATEGORY_EXTERNAL_PREREQUISITE,
+                code="wsl_mingw_cargo_c_version_mismatch",
+            )
+        if cargo_c_path is None and version_unavailable:
+            raise BuildError(
+                component.name,
+                "Prepared WSL host prerequisite cargo-c version could not be verified.",
+                category=CATEGORY_EXTERNAL_PREREQUISITE,
+                code="wsl_mingw_cargo_c_version_unavailable",
+            )
+    else:
+        cargo_c_path = shutil.which("cargo-c", path=env.get("PATH"))
     if cargo_c_path is None:
         if context.builder.config.target_backend == TARGET_BACKEND_CROSS_MINGW:
             raise BuildError(
@@ -432,44 +474,71 @@ def build_cargo(context: ComponentBuildContext, component: "Component", source_d
             source_dir,
             env,
         )
-    elif context.builder.config.target_backend == TARGET_BACKEND_CROSS_MINGW:
-        version_result = context.executor.execute([cargo_c_path, "--version"], env=env)
-        version_match = re.search(r"\b(\d+\.\d+\.\d+)\b", version_result.stdout)
-        if not version_result.success or not version_match:
-            raise BuildError(
-                component.name,
-                "Prepared WSL host prerequisite cargo-c version could not be verified.",
-                category=CATEGORY_EXTERNAL_PREREQUISITE,
-                code="wsl_mingw_cargo_c_version_unavailable",
-            )
-        if version_match.group(1) != CARGO_C_VERSION:
-            raise BuildError(
-                component.name,
-                f"Prepared WSL host cargo-c version {version_match.group(1)} does not match "
-                f"the required pinned version {CARGO_C_VERSION}.",
-                category=CATEGORY_EXTERNAL_PREREQUISITE,
-                code="wsl_mingw_cargo_c_version_mismatch",
-            )
+    command = [
+        (cargo_c_path or "cargo") if cross else "cargo",
+        "cinstall",
+        f"--prefix={context.builder._ws_str()}",
+        "--libdir=lib",
+        "--library-type=staticlib",
+        "--crt-static",
+        "--release",
+    ]
+    if cross:
+        command.extend(["--locked", "--target", env["CARGO_BUILD_TARGET"]])
+    if not cross:
+        run_step(
+            context,
+            component,
+            ComponentStatus.INSTALLING,
+            "cargo cinstall",
+            "Cargo build failed",
+            command,
+            "build",
+            source_dir,
+            env,
+        )
+        return
 
-    run_step(
-        context,
-        component,
-        ComponentStatus.INSTALLING,
-        "cargo cinstall",
-        "Cargo build failed",
-        [
-            "cargo",
-            "cinstall",
-            f"--prefix={context.builder._ws_str()}",
-            "--libdir=lib",
-            "--library-type=staticlib",
-            "--crt-static",
-            "--release",
-        ],
-        "build",
-        source_dir,
-        env,
-    )
+    cross_env = context.builder.platform_context.cross_environment
+    assert cross_env is not None
+    prefix = context.builder._component_prefix(component)
+    with tempfile.TemporaryDirectory(
+        prefix="cargo-install-", dir=cross_env.paths.generated_files_root
+    ) as temporary:
+        stage = Path(temporary)
+        run_step(
+            context,
+            component,
+            ComponentStatus.INSTALLING,
+            "cargo cinstall",
+            "Cargo build failed",
+            [*command, "--destdir", str(stage)],
+            "build",
+            source_dir,
+            env,
+        )
+        staged_prefix = stage / prefix.relative_to("/")
+        files = sorted(path for path in staged_prefix.rglob("*") if path.is_file())
+        if not files:
+            raise BuildError(component.name, "Cargo install produced no target files.")
+        for path in files:
+            destination = prefix / path.relative_to(staged_prefix)
+            if (
+                path.is_symlink()
+                or destination.exists()
+                or destination.is_symlink()
+                or not destination.resolve().is_relative_to(prefix.resolve())
+            ):
+                raise BuildError(component.name, f"Unsafe or existing Cargo output: {destination}")
+        for path in files:
+            destination = prefix / path.relative_to(staged_prefix)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("rb") as source, destination.open("xb") as target:
+                created = getattr(context.builder, "_wave6_created_outputs", None)
+                if created is not None:
+                    created.append(destination)
+                shutil.copyfileobj(source, target)
+            shutil.copystat(path, destination)
 
 
 def install_headers_only(

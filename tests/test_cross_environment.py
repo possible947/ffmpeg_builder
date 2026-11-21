@@ -371,7 +371,11 @@ def test_builder_selects_isolated_host_target_and_cargo_projections(tmp_path):
     target_prefix = workspace / "prefix"
     cross = SimpleNamespace(
         backend=TARGET_BACKEND_CROSS_MINGW,
-        paths=SimpleNamespace(workspace_root=workspace, target_prefix=target_prefix),
+        paths=SimpleNamespace(
+            workspace_root=workspace,
+            target_prefix=target_prefix,
+            generated_files_root=workspace / "generated",
+        ),
         host_environment={"PATH": "/usr/bin", "CFLAGS": "-O2"},
         compiler_environment={
             "PATH": "/usr/bin",
@@ -469,7 +473,7 @@ def test_shared_builder_helpers_emit_scoped_cross_commands(tmp_path, monkeypatch
         "CMAKE_PREFIX_PATH": str(target_prefix),
     }
     cargo_env = {
-        "PATH": "/usr/bin:/bin",
+        "PATH": "/usr/bin:/pinned/bin",
         "RUSTC": "/project-rust/bin/rustc",
         "CARGO": "/project-rust/bin/cargo",
         "CARGO_BUILD_TARGET": "x86_64-pc-windows-gnullvm",
@@ -482,7 +486,11 @@ def test_shared_builder_helpers_emit_scoped_cross_commands(tmp_path, monkeypatch
     }
     cross = SimpleNamespace(
         backend=TARGET_BACKEND_CROSS_MINGW,
-        paths=SimpleNamespace(workspace_root=workspace, target_prefix=target_prefix),
+        paths=SimpleNamespace(
+            workspace_root=workspace,
+            target_prefix=target_prefix,
+            generated_files_root=workspace / "generated",
+        ),
         host_environment={"PATH": "/usr/bin:/bin"},
         compiler_environment=target_env,
         cargo_environment=cargo_env,
@@ -503,7 +511,7 @@ def test_shared_builder_helpers_emit_scoped_cross_commands(tmp_path, monkeypatch
     builder.platform_context = SimpleNamespace(cross_environment=cross)
     builder.platform_detector = SimpleNamespace(platform_info=SimpleNamespace(cuda_path=None))
     builder.toolchain_env = {}
-    builder.config = BuildConfig(target_backend=TARGET_BACKEND_CROSS_MINGW)
+    builder.config = BuildConfig(target_backend=TARGET_BACKEND_CROSS_MINGW, native_build=True)
     builder.env = {}
     builder.platform = "linux"
     builder.workspace = workspace
@@ -513,6 +521,11 @@ def test_shared_builder_helpers_emit_scoped_cross_commands(tmp_path, monkeypatch
 
     def capture_step(context, component, status, detail, error, command, name, workdir, env):
         calls.append((component.name, name, command, dict(env)))
+        if component.build_system == BuildSystem.CARGO:
+            stage = Path(command[command.index("--destdir") + 1])
+            output = stage / target_prefix.relative_to("/") / "lib" / "test.a"
+            output.parent.mkdir(parents=True)
+            output.write_bytes(b"target")
 
     def capture_make(context, component, status, detail, error, workdir, jobs, env, timeout=None):
         calls.append((component.name, "make", [f"make -j{jobs}"], dict(env)))
@@ -527,19 +540,27 @@ def test_shared_builder_helpers_emit_scoped_cross_commands(tmp_path, monkeypatch
     monkeypatch.setattr(
         shared_builders.shutil,
         "which",
-        lambda name, *args, **kwargs: "/usr/bin/cargo-c" if name == "cargo-c" else None,
+        lambda name, *args, **kwargs: (
+            f"{kwargs['path']}/cargo-cinstall" if name == "cargo-cinstall" else None
+        ),
     )
     context = SimpleNamespace(
         builder=builder,
         executor=SimpleNamespace(
-            execute=lambda *args, **kwargs: SimpleNamespace(
-                success=True, stdout=f"cargo-c {shared_builders.CARGO_C_VERSION}"
+            execute=lambda command, **kwargs: SimpleNamespace(
+                success=True,
+                stdout=(
+                    f"cargo-c {shared_builders.CARGO_C_VERSION}"
+                    if command[0].startswith("/pinned/")
+                    else "cargo-c 0.10.16"
+                ),
             )
         ),
         state_manager=None,
     )
     sources = tmp_path / "sources"
     sources.mkdir()
+    cross.paths.generated_files_root.mkdir(parents=True)
     components = {
         system: Component(
             f"g3-{system.value}",
@@ -590,6 +611,14 @@ def test_shared_builder_helpers_emit_scoped_cross_commands(tmp_path, monkeypatch
     assert not any(call[1] == "install-cargo-c" for call in calls)
     assert cargo_build[3]["CARGO_BUILD_TARGET"] == "x86_64-pc-windows-gnullvm"
     assert cargo_build[3]["CARGO_TARGET_DIR"] == str(workspace / "build/cargo-target")
+    assert cargo_build[2][0] == "/pinned/bin/cargo-cinstall"
+    assert "--locked" in cargo_build[2]
+    assert cargo_build[2][cargo_build[2].index("--target") + 1] == "x86_64-pc-windows-gnullvm"
+    assert cargo_build[3]["CARGO_NET_OFFLINE"] == "true"
+    assert cargo_build[3]["CARGO_TARGET_X86_64_PC_WINDOWS_GNULLVM_RUSTFLAGS"] == (
+        "-C target-cpu=native"
+    )
+    assert "RUSTFLAGS" not in cargo_build[3]
     assert all(
         "-march=native" not in " ".join(call[2]) or call[3].get("CC") == target_cc for call in calls
     )
@@ -803,6 +832,14 @@ def test_real_cross_environment_and_build_system_acceptance(tmp_path):
         for tool in environment.host_tools.paths.values()
     )
     assert "PKG_CONFIG_PATH" not in environment.compiler_environment
+    cargo_env = environment.cargo_environment
+    assert cargo_env["HOST_PKG_CONFIG"] == environment.host_tools.paths["pkg-config"]
+    assert cargo_env["TARGET_PKG_CONFIG"] == str(environment.pkg_config_wrapper)
+    assert "PKG_CONFIG_LIBDIR" not in cargo_env
+    assert (
+        cargo_env["TARGET_PKG_CONFIG_LIBDIR"]
+        == environment.compiler_environment["PKG_CONFIG_LIBDIR"]
+    )
     for name in ("CUDA_HOME", "VULKAN_SDK", "CPATH", "LD_LIBRARY_PATH"):
         assert name not in environment.compiler_environment
     assert environment.cpu_tuning_flags == CPU_TUNING_FLAGS

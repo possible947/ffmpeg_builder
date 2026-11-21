@@ -1,7 +1,27 @@
 # Windows FFmpeg cross-build strategy
 
 **Status:** G1 **PASS**; G2.1–G2.8 **PASS**; G3 **PASS**; G4 **in progress**
-(Waves 0–5C complete). Wave 6 and the full Windows FFmpeg build have not started.
+(Waves 0–6 complete). Wave 7 and the full Windows FFmpeg build have not started.
+
+### G4 Wave 6 — rav1e
+
+The registered rav1e 0.8.1 source was built offline with the project Rust
+1.99.0 `x86_64-pc-windows-gnullvm` target, LLVM-MinGW and pinned host
+`cargo-c` 0.10.25. Its locked Cargo dependencies were provisioned from the
+local Cargo source cache, copied into the identity-local
+`generated/cargo-home/registry/{cache,index}` before the offline run; the
+pinned `cargo-cinstall` was supplied on the host PATH. Offline builds require
+those locked crates to be provisioned locally. Host build-script pkg-config
+discovery is separated from the target wrapper; target-native Rust tuning,
+NASM assembly and runtime dispatch remain enabled. Staged installation prevents
+partial target outputs.
+The installed `include/rav1e/rav1e.h`, `lib/librav1e.a` and
+`lib/pkgconfig/rav1e.pc` passed acceptance. The archive has 614 x86-64 COFF
+members including Windows import objects. Static metadata carries Windows
+system libraries and `-lunwind`; the PE consumer imports LLVM-MinGW
+`libunwind.dll` and Windows system/API-set DLLs. A physical-Windows C API
+lifecycle smoke passed. Same-identity revalidation and reuse passed, and 571
+previously accepted files retained their hashes. Wave 7 has not started.
 
 ### G4 Wave 5C — libjxl and VapourSynth
 
@@ -1038,7 +1058,7 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
 ### G3 — `linux-cross-mingw` backend and platform strategy
 
 - **Status:** G1 **PASS**; G2 **PASS**; G3 **PASS**; G4 **in progress**
-  (Waves 0–5C complete; Wave 6 not started).
+  (Waves 0–6 complete; Wave 7 not started).
 - **Pass 1 completed:** production strategy selection; typed host/target tool
   projections; identity-workspace `prefix/`, `build/`, `generated/`,
   `packages/`, and `diagnostics/`; safe G2.6 target-input reuse; explicit
