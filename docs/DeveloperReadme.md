@@ -11,7 +11,8 @@ with deployed gcc12 12.5.0 and 9.0 with the system GCC — 58/58 components
 each, smoke-tested). WSL-Mingw G1/G2 preparation and offline-closure
 acceptance are complete; G3 has established and validated the
 `linux-cross-mingw` cross-environment and shared build contracts. G3 is PASS;
-G4 Waves 0–9 are complete. Wave 1 accepted seven Windows target dependencies;
+G4 and Waves 0–9 are complete; G5 hardware-matrix validation has not started.
+Wave 1 accepted seven Windows target dependencies;
 Wave 2 accepted eleven more through production Autotools and CMake paths with
 the mandatory primary profile (`native_build=true`, `openmp=true`), and Wave
 3A accepted six LV2 dependencies through Meson. Wave 3B reused target libogg
@@ -50,8 +51,16 @@ and VIF extractors, and reuse passed. Wave 9 accepted the G2 OpenCL target
 headers and import interface using the physical Windows target's OpenCL GPU;
 its Windows kernel execution, component state and reuse passed. `OpenCL.dll`
 and the vendor ICD remain external runtime prerequisites. The physical target
-has no Intel or AMD GPU, so oneVPL/QSV and AMF were not selected. The final
-Windows FFmpeg integration has not started. The
+has no Intel or AMD GPU, so oneVPL/QSV and AMF were not selected. Final G4
+integrated the 45 selected dependencies into FFmpeg 9.0 using LLVM-MinGW,
+target metadata, host CUDA PTX and Vulkan shader tools. Windows PE `ffmpeg.exe`
+and `ffprobe.exe` passed version/startup, software H.264 encode/decode and
+probing; same-identity reuse and 706 prior output hashes passed. The build is
+nonfree and unredistributable. Windows runtime acceptance stages LLVM-MinGW
+libc++, libunwind, winpthread and libomp DLLs; system, driver, Vulkan/OpenCL
+and optional VapourSynth runtimes remain external. The cross route requires
+the already accepted component waves; it does not yet orchestrate a fresh
+stack build automatically. The
 compatibility/portable profile is `native_build=false`,
 `openmp=false`; it is for portable releases/diagnostics and cannot substitute
 for a failed primary-profile build.
@@ -139,10 +148,9 @@ prefix contains only G2.6 headers/interfaces at this stage.
 
 `run_cross_environment_acceptance()` executes temporary C/C++/resource and
 static-archive probes, target pkg-config isolation, and minimal CMake, Meson,
-and Autotools fixtures. The TUI and normal headless build route stop after
-these checks; headless `--dry-run` additionally reports G4 Wave-0 component
-roles and selection, then stops before any component build. This is not a
-Windows FFmpeg build. When
+and Autotools fixtures. The TUI and normal headless cross route now continue
+to G4 FFmpeg acceptance using the previously accepted component stack;
+headless `--dry-run` reports G4 Wave-0 component roles without building. When
 `native_build` is enabled, target C/C++ uses exactly `-march=native
 -mtune=native`; LLVM-MinGW interprets `native`, and the project does not
 expand or independently validate compiler-selected ISA features. G1 CPU data
@@ -151,9 +159,8 @@ whitelist. G3 acceptance proves CUDA PTX/fatbin generation with selected NVCC
 and GCC `-ccbin`, host bin2c conversion, LLVM-MinGW compilation of generated C
 to COFF, and a PE32+ link. Rust/Cargo staticlib and transitive C++ runtime
 links are accepted, along with a host-generator-to-target mixed-role pipeline
-and target Vulkan/OpenCL interfaces. CUDA-enabled FFmpeg and libvmaf component
-recipes remain fail-closed until their G4 adapters are implemented; G3 stops
-before the component graph and does not claim a full Windows FFmpeg build.
+and target Vulkan/OpenCL interfaces. These G3 checks remain separate from the
+subsequent accepted CUDA-enabled libvmaf and FFmpeg component builds.
 
 ### `__main__.py`
 

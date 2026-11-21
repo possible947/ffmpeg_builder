@@ -625,32 +625,23 @@ def test_shared_builder_helpers_emit_scoped_cross_commands(tmp_path, monkeypatch
     assert all("MSYS" not in value and "sh.exe" not in value for call in calls for value in call[2])
 
 
-def test_headless_cross_route_stops_after_environment_acceptance(capsys):
-    class HeadlessApp:
-        def prepare_target(self, config, resume):
-            return SimpleNamespace(uses_isolated_workspace=True)
-
-        def prepare_cross_environment(self, config, session):
-            return SimpleNamespace(
-                target_triple="x86_64-w64-mingw32",
-                paths=SimpleNamespace(workspace_root=Path("/identity/workspace")),
-            )
-
-        def _get_buildable_components(self, config):
-            raise AssertionError("G3 preparation must stop before G4 component selection")
-
+def test_headless_cross_route_uses_final_integration(monkeypatch):
+    app = object()
+    calls = []
+    monkeypatch.setattr(
+        "ffmpeg_builder.scripts.run_build.run_g4_final",
+        lambda actual_app, config: calls.append((actual_app, config)) or 7,
+    )
+    config = BuildConfig(target_backend=TARGET_BACKEND_CROSS_MINGW, cuda_build_mode="disabled")
     status = run_build(
-        HeadlessApp(),
-        BuildConfig(
-            target_backend=TARGET_BACKEND_CROSS_MINGW,
-            cuda_build_mode="disabled",
-        ),
+        app,
+        config,
         resume=False,
         no_release=True,
     )
 
-    assert status == 2
-    assert "G3 cross-environment acceptance passed" in capsys.readouterr().out
+    assert status == 7
+    assert calls == [(app, config)]
 
 
 def test_headless_cross_dry_run_reports_wave_zero_selection_without_building(capsys):

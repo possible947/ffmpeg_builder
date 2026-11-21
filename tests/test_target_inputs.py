@@ -2,6 +2,7 @@ import hashlib
 import json
 import copy
 import tarfile
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -11,9 +12,31 @@ from ffmpeg_builder.build_types import BuildError
 from ffmpeg_builder.components import ComponentRegistry
 from ffmpeg_builder.target_inputs import (
     _validate_target_tree,
+    install_nv_codec_pkg_config,
     materialize_target_inputs,
     validate_target_inputs_manifest,
 )
+
+
+def test_nv_codec_pkg_config_uses_verified_target_source(tmp_path: Path):
+    tree = _source(
+        tmp_path,
+        "nv-codec",
+        {"ffnvcodec.pc.in": "prefix=@@PREFIX@@\nName: ffnvcodec\nVersion: 13.0.19.1\n"},
+    )
+    archive = tmp_path / "nv-codec.tar.gz"
+    checksum = _archive(tree, archive)
+    component = replace(ComponentRegistry().get_nv_codec_component(), sha256=checksum)
+    manifest = {"sources": {component.name: {"version": component.version, "sha256": checksum}}}
+    prefix = tmp_path / "prefix"
+    pc = install_nv_codec_pkg_config(component, archive, prefix, manifest)
+    assert pc.read_text() == (f"prefix={prefix}\nName: ffnvcodec\nVersion: 13.0.19.1\n")
+    install_nv_codec_pkg_config(component, archive, prefix, manifest)
+    pc.write_text("changed")
+    with pytest.raises(BuildError, match="existing target pkg-config metadata differs"):
+        install_nv_codec_pkg_config(component, archive, prefix, manifest)
+    with pytest.raises(BuildError, match="does not match target headers"):
+        install_nv_codec_pkg_config(component, archive, prefix, {"sources": {}})
 
 
 def _archive(root: Path, archive: Path) -> str:

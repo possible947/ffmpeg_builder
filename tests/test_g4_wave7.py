@@ -5,7 +5,11 @@ import pytest
 
 from ffmpeg_builder.build_types import BuildError
 from ffmpeg_builder.builders.graphics.cross_install import promote_staged
-from ffmpeg_builder.builders.graphics.glslang_sources import DEPENDENCIES, prepare_glslang_sources
+from ffmpeg_builder.builders.graphics.glslang_sources import (
+    DEPENDENCIES,
+    install_spirv_headers,
+    prepare_glslang_sources,
+)
 from ffmpeg_builder.components import ComponentRegistry
 from ffmpeg_builder.g4_wave7 import Wave7Validator, select_components
 
@@ -63,6 +67,39 @@ def test_glslang_pins_must_match_upstream_and_use_project_downloader(tmp_path, m
     with pytest.raises(BuildError, match="known_good"):
         prepare_glslang_sources(SimpleNamespace(downloader=Downloader()), source)
     assert len(calls) == 2
+
+
+def test_spirv_headers_use_pinned_source_and_refuse_conflicts(tmp_path, monkeypatch):
+    calls = []
+
+    class Downloader:
+        def download(self, url, filename, **kwargs):
+            calls.append((filename, kwargs["expected_sha256"]))
+            return tmp_path / filename
+
+    def extract(archive, destination):
+        header = destination / "include/spirv/unified1/spirv.h"
+        header.parent.mkdir(parents=True)
+        header.write_text("pinned")
+
+    monkeypatch.setattr(
+        "ffmpeg_builder.builders.graphics.glslang_sources._extract_dependency", extract
+    )
+    builder = SimpleNamespace(
+        downloader=Downloader(),
+        target_prefix=tmp_path / "prefix",
+        platform_context=SimpleNamespace(
+            cross_environment=SimpleNamespace(paths=SimpleNamespace(generated_files_root=tmp_path))
+        ),
+    )
+    install_spirv_headers(builder)
+    install_spirv_headers(builder)
+    assert calls == [(DEPENDENCIES[1].filename, DEPENDENCIES[1].sha256)] * 2
+    header = builder.target_prefix / "include/spirv/unified1/spirv.h"
+    assert header.read_text() == "pinned"
+    header.write_text("changed")
+    with pytest.raises(BuildError, match="Conflicting target header"):
+        install_spirv_headers(builder)
 
 
 def test_staged_install_refuses_overwrite_before_promoting_any_files(tmp_path):

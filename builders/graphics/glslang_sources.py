@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import tarfile
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ...build_types import BuildError
+from ...target_inputs import _copy_header_tree
 from ..codecs.jxl_sources import _extract_dependency
 
 if TYPE_CHECKING:
@@ -42,6 +44,32 @@ DEPENDENCIES = (
         "28d7cdd8681fa2c47dcafded63e168a5b1086cd26d5a7990626fdab02dc2ddf9",
     ),
 )
+
+
+def install_spirv_headers(builder: FFmpegBuilder) -> None:
+    """Expose the pinned glslang SPIR-V headers to target consumers."""
+    cross = builder.platform_context.cross_environment
+    if cross is None:
+        raise BuildError("glslang", "A target cross environment is required for SPIR-V headers.")
+    dependency = DEPENDENCIES[1]
+    archive = builder.downloader.download(
+        dependency.url,
+        dependency.filename,
+        expected_sha256=dependency.sha256,
+        show_progress=False,
+    )
+    try:
+        with tempfile.TemporaryDirectory(
+            prefix="spirv-headers-",
+            dir=cross.paths.generated_files_root,
+        ) as directory:
+            source = Path(directory) / "source"
+            _extract_dependency(Path(archive), source)
+            _copy_header_tree(
+                source / "include" / "spirv", builder.target_prefix / "include" / "spirv", "glslang"
+            )
+    except (OSError, ValueError, tarfile.TarError) as exc:
+        raise BuildError("glslang", f"Cannot install pinned SPIR-V headers: {exc}") from exc
 
 
 def prepare_glslang_sources(builder: FFmpegBuilder, source_dir: Path) -> None:

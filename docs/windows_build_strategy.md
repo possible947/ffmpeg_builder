@@ -1,7 +1,37 @@
 # Windows FFmpeg cross-build strategy
 
-**Status:** G1 **PASS**; G2.1–G2.8 **PASS**; G3 **PASS**; G4 **in progress**
-(Waves 0–9 complete). The final Windows FFmpeg integration has not started.
+**Status:** G1 **PASS**; G2.1–G2.8 **PASS**; G3 **PASS**; G4 **PASS**.
+G5 hardware-matrix validation and subsequent packaging have not started.
+
+### G4 final — configured Windows FFmpeg
+
+The production `linux-cross-mingw` route consumes the 45 selected, previously
+accepted target dependencies and interfaces, checks their identity and output
+hashes, and builds FFmpeg 9.0 with LLVM-MinGW/UCRT, native CPU tuning and
+OpenMP. The normal cross route and `python scripts/run_build.py --g4-final`
+require the accepted component waves; they preserve and reuse their state.
+The host CUDA 12.4 NVCC/GCC 12.5 pair generates PTX, while the verified host
+Vulkan SDK shader compiler generates SPIR-V. The upstream nv-codec pkg-config
+template and glslang's pinned SPIR-V headers are provisioned from the same
+verified project sources as their accepted interfaces.
+
+Configured libraries, CUDA/NVENC/NVDEC/CUVID, Vulkan/libplacebo, OpenCL and
+the CUDA libvmaf filter are present. The physical Windows target has no AMD or
+Intel hardware GPU, so AMF and oneVPL/QSV are not selected; Linux VAAPI and
+macOS VideoToolbox are not Windows target features. The resulting build is
+**nonfree and unredistributable** under FFmpeg's configure policy.
+
+On the physical Windows target both x86-64 PE32+ `ffmpeg.exe` and
+`ffprobe.exe` report version 9.0 and start successfully. A generated software
+H.264 encode, ffprobe inspection and decode smoke passed. Same-identity
+production reuse repeated those checks; all 706 prior manifest-recorded target
+files retained their hashes, and the Wave-9 OpenCL acceptance also reused
+successfully after the FFmpeg install. The acceptance stages the required
+LLVM-MinGW `libc++.dll`, `libunwind.dll`, `libwinpthread-1.dll` and
+`libomp.dll`; Windows/UCRT, `OpenCL.dll`, `vulkan-1.dll`, vendor ICDs and
+NVIDIA driver libraries are external runtime prerequisites. `VSScript.dll` is
+an external prerequisite when VapourSynth is used. G5's hardware matrix and
+release packaging remain separate work.
 
 ### G4 Wave 9 — physical-Windows OpenCL interface
 
@@ -22,7 +52,8 @@ compiled and dispatched an OpenCL kernel on TITAN V and checked its results.
 prerequisites. Target metadata exposes the import library and runtime
 requirement, and cross-target feature selection does not use a WSL OpenCL
 runtime as a substitute. Revalidation and reuse passed; 687 files from prior
-acceptance manifests retained their hashes. No FFmpeg build was run.
+acceptance manifests retained their hashes. At that acceptance point no FFmpeg
+build had been run.
 
 ### G4 Wave 8 — CUDA and libvmaf
 
@@ -285,7 +316,7 @@ All eleven registered source archives were already present in the
 project-managed offline mirror and passed their declared SHA-256 checks; no
 source or validation-tool downloads were needed. Wave 3A is now accepted as
 described above; at that acceptance point Wave 4B and FFmpeg integration had
-not started. G4 remains in progress.
+not started and G4 remained in progress.
 
 ### G4 Wave 1 — first production target dependencies
 
@@ -303,8 +334,8 @@ without tools, tests, shell `*-config` helpers, or unversioned header/library
 links. Its versioned static library and headers retain the upstream `libpng.pc`
 pkg-config alias required by FreeType's configure check. Sources were
 verified against local registered checksums; no project-source download was
-needed. At Wave-1 acceptance, Wave 2 and FFmpeg had not started; Wave 2 is now
-accepted as described above, and G4 remains in progress.
+needed. At Wave-1 acceptance, Wave 2 and FFmpeg had not started and G4
+remained in progress.
 
 ### G4 Wave 0 — role and ownership boundary
 
@@ -1123,17 +1154,16 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
 
 ### G3 — `linux-cross-mingw` backend and platform strategy
 
-- **Status:** G1 **PASS**; G2 **PASS**; G3 **PASS**; G4 **in progress**
-  (Waves 0–9 complete; final FFmpeg integration not started).
+- **Status:** G1 **PASS**; G2 **PASS**; G3 **PASS**; G4 **PASS**; G5 not started.
 - **Pass 1 completed:** production strategy selection; typed host/target tool
   projections; identity-workspace `prefix/`, `build/`, `generated/`,
   `packages/`, and `diagnostics/`; safe G2.6 target-input reuse; explicit
   LLVM-MinGW compiler/binutils mapping; host-native tool separation;
   target-only pkg-config wrapper and contamination checks; deterministic CMake
   and Meson cross files; Autotools tuples/environment; and identity-local Rust
-  and deferred CUDA host-tool projections. The TUI and normal headless build
-  route stop after G3; cross `--dry-run` also reports G4 Wave-0 selection and
-  stops before component building.
+  and deferred CUDA host-tool projections. The TUI and normal headless cross
+  build now proceed to final G4 acceptance when the component waves are
+  accepted; cross `--dry-run` reports G4 Wave-0 selection without building.
 - **Real pass-1 acceptance:** C/C++ and resource compile/link, static archive
   link, PE32+ x86-64/COFF/UCRT inspection, pkg-config isolation and malicious
   metadata rejection, minimal CMake configure/build, Meson setup/build, and
@@ -1317,8 +1347,8 @@ project-owned artifact and never a Windows target component.
    environment/cross files, host/target/MIXED build contracts, reusable CUDA
    fatbin/bin2c/COFF flow, Rust/Cargo target integration, transitive link
    metadata, shared builder projections, and integrated production-path
-   acceptance. G4 component adapters are in progress; the full stack is not complete.
-4. **G4:** Cross-build the full configured software dependency stack; verify
+   acceptance.
+4. **G4 — PASS:** Cross-build the full configured software dependency stack; verify
    PE/COFF, no Linux leakage, runtime and resume.
 5. **G5:** Build-assert every configured hardware feature and run only
    host-applicable runtime tests, retaining unsupported/absent statuses.

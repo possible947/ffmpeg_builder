@@ -1058,17 +1058,19 @@ class FFmpegBuilderApp:
             config: Build configuration.
             resume: Whether to resume from previous state.
         """
+        if FFmpegBuilderApp._is_cross_mingw(config):
+            from .g4_final import run_g4_final
+
+            result = run_g4_final(self, config)
+            if result == 2:
+                self.console.print(
+                    "[red]Build preparation blocked by identity guard or prerequisites.[/red]"
+                )
+            elif result:
+                self.console.print("[red]G4 FFmpeg integration failed.[/red]")
+            return
         try:
             session = self.prepare_target(config, resume)
-            if self._is_cross_mingw(config):
-                environment = self.prepare_cross_environment(config, session)
-                self.console.print("[green]G3 cross-environment acceptance passed.[/green]")
-                self.console.print(
-                    f"Target: {environment.target_triple}; workspace: "
-                    f"{environment.paths.workspace_root}. Stopped before the G4 component "
-                    "graph; no full dependency-stack build was run."
-                )
-                return
             all_components = self._get_buildable_components(config)
             validate_required_cuda_components(
                 config, all_components, self.platform_info.cuda_build_host_inputs

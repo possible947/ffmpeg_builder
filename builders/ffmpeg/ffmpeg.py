@@ -40,6 +40,7 @@ def build_ffmpeg(builder: FFmpegBuilder, component: Component, source_dir: Path)
     if cross is not None:
         env["CFLAGS"] = cross.autotools.environment["CFLAGS"]
         env["CXXFLAGS"] = cross.autotools.environment["CXXFLAGS"]
+        env["REVISION"] = component.version
 
     built_components = [
         name
@@ -49,7 +50,7 @@ def build_ffmpeg(builder: FFmpegBuilder, component: Component, source_dir: Path)
 
     # Resume builds may skip libplacebo rebuild. Re-apply pkg-config
     # normalization so FFmpeg's configure probe remains stable.
-    if "libplacebo" in built_components:
+    if "libplacebo" in built_components and cross is None:
         builder._patch_libplacebo_pc()
 
     extra_libs = builder.extralibs
@@ -57,7 +58,7 @@ def build_ffmpeg(builder: FFmpegBuilder, component: Component, source_dir: Path)
     placebo_vulkan = False
 
     # Add libraries conditionally based on built components
-    if "libvmaf" in built_components:
+    if "libvmaf" in built_components and cross is None:
         if builder.platform == "darwin":
             extra_libs += " -lc++"
         else:
@@ -94,7 +95,7 @@ def build_ffmpeg(builder: FFmpegBuilder, component: Component, source_dir: Path)
                 and not (builder.config.full_static and builder.platform == "linux")
             )
         if placebo_vulkan:
-            if builder.platform == "linux":
+            if builder.platform == "linux" and cross is None:
                 extra_libs += " -lvulkan"
             elif builder.platform == "darwin":
                 extra_libs += " -L/usr/local/lib -lvulkan"
@@ -193,10 +194,29 @@ def build_ffmpeg(builder: FFmpegBuilder, component: Component, source_dir: Path)
         configure_args.append(f"--cc={env['CC']}")
     if "CXX" in env:
         configure_args.append(f"--cxx={env['CXX']}")
+    if cross is not None:
+        configure_args.extend(
+            [
+                "--enable-cross-compile",
+                "--target-os=mingw32",
+                "--arch=x86_64",
+                f"--ar={cross.target_tools.ar}",
+                f"--ranlib={cross.target_tools.ranlib}",
+                f"--strip={cross.target_tools.strip}",
+                f"--windres={cross.target_tools.windres}",
+                f"--pkg-config={cross.pkg_config_wrapper}",
+                f"--bindir={cross.paths.workspace_root / 'bin'}",
+            ]
+        )
+        if builder.config.enable_libplacebo_vulkan:
+            shader_compiler = cross.target_interfaces.host_shader_tools.get("shader_compiler")
+            if not shader_compiler:
+                raise BuildError(component.name, "Verified host Vulkan shader compiler is missing.")
+            configure_args.append(f"--glslc={shader_compiler}")
 
     # On UCRT64/MinGW, POSIX pthreads are not available as a system
     # library; use native Windows threads (w32threads) instead.
-    if builder._is_windows_ucrt64_backend():
+    if builder._is_windows_ucrt64_backend() or cross is not None:
         configure_args.append("--enable-w32threads")
     else:
         configure_args.append("--enable-pthreads")
@@ -218,14 +238,6 @@ def build_ffmpeg(builder: FFmpegBuilder, component: Component, source_dir: Path)
         use_nvcc = cuda_available_for_build and (
             builder.config.gpl_enabled or builder.config.allow_nonfree_cuda
         )
-        if use_nvcc:
-            raise BuildError(
-                component.name,
-                "The scoped CUDA PTX/fatbin host probes do not prove that NVCC can emit "
-                "a Windows COFF host object for FFmpeg. CUDA compilation is blocked until "
-                "that target-object flow is validated.",
-                code="wsl_mingw_ffmpeg_cuda_coff_unverified",
-            )
     configure_args.append("--disable-cuda-llvm")
     # CUDA compilation and hardware encode/decode are separate capabilities.
     if builder.platform_detector.platform_info.cuda_available or getattr(
@@ -235,17 +247,30 @@ def build_ffmpeg(builder: FFmpegBuilder, component: Component, source_dir: Path)
         # in the MSYS2 UCRT64 toolchain.  Hardware encode/decode APIs
         # (cuvid/nvdec/nvenc) and ffnvcodec headers work fine with GCC.
         if not builder._is_windows_ucrt64_backend():
-            if use_nvcc and inputs is not None:
-                env = cuda_profile_environment(env, inputs)
-                env["NVCC_PREPEND_FLAGS"] = ""
+            if use_nvcc and (inputs is not None or cross_cuda is not None):
                 configure_args.append("--enable-cuda-nvcc")
                 if not builder.config.gpl_enabled:
                     configure_args.append("--enable-nonfree")
-                configure_args.append(f"--nvcc={inputs.nvcc_path}")
-                assert inputs.compute_architecture is not None
-                cuda_cc = inputs.compute_architecture.removeprefix("compute_")
+                if cross_cuda is not None:
+                    assert cross is not None
+                    assert cross_cuda.nvcc is not None
+                    assert cross_cuda.compute_architecture is not None
+                    env["PATH"] = cross.cuda_environment["PATH"]
+                    nvcc = cross_cuda.nvcc
+                    common_flags = cross_cuda.common_flags
+                    architecture = cross_cuda.compute_architecture
+                else:
+                    assert inputs is not None
+                    env = cuda_profile_environment(env, inputs)
+                    nvcc = inputs.nvcc_path
+                    common_flags = inputs.common_flags()
+                    assert inputs.compute_architecture is not None
+                    architecture = inputs.compute_architecture
+                env["NVCC_PREPEND_FLAGS"] = ""
+                configure_args.append(f"--nvcc={nvcc}")
+                cuda_cc = architecture.removeprefix("compute_")
                 flags = [
-                    *inputs.common_flags(),
+                    *common_flags,
                     "-gencode",
                     f"arch=compute_{cuda_cc},code=sm_{cuda_cc}",
                     "-O2",
@@ -265,7 +290,8 @@ def build_ffmpeg(builder: FFmpegBuilder, component: Component, source_dir: Path)
 
     # VAAPI support (Linux-only policy in current implementation).
     if (
-        builder.platform == "linux"
+        cross is None
+        and builder.platform == "linux"
         and builder.platform_detector.platform_info.vaapi_available
         and not builder.config.full_static
     ):
@@ -275,13 +301,13 @@ def build_ffmpeg(builder: FFmpegBuilder, component: Component, source_dir: Path)
     windows_ucrt64_qsv = builder._is_windows_ucrt64_backend() and qsv_available
 
     # Intel QSV support.
-    if builder.platform == "linux" and qsv_available:
+    if cross is None and builder.platform == "linux" and qsv_available:
         configure_args.append("--enable-libvpl")
     if windows_ucrt64_qsv:
         configure_args.append("--enable-libvpl")
 
     # Keep Linux/macOS-only acceleration paths disabled on Windows.
-    if builder.platform == "windows":
+    if builder.platform == "windows" or cross is not None:
         configure_args.append("--disable-vaapi")
         configure_args.append("--disable-videotoolbox")
         if not windows_ucrt64_qsv:

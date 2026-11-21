@@ -1,3 +1,18 @@
+### Accepted — G4 final Windows FFmpeg integration
+
+- Built FFmpeg 9.0 against all 45 configured, accepted Windows target inputs
+  with LLVM-MinGW, target static metadata, host CUDA PTX and Vulkan shader
+  tools. The pinned nv-codec pkg-config interface and glslang SPIR-V headers
+  are supplied from verified project sources; the release version no longer
+  accidentally inherits the enclosing repository's Git revision.
+- The configured CUDA/NVENC/NVDEC, Vulkan/libplacebo, OpenCL and software
+  libraries remain enabled. Windows PE `ffmpeg.exe` and `ffprobe.exe` started,
+  encoded and decoded software H.264, and probed the result; reuse and 706
+  prior dependency hashes passed. The configured GPL/nonfree build is
+  unredistributable. Runtime acceptance stages LLVM-MinGW libc++, libunwind,
+  winpthread and libomp; system and vendor runtimes remain external.
+- G4 is complete. G5 hardware-matrix validation and packaging have not started.
+
 ### Accepted — G4 Wave 9 Windows OpenCL interface
 
 - Accepted G2's pinned OpenCL target headers and Windows import library based
@@ -6,7 +21,7 @@
 - The target consumer executed and checked a kernel on the NVIDIA TITAN V;
   same-identity reuse and 687 prior manifest-recorded files passed. The target
   had no Intel or AMD GPU, so oneVPL/QSV and AMF were not selected. Final
-  Windows FFmpeg integration has not started.
+  Windows FFmpeg integration had not started at that acceptance point.
 
 ### Accepted — G4 Wave 8 CUDA libvmaf
 
@@ -147,7 +162,7 @@
   unconditional host validator utility is excluded from the cross install.
   The repeated same-identity run revalidated and reused all six Wave-3A
   components. No downloads were needed.
-- G4 remains in progress and is not marked PASS.
+- G4 remained in progress at that acceptance point.
 
 ### Accepted — G4 Wave 2 real target dependency cross-builds
 
@@ -172,7 +187,7 @@
   portable releases or diagnostics; its success does not replace primary
   profile acceptance or convert a primary failure into a pass.
 - At this acceptance point Wave 4B and FFmpeg integration had not started.
-  G4 remains in progress and is not marked PASS.
+  G4 remained in progress at that acceptance point.
 
 ### Accepted — G4 Wave 1 real target dependency cross-builds
 
@@ -189,7 +204,7 @@
   `libpng.pc` alias for that target dependency while disabling its tools,
   tests, shell config scripts, and unversioned header/library links. G4 Waves
   0–1 were accepted at this milestone; Wave 2 and FFmpeg had not started then.
-  G4 remains in progress.
+  G4 remained in progress at that acceptance point.
 
 ### Accepted — G4 Wave 0 role-aware selection
 
@@ -205,8 +220,8 @@
 - Cross `cargo-c` use is an explicit prepared-host prerequisite pinned to
   0.10.25; missing or mismatched installations fail without `cargo install`.
   The cross dry-run reaches Wave-0 selection and stops before Wave-1 builds.
-  G4 is in progress; Wave 1, component builds, and full FFmpeg integration are
-  not claimed.
+  At that point G4 was in progress; Wave 1, component builds, and full FFmpeg
+  integration were not claimed.
 
 ### Accepted — G3 pass 2 integrated cross-build contracts (2026-03-19)
 

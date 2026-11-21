@@ -27,6 +27,49 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def install_nv_codec_pkg_config(
+    component: Component, archive: Path, prefix: Path, manifest: Dict[str, object]
+) -> Path:
+    """Install upstream pkg-config metadata for the verified target headers."""
+    sources = manifest.get("sources")
+    source = sources.get(component.name) if isinstance(sources, dict) else None
+    if (
+        not isinstance(source, dict)
+        or source.get("version") != component.version
+        or source.get("sha256") != component.sha256
+        or _sha256(archive) != component.sha256
+    ):
+        raise BuildError(component.name, "NV codec metadata source does not match target headers.")
+    try:
+        with tarfile.open(archive, "r:*") as tar:
+            members = [
+                member
+                for member in tar.getmembers()
+                if member.isfile() and member.name.endswith("/ffnvcodec.pc.in")
+            ]
+            if len(members) != 1:
+                raise ValueError("expected exactly one upstream pkg-config template")
+            stream = tar.extractfile(members[0])
+            if stream is None:
+                raise ValueError("cannot read upstream pkg-config template")
+            template = stream.read().decode("utf-8")
+        if template.count("@@PREFIX@@") != 1:
+            raise ValueError("unexpected upstream pkg-config template")
+        content = template.replace("@@PREFIX@@", str(prefix))
+        target = prefix / "lib/pkgconfig/ffnvcodec.pc"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists():
+            if target.read_text(encoding="utf-8") != content:
+                raise ValueError("existing target pkg-config metadata differs")
+        else:
+            target.write_text(content, encoding="utf-8")
+        return target
+    except (OSError, UnicodeError, tarfile.TarError, ValueError) as exc:
+        raise BuildError(
+            component.name, f"Cannot install target pkg-config metadata: {exc}"
+        ) from exc
+
+
 def _extract_source(archive: Path, component: Component, destination: Path) -> Path:
     destination.mkdir(parents=True)
     try:

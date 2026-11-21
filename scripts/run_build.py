@@ -50,6 +50,7 @@ from ffmpeg_builder.g4_wave6 import run_g4_wave6  # noqa: E402
 from ffmpeg_builder.g4_wave7 import run_g4_wave7  # noqa: E402
 from ffmpeg_builder.g4_wave8 import run_g4_wave8  # noqa: E402
 from ffmpeg_builder.g4_wave9 import run_g4_wave9  # noqa: E402
+from ffmpeg_builder.g4_final import run_g4_final  # noqa: E402
 from ffmpeg_builder.platform_detect import PlatformDetector  # noqa: E402
 from ffmpeg_builder.cuda_prerequisites import (  # noqa: E402
     cuda_nv_codec_identity,
@@ -152,6 +153,9 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--g4-wave9", action="store_true", help="Accept the G4 Wave-9 Windows target interfaces."
     )
+    parser.add_argument(
+        "--g4-final", action="store_true", help="Build and accept the G4 Windows FFmpeg target."
+    )
     return parser.parse_args(argv)
 
 
@@ -169,21 +173,10 @@ def describe_plan(app: FFmpegBuilderApp, config: BuildConfig) -> int:
 
 def run_build(app: FFmpegBuilderApp, config: BuildConfig, resume: bool, no_release: bool) -> int:
     """Execute the build; return an exit code."""
+    if getattr(config, "target_backend", "native") == TARGET_BACKEND_CROSS_MINGW:
+        return run_g4_final(app, config)
     try:
         session = app.prepare_target(config, resume)
-        if getattr(config, "target_backend", "native") == TARGET_BACKEND_CROSS_MINGW:
-            environment = app.prepare_cross_environment(config, session)
-            print(
-                "G3 cross-environment acceptance passed; "
-                f"target={environment.target_triple}, "
-                f"workspace={environment.paths.workspace_root}.",
-                flush=True,
-            )
-            print(
-                "Stopped before the G4 component graph; no full dependency-stack build was run.",
-                flush=True,
-            )
-            return 2
         all_components = app._get_buildable_components(config)
         cuda_inputs = getattr(app.platform_detector.platform_info, "cuda_build_host_inputs", None)
         validate_required_cuda_components(config, all_components, cuda_inputs)
@@ -358,6 +351,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 args.g4_wave7,
                 args.g4_wave8,
                 args.g4_wave9,
+                args.g4_final,
             )
         )
         > 1
@@ -391,6 +385,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         raise SystemExit("--g4-wave8 performs real builds and cannot be combined with --dry-run.")
     if args.g4_wave9 and args.dry_run:
         raise SystemExit("--g4-wave9 performs acceptance and cannot be combined with --dry-run.")
+    if args.g4_final and args.dry_run:
+        raise SystemExit("--g4-final performs a real build and cannot be combined with --dry-run.")
     if (
         args.g4_wave1
         or args.g4_wave2
@@ -406,6 +402,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         or args.g4_wave7
         or args.g4_wave8
         or args.g4_wave9
+        or args.g4_final
     ) and args.ffmpeg_version not in (
         None,
         "9.0",
@@ -430,6 +427,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         or args.g4_wave7
         or args.g4_wave8
         or args.g4_wave9
+        or args.g4_final
     ):
         config.ffmpeg_version = "9.0"
         config.target_backend = TARGET_BACKEND_CROSS_MINGW
@@ -466,6 +464,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return run_g4_wave8(app, config)
     if args.g4_wave9:
         return run_g4_wave9(app, config)
+    if args.g4_final:
+        return run_g4_final(app, config)
     if args.dry_run:
         if getattr(config, "target_backend", "native") == TARGET_BACKEND_CROSS_MINGW:
             return dry_run_cross_backend(app, config, resume=args.resume)
