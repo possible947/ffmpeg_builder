@@ -1,7 +1,30 @@
 # Windows FFmpeg cross-build strategy
 
 **Status:** G1 **PASS**; G2.1–G2.8 **PASS**; G3 **PASS**; G4 **in progress**
-(Waves 0–5A complete). Wave 5B and the full Windows FFmpeg build have not started.
+(Waves 0–5B complete). Wave 5C has not started; the full Windows FFmpeg build
+is not complete.
+
+### G4 Wave 5B — libzmq
+
+The registered zeromq 4.3.5 archive is local and matches SHA-256
+`6653ef5910f17954861fe72332e68b03ca6e4d9c7160eb3a8de5a5a913bfab43`.
+Its generated configure script uses the shared Autotools target projection;
+no bootstrap is needed. The cross-only adapter adds the pinned source's missing
+`<new>` include and selects static output, with docs, perf, keygen, drafts,
+WebSocket, libbsd, optional libunwind, libsodium, GSSAPI, PGM, NORM, VMCI and
+TLS disabled. The target uses Windows select/Winsock and Windows threads, with
+pthread references for thread naming. Native tuning and the primary OpenMP
+profile remain enabled; the archive has no OpenMP references.
+
+The installed public headers, static `libzmq.a`, pkg-config and libtool metadata
+passed target and contamination validation. All 111 archive members are x86-64
+COFF. Target metadata replaces upstream `-lstdc++` and adds `ZMQ_STATIC`, libc++,
+libunwind, pthread, IP Helper and Winsock; the legacy MSYS repair is not used.
+Negative links established libc++, pthread, IP Helper and Winsock requirements.
+The physical Windows inproc PAIR message smoke and same-identity revalidation
+and reuse passed. `libc++.dll`, `libunwind.dll` and `libwinpthread-1.dll` are
+classified for G6; Windows system DLLs remain system-owned. Wave 5C and Windows
+FFmpeg have not been built.
 
 ### G4 Wave 5A — zlib, OpenSSL and SRT
 
@@ -28,7 +51,7 @@ a provider module or configuration file. `libc++.dll`, `libunwind.dll` and
 `libwinpthread-1.dll` are classified for G6, not bundled.
 
 Same-identity reruns revalidate and reuse all three components, and missing or
-changed accepted outputs fail safely. G4 remains in progress; Wave 5B and
+changed accepted outputs fail safely. At that acceptance point Wave 5B and
 Windows FFmpeg were not built.
 
 ### G4 Wave 4C — zimg
@@ -583,7 +606,7 @@ establishes a production Windows libvmaf CUDA build, its fatbin/runtime path,
 or a Windows cross-build. G2.7 protects resume identity for these inputs, and
 G2.8 accepted the complete offline G2 closure and live prerequisite path. At
 that acceptance milestone G3 had not started; current status is G1/G2/G3
-**PASS**, with G4 **not started**. G3 validates cross-build contracts without
+**PASS**, with G4 **in progress** (Waves 0–5B complete). G3 validates cross-build contracts without
 claiming a full Windows component-stack build.
 The module-level mapping is in
 [DeveloperReadme.md](DeveloperReadme.md#reusing-the-native-cudavulkan-work-for-wsl-mingw).
@@ -980,7 +1003,7 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
 ### G3 — `linux-cross-mingw` backend and platform strategy
 
 - **Status:** G1 **PASS**; G2 **PASS**; G3 **PASS**; G4 **in progress**
-  (Wave 0 complete; Wave 1 not started).
+  (Waves 0–5B complete; Wave 5C not started).
 - **Pass 1 completed:** production strategy selection; typed host/target tool
   projections; identity-workspace `prefix/`, `build/`, `generated/`,
   `packages/`, and `diagnostics/`; safe G2.6 target-input reuse; explicit
@@ -1173,7 +1196,7 @@ project-owned artifact and never a Windows target component.
    environment/cross files, host/target/MIXED build contracts, reusable CUDA
    fatbin/bin2c/COFF flow, Rust/Cargo target integration, transitive link
    metadata, shared builder projections, and integrated production-path
-   acceptance. G4 component adapters and full-stack builds have not started.
+   acceptance. G4 component adapters are in progress; the full stack is not complete.
 4. **G4:** Cross-build the full configured software dependency stack; verify
    PE/COFF, no Linux leakage, runtime and resume.
 5. **G5:** Build-assert every configured hardware feature and run only

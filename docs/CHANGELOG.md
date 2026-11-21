@@ -1,3 +1,15 @@
+### Accepted — G4 Wave 5B libzmq
+
+- Built checksum-verified libzmq 4.3.5 offline using the shared Autotools
+  cross projection and a cross-only `<new>` include correction. Static Windows
+  output uses Winsock/select and Windows threads with pthread thread naming;
+  unselected optional packages and utilities are disabled.
+- Accepted 111 COFF members, public headers and target pkg-config/libtool
+  metadata. Static C consumer links establish libc++, pthread, IP Helper and
+  Winsock requirements; unused OpenMP and legacy `-lstdc++` metadata are absent.
+  Windows inproc messaging and same-identity reuse passed. libc++, libunwind and
+  winpthread DLLs are classified for G6; Wave 5C and Windows FFmpeg are not built.
+
 ### Accepted — G4 Wave 5A crypto and network dependencies
 
 - Revalidated and reused target zlib, then built checksum-verified OpenSSL
@@ -10,8 +22,8 @@
   after symbol inspection. The necessary LLVM-MinGW DLLs are classified for G6.
 - On physical Windows, SHA-256, TLS context creation and a local SRT socket
   lifecycle succeeded without network traffic or a provider module/config.
-  Same-identity revalidation and reuse passed. G4 remains in progress; Wave 5B
-  and Windows FFmpeg have not started.
+  Same-identity revalidation and reuse passed. At that acceptance point Wave 5B
+  and Windows FFmpeg had not started.
 
 ### Accepted — G4 Wave 4C zimg
 

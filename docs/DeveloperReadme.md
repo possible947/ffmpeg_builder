@@ -11,7 +11,7 @@ with deployed gcc12 12.5.0 and 9.0 with the system GCC — 58/58 components
 each, smoke-tested). WSL-Mingw G1/G2 preparation and offline-closure
 acceptance are complete; G3 has established and validated the
 `linux-cross-mingw` cross-environment and shared build contracts. G3 is PASS;
-G4 Waves 0–5A are complete. Wave 1 accepted seven Windows target dependencies;
+G4 Waves 0–5B are complete. Wave 1 accepted seven Windows target dependencies;
 Wave 2 accepted eleven more through production Autotools and CMake paths with
 the mandatory primary profile (`native_build=true`, `openmp=true`), and Wave
 3A accepted six LV2 dependencies through Meson. Wave 3B reused target libogg
@@ -31,8 +31,11 @@ PE link smokes, libc++/libunwind transitive requirements, and same-identity
 reuse were accepted. Wave 5A revalidated target zlib and accepted static
 OpenSSL 3.6.4 and SRT 1.5.6 in dependency order. Their target metadata,
 COFF archives, combined encrypted SRT/OpenSSL/zlib PE link, physical Windows
-digest/TLS/SRT smoke and same-identity reuse passed. Wave 5B and Windows
-FFmpeg have not been built; the complete configured dependency stack remains
+digest/TLS/SRT smoke and same-identity reuse passed. Wave 5B accepted libzmq
+4.3.5 via the shared Autotools cross projection, static COFF and target-only
+pkg-config metadata, negative dependency links and a Windows inproc socket
+smoke. Its libc++/libunwind/pthread runtime DLLs are classified for G6.
+Wave 5C and Windows FFmpeg have not been built; the complete configured dependency stack remains
 in progress. The
 compatibility/portable profile is `native_build=false`,
 `openmp=false`; it is for portable releases/diagnostics and cannot substitute

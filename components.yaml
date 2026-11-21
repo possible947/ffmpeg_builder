@@ -958,6 +958,25 @@
   category: other_lib
   build_system: custom
   custom_build_fn: build_libzmq
+  target_link_metadata:
+    private_transitive_link_requirements:
+    - -lc++
+    - -lunwind
+    - -liphlpapi
+    - -lpthread
+    - -lws2_32
+    runtime_dependencies:
+    - name: libc++.dll
+      classification: toolchain-runtime-dll
+      source_identity: llvm-mingw-20261104
+    - name: libunwind.dll
+      classification: toolchain-runtime-dll
+      source_identity: llvm-mingw-20261104
+    - name: libwinpthread-1.dll
+      classification: toolchain-runtime-dll
+      source_identity: llvm-mingw-20261104
+    provenance:
+    - LLVM-MinGW libzmq static public C API target link probes
   ffmpeg_configure_flag: --enable-libzmq
 - name: vulkan-headers
   sha256: e87dce08116151f6b6d7de6b6faf41498e87e6cf848ff16fa3bd5402190ad4a3
