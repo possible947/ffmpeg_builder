@@ -1,3 +1,18 @@
+### Accepted — G4 Wave 5A crypto and network dependencies
+
+- Revalidated and reused target zlib, then built checksum-verified OpenSSL
+  3.6.4 and SRT 1.5.6 from local sources in declared dependency order.
+  OpenSSL uses host Perl, `mingw64`, static target zlib and no loadable modules;
+  SRT uses the shared CMake target toolchain and enabled OpenSSL encryption.
+- Static archives, target metadata and individual/combined PE links passed;
+  negative dependency links verified zlib, crypto, Windows sockets, libc++
+  and pthread requirements. SRT's unused inherited OpenMP metadata was removed
+  after symbol inspection. The necessary LLVM-MinGW DLLs are classified for G6.
+- On physical Windows, SHA-256, TLS context creation and a local SRT socket
+  lifecycle succeeded without network traffic or a provider module/config.
+  Same-identity revalidation and reuse passed. G4 remains in progress; Wave 5B
+  and Windows FFmpeg have not started.
+
 ### Accepted — G4 Wave 4C zimg
 
 - Built checksum-verified zimg 3.0.6 offline with host autoreconf and the shared
@@ -9,7 +24,8 @@
   passed. The pkg-config, libtool and registry metadata publish libc++ and
   libunwind; their DLLs are classified for later packaging. Unneeded inherited
   libtool pthread/OpenMP flags are removed after archive symbol inspection.
-- G4 Waves 0–4C are complete; Wave 5A and Windows FFmpeg have not started.
+- At this acceptance point G4 Waves 0–4C were complete; Wave 5A and Windows
+  FFmpeg had not started.
 
 ### Accepted — G4 Wave 4B bespoke software codecs
 

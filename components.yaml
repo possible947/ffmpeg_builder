@@ -187,6 +187,15 @@
   gpl_only: true
   archive_filename: openssl-{version}.tar.gz
   custom_build_fn: build_openssl
+  depends_on:
+  - zlib
+  target_link_metadata:
+    private_transitive_link_requirements:
+    - -lz
+    - -lws2_32
+    - -lcrypt32
+    provenance:
+    - LLVM-MinGW OpenSSL static target consumer link probes
   ffmpeg_configure_flag: --enable-openssl
 - name: gmp
   sha256: a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898
@@ -921,6 +930,26 @@
   gpl_only: true
   archive_filename: srt-{version}.tar.gz
   custom_build_fn: build_srt
+  depends_on:
+  - openssl
+  target_link_metadata:
+    private_transitive_link_requirements:
+    - -lpthread
+    - -lc++
+    - -lunwind
+    - -lws2_32
+    runtime_dependencies:
+    - name: libc++.dll
+      classification: toolchain-runtime-dll
+      source_identity: llvm-mingw-20261104
+    - name: libunwind.dll
+      classification: toolchain-runtime-dll
+      source_identity: llvm-mingw-20261104
+    - name: libwinpthread-1.dll
+      classification: toolchain-runtime-dll
+      source_identity: llvm-mingw-20261104
+    provenance:
+    - LLVM-MinGW SRT encrypted static target consumer link probes
   ffmpeg_configure_flag: --enable-libsrt
 - name: libzmq
   sha256: 6653ef5910f17954861fe72332e68b03ca6e4d9c7160eb3a8de5a5a913bfab43

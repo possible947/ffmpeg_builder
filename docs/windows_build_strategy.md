@@ -1,7 +1,35 @@
 # Windows FFmpeg cross-build strategy
 
 **Status:** G1 **PASS**; G2.1–G2.8 **PASS**; G3 **PASS**; G4 **in progress**
-(Waves 0–4C complete). Wave 5A and the full Windows FFmpeg build have not started.
+(Waves 0–5A complete). Wave 5B and the full Windows FFmpeg build have not started.
+
+### G4 Wave 5A — zlib, OpenSSL and SRT
+
+The target dependency chain is `zlib → openssl → srt`. Wave 1 zlib was
+revalidated and reused. The registered offline OpenSSL 3.6.4 and SRT 1.5.6
+archives matched their SHA-256 checksums. OpenSSL uses host Perl and its
+`mingw64` Configure target with LLVM-MinGW tools, static zlib, no shared
+libraries, tests, applications or loadable modules. SRT uses the generated
+CMake target toolchain, static libraries, target OpenSSL pkg-config discovery
+and enabled `openssl-evp` encryption; its unconditional upstream ffplay script
+install is excluded. Both retain native tuning and the primary OpenMP profile.
+
+The installed target OpenSSL headers, `libcrypto.a`, `libssl.a`, their three
+pkg-config files, SRT headers, `libsrt.a` and two pkg-config files passed
+target-only metadata, archive and link validation. The archives contain 1057,
+94 and 41 x86-64 COFF members respectively. Static metadata records target
+zlib, Windows system libraries, and SRT's libc++/libunwind and pthread
+requirements. The SRT adapter removes an unused inferred `-lomp` only after
+checking archive symbols. Windows target link smokes include negative
+dependency links and a combined encrypted SRT/OpenSSL/zlib consumer. A physical
+Windows smoke verified SHA-256, TLS context creation and SRT socket lifecycle
+without external network traffic; the static default provider worked without
+a provider module or configuration file. `libc++.dll`, `libunwind.dll` and
+`libwinpthread-1.dll` are classified for G6, not bundled.
+
+Same-identity reruns revalidate and reuse all three components, and missing or
+changed accepted outputs fail safely. G4 remains in progress; Wave 5B and
+Windows FFmpeg were not built.
 
 ### G4 Wave 4C — zimg
 

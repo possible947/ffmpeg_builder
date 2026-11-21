@@ -17,6 +17,70 @@ if TYPE_CHECKING:
 def build_openssl(builder: FFmpegBuilder, component: Component, source_dir: Path) -> None:
     """Build OpenSSL."""
     env = builder.get_build_env(component)
+    cross = builder.platform_context.cross_environment
+    if cross is not None and component.build_role.value == "target":
+        prefix = cross.paths.target_prefix
+        for relative in (
+            "include/zlib.h",
+            "include/zconf.h",
+            "lib/libz.a",
+            "lib/pkgconfig/zlib.pc",
+        ):
+            path = prefix / relative
+            if not path.is_file() or not path.resolve().is_relative_to(prefix.resolve()):
+                raise BuildError(component.name, f"Required target zlib missing: {path}")
+        perl = cross.host_tools["perl"]
+        if not perl:
+            raise BuildError(component.name, "Host Perl is required.")
+        env.update(cross.autotools.environment)
+        env.pop("CROSS_COMPILE", None)
+        env.pop("PERL5OPT", None)
+        env["RC"] = str(cross.target_tools.windres)
+        command = [
+            perl,
+            "Configure",
+            "mingw64",
+            f"--prefix={prefix}",
+            f"--openssldir={prefix}/ssl",
+            "--libdir=lib",
+            f"--with-zlib-include={prefix}/include",
+            f"--with-zlib-lib={prefix}/lib/libz.a",
+            "no-shared",
+            "no-tests",
+            "no-apps",
+            "no-module",
+            "zlib",
+        ]
+        builder._run_step(
+            component,
+            ComponentStatus.CONFIGURING,
+            "Configure mingw64",
+            "Configure failed",
+            command,
+            "configure",
+            source_dir,
+            env,
+        )
+        builder._run_make(
+            component,
+            ComponentStatus.BUILDING,
+            "make libraries",
+            "Build failed",
+            source_dir,
+            builder.num_jobs,
+            env,
+        )
+        builder._run_step(
+            component,
+            ComponentStatus.INSTALLING,
+            "make install_dev",
+            "Install failed",
+            ["make", "install_dev"],
+            "install",
+            source_dir,
+            env,
+        )
+        return
     if type(builder.platform_strategy).__name__ == "LinuxGcc15Platform":
         apply_perl_shims_to_env(builder.workspace, env, on_log=builder.on_log)
 
