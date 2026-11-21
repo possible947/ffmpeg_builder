@@ -326,6 +326,10 @@
   archive_filename: x264-{version}.tar.gz
   custom_build_fn: build_x264
   ffmpeg_configure_flag: --enable-libx264
+# x265 4.2 = upstream tag 4.2, commit e444744c03978c1fb4e037168967020cf2648427
+# (Bitbucket archive root multicoreware-x265_git-e444744c0397, X265_BUILD 216).
+# The tag ships upstream's stale 4.0 x265Version.txt, so x265 itself reports
+# 4.0+1-6318f22 and pkg-config Version 4.0; see builders/codecs/x265.py.
 - name: x265
   sha256: 0a3d41f6b4e2fe5a49d783d6631bd1a49c44cdf999074a3ff09e2cb71ac8ed33
   version: 4.2

@@ -1,3 +1,40 @@
+### Accepted — post-G7 source/tool/provenance stabilisation
+
+- **libjxl nested sources:** Brotli `028fb5a23661f123017c060daa546b55cf4bde29`
+  (`libjxl-brotli-<rev>.tar.gz`, sha256 `eb5f7dad…c182e6`) and Highway
+  `457c891775a7397bdb0376bb1031e6e027af1c48` (`libjxl-highway-<rev>.tar.gz`,
+  sha256 `66623931…d2a26d`) are Git LFS archives in `third_party/sources`.
+  The downloader resolves them from the local mirror offline and fetches them
+  only when network downloads are allowed, always verifying sha256. libjxl's own
+  `deps.sh` pins and each archive root are checked; unresolved LFS pointers fail
+  with an explicit `git lfs pull` message.
+- **cargo-c:** 0.10.25 is a required ToolchainStore binary profile for
+  `linux-cross-mingw` (official static `x86_64-unknown-linux-musl` release,
+  sha256 `2fbf0d1b…e0d4b0`, offline LFS archive). `CrossEnvironment` projects
+  the verified store `cargo-cinstall`; the cross Cargo path checks its version
+  and never consults PATH, so a stale external cargo-c (for example
+  `/usr/bin` 0.10.16) cannot take over. The manual `~/.cargo/bin` PATH
+  prerequisite is removed. The tool is part of the WSL-Mingw target identity.
+  Native builds keep their PATH/`cargo install` behaviour.
+- **x265 provenance:** registered 4.2 is upstream tag 4.2, commit
+  `e444744c03978c1fb4e037168967020cf2648427` (archive root
+  `multicoreware-x265_git-e444744c0397`, `X265_BUILD 216`). Upstream shipped the
+  tag with a stale `x265Version.txt` (4.0, distance 1, `6318f22`), fixed only
+  after the release, so x265's own `Version.cmake` reports `4.0+1-6318f22` and
+  pkg-config `Version: 4.0`. The source is not patched; the cross builder
+  verifies the archive's version data before configure and the generated
+  metadata after install. The unused `x265-8be7dbf.tar.gz` archive was removed.
+- **Post-G7 PREFERRED regression PASS:** a new clean full FFmpeg 9.0
+  `linux-cross-mingw` build (target `a457dec65db7f3e9`, offline sources, no
+  `~/.cargo/bin` on PATH, stale `/usr/bin` cargo-c 0.10.16 present) built all 46
+  components in 1991.85 s. rav1e used the store `cargo-cinstall`, libjxl's
+  nested sources came from the local mirror, and x265 produced the recorded
+  metadata. Software, CUDA scale, CUDA libvmaf, Vulkan/libplacebo, OpenCL and
+  relocated-package acceptance passed. An identical rerun reused all 46
+  components in 350 s; only the release manifest's `generated_at` changed. BASE
+  was not rerun.
+- G7 remains accepted; Windows TUI integration remains not started.
+
 ### Accepted — G7 CLI clean production workflow
 
 - The normal `linux-cross-mingw` headless route builds the entire effective

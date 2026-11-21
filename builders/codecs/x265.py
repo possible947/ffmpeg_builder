@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -14,6 +16,112 @@ from ...state import ComponentStatus
 if TYPE_CHECKING:
     from ...builder import FFmpegBuilder
     from ...components import Component
+
+
+@dataclass(frozen=True)
+class X265SourceIdentity:
+    """Upstream identity of a registered x265 archive and its generated metadata.
+
+    x265's ``Version.cmake`` derives the library version string and the
+    pkg-config ``Version`` from the archive's own ``x265Version.txt``; this
+    records what that file legitimately yields for the registered release.
+    """
+
+    upstream_commit: str
+    archival_tag: str
+    archival_distance: str
+    archival_changeset: str
+    x265_build: int
+
+    @property
+    def generated_version(self) -> str:
+        return f"{self.archival_tag}+{self.archival_distance}-{self.archival_changeset}"
+
+
+# Upstream tag 4.2 (commit e444744c0397, Bitbucket archive
+# multicoreware-x265_git-e444744c0397) still ships the 4.0 x265Version.txt;
+# upstream corrected the file only after the release (1db9b63e8b50). The
+# project builds the unmodified tag, so x265 reports 4.0+1-6318f22 and
+# pkg-config Version 4.0 while its API (X265_BUILD 216) is the 4.2 API.
+SOURCE_IDENTITIES = {
+    "4.2": X265SourceIdentity(
+        upstream_commit="e444744c03978c1fb4e037168967020cf2648427",
+        archival_tag="4.0",
+        archival_distance="1",
+        archival_changeset="6318f22",
+        x265_build=216,
+    ),
+}
+
+
+def _source_identity(component: Component) -> X265SourceIdentity:
+    identity = SOURCE_IDENTITIES.get(component.version)
+    if identity is None:
+        raise BuildError(
+            component.name,
+            f"No recorded upstream source identity for x265 {component.version}.",
+        )
+    return identity
+
+
+def _verify_source_identity(component: Component, source_dir: Path) -> X265SourceIdentity:
+    """Check the extracted archive carries the recorded upstream version data."""
+    identity = _source_identity(component)
+    try:
+        archival = (source_dir / "x265Version.txt").read_text(encoding="utf-8")
+        cmake = (source_dir / "source" / "CMakeLists.txt").read_text(encoding="utf-8")
+    except OSError as exc:
+        raise BuildError(component.name, f"x265 source version data is missing: {exc}") from exc
+    fields = dict(
+        (key.strip(), value.strip())
+        for key, _, value in (line.partition(":") for line in archival.splitlines())
+        if value
+    )
+    build = re.search(r"^\s*set\(X265_BUILD\s+(\d+)\)", cmake, re.MULTILINE)
+    expected = {
+        "releasetag": identity.archival_tag,
+        "releasetagdistance": identity.archival_distance,
+        "repositorychangeset": identity.archival_changeset,
+    }
+    if any(fields.get(key) != value for key, value in expected.items()) or (
+        build is None or int(build.group(1)) != identity.x265_build
+    ):
+        raise BuildError(
+            component.name,
+            f"x265 {component.version} source does not match its recorded upstream identity "
+            f"(commit {identity.upstream_commit}): x265Version.txt={fields}, "
+            f"X265_BUILD={build.group(1) if build else None}.",
+        )
+    return identity
+
+
+def _verify_installed_identity(
+    builder: FFmpegBuilder, component: Component, identity: X265SourceIdentity
+) -> None:
+    """Fail closed unless x265 generated the version data of its own archive."""
+    prefix = builder.target_prefix
+    try:
+        pc = (prefix / "lib" / "pkgconfig" / "x265.pc").read_text(encoding="utf-8")
+        header = (prefix / "include" / "x265_config.h").read_text(encoding="utf-8")
+        library = (prefix / "lib" / "libx265.a").read_bytes()
+    except OSError as exc:
+        raise BuildError(component.name, f"Installed x265 metadata is missing: {exc}") from exc
+    version = re.search(r"^Version:\s*(\S+)\s*$", pc, re.MULTILINE)
+    build = re.search(r"^#define X265_BUILD (\d+)\s*$", header, re.MULTILINE)
+    if (
+        version is None
+        or version.group(1) != identity.archival_tag
+        or build is None
+        or int(build.group(1)) != identity.x265_build
+        or identity.generated_version.encode() not in library
+    ):
+        raise BuildError(
+            component.name,
+            "Installed x265 version metadata was not generated from the archive's own "
+            f"x265Version.txt (expected pkg-config Version {identity.archival_tag}, "
+            f"X265_BUILD {identity.x265_build}, version string {identity.generated_version}); "
+            "x265's Version.cmake needs a host git executable to read archive metadata.",
+        )
 
 
 def build_x265(builder: FFmpegBuilder, component: Component, source_dir: Path) -> None:
@@ -245,6 +353,7 @@ def _build_cross_x265(
     nasm = shutil.which("nasm", path=env.get("PATH"))
     if not nasm:
         raise BuildError(component.name, "Required host NASM is unavailable.")
+    identity = _verify_source_identity(component, source_dir)
     root = source_dir / "build" / "cross-mingw"
     source = source_dir / "source"
     if not source.is_dir():
@@ -353,6 +462,7 @@ def _build_cross_x265(
         env,
     )
     _normalise_cross_pc(builder, component)
+    _verify_installed_identity(builder, component, identity)
 
 
 def _normalise_cross_pc(builder: FFmpegBuilder, component: Component) -> None:

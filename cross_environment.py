@@ -157,6 +157,7 @@ class RustTargetTools:
     linker: Path
     archiver: Path
     target_std: Path
+    cargo_cinstall: Path
 
     def environment(self) -> dict[str, str]:
         return {
@@ -617,7 +618,52 @@ def _resolve_rust_tools(
         linker=target_tools.cc,
         archiver=target_tools.ar,
         target_std=target_std,
+        cargo_cinstall=_resolve_cargo_c(preparation),
     )
+
+
+def _resolve_cargo_c(preparation: WslMingwPreparation) -> Path:
+    """Project the verified store cargo-c; PATH never selects the host tool."""
+    profile = preparation.project_toolchains.get("cargo-c")
+    paths = profile.get("paths") if isinstance(profile, Mapping) else None
+    if (
+        not isinstance(profile, Mapping)
+        or not isinstance(profile.get("prefix"), str)
+        or not isinstance(paths, Mapping)
+        or not isinstance(paths.get("CARGO_CINSTALL"), str)
+    ):
+        raise _build_error(
+            "cargo-c host tool",
+            "G2 preparation did not provide the verified project-managed cargo-c profile. "
+            "Acquire it with the Toolchain Store "
+            "(scripts/prepare_toolchains.py --backend linux-cross-mingw).",
+            CATEGORY_TOOLCHAIN_INSTALL,
+            "wsl_mingw_cargo_c_toolchain_missing",
+        )
+    tool = Path(str(paths["CARGO_CINSTALL"]))
+    try:
+        prefix = Path(str(profile["prefix"])).resolve(strict=True)
+        resolved = tool.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        resolved = None
+        reason = str(exc)
+    else:
+        reason = ""
+    if (
+        resolved is None
+        or not _inside(resolved, prefix)
+        or not resolved.is_file()
+        or not os.access(resolved, os.X_OK)
+    ):
+        raise _build_error(
+            "cargo-c host tool",
+            f"Project-managed cargo-cinstall is missing, not executable or outside its "
+            f"verified store prefix: {tool} {reason}".rstrip()
+            + ". Re-verify or reacquire the cargo-c profile with the Toolchain Store.",
+            CATEGORY_TOOLCHAIN_INSTALL,
+            "wsl_mingw_cargo_c_toolchain_invalid",
+        )
+    return tool
 
 
 def _cuda_host_tools(preparation: WslMingwPreparation) -> DeferredCudaHostTools:

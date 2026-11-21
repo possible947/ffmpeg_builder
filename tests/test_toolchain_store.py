@@ -952,7 +952,7 @@ class TestLlvmMingwProfile:
         rec = registry.recommend_profiles(
             "8.1", "linux", {}, components=[], installed=[], backend="linux-cross-mingw"
         )
-        assert [n for n, _ in rec] == ["llvm-mingw", "rust"]
+        assert [n for n, _ in rec] == ["llvm-mingw", "rust", "cargo-c"]
         native = registry.recommend_profiles("8.1", "linux", {}, components=[], installed=[])
         assert "llvm-mingw" not in [n for n, _ in native]
 

@@ -360,6 +360,8 @@ def parse_identity(data: Any) -> IdentityLoad:
         } <= set(toolchains):
             return corrupt("identity.build.material_inputs.toolchains is incomplete")
         expected_profiles = {"llvm_mingw": "llvm-mingw", "rust": "rust"}
+        if "cargo_c" in toolchains:
+            expected_profiles["cargo_c"] = "cargo-c"
         for name, expected_profile in expected_profiles.items():
             identity = toolchains.get(name)
             provenance = identity.get("provenance") if isinstance(identity, dict) else None

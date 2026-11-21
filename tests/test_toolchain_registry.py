@@ -59,12 +59,18 @@ class TestShippedRegistry:
         assert registry.toolchain_for_cuda("12.2") == "gcc12"
         assert registry.toolchain_for_cuda("13.1") == "gcc13"
 
-    def test_cargo_c_is_not_deployable_and_documents_build_time_install(self):
+    def test_cargo_c_is_a_pinned_deployable_host_tool(self):
+        from ffmpeg_builder.builders.base import CARGO_C_VERSION
+
         registry = ToolchainRegistry()
         profile = registry.get_profile("cargo-c")
         assert profile is not None
-        assert profile.deployable is False
-        assert "cargo install" in profile.note
+        assert profile.deployable is True
+        assert profile.version == CARGO_C_VERSION
+        binary = profile.sources["binary"]
+        assert binary.sha256 == "2fbf0d1b56a9a0b52431c2a159d9544b4b0729f2eabaed3904a41cce0e8cd4b0"
+        assert "x86_64-unknown-linux-musl" in binary.archive_filename
+        assert profile.materialize == {"cargo_cinstall": "cargo-cinstall"}
 
 
 class TestProfileValidation:

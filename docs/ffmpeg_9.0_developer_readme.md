@@ -152,7 +152,7 @@ All 63 components in `components.yaml` were checked against upstream release pag
 | svtav1 | 4.0.1 | 4.2.0 (2026-07-14) | BUMP | 4.1.0 was 2026-03-23 |
 | rav1e | 0.8.1 | 0.8.1 (2025-06-16) | UP-TO-DATE | Weekly pre-releases exist (latest p20250902); 0.8.1 remains the latest stable |
 | x264 | 0480cb05 (commit) | rolling git | ROLLING | No versioned releases; latest official prebuilt is r3222 (b35605a, 2025-06-08) — re-pin to a current `stable`-branch commit with a fresh sha256 |
-| x265 | 8be7dbf (commit) | 4.2 (2026-04-19) | BUMP | Current canonical versioned release; 4.3 is not published upstream |
+| x265 | 8be7dbf (commit) | 4.2 (2026-04-19) | BUMP | Current canonical versioned release; 4.3 is not published upstream. The unused `x265-8be7dbf.tar.gz` archive was removed from `third_party/sources` after G7 |
 | libvpx | 1.16.0 | 1.17.0 (2026-08-07) | BUMP | ABI incompatible with 1.16 |
 | xvidcore | 1.3.7 | 1.3.7 | FINAL | |
 | vid_stab | 1.1.1 | 1.1.1 | FINAL | |

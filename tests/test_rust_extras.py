@@ -202,7 +202,7 @@ class TestProductionRegistry:
         wsl = registry.recommend_profiles(
             "8.1", "linux", {}, components=[], installed=[], backend=BACKEND
         )
-        assert [name for name, _ in wsl] == ["llvm-mingw", "rust"]
+        assert [name for name, _ in wsl] == ["llvm-mingw", "rust", "cargo-c"]
         native = registry.recommend_profiles("8.1", "linux", {}, components=[], installed=[])
         assert "rust" not in [name for name, _ in native]
 

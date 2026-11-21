@@ -107,9 +107,60 @@ def test_x265_rejects_non_coff_variant(monkeypatch, tmp_path):
         x265._archive_members(builder, ComponentRegistry().get_by_name("x265"), tmp_path / "lib.a")
 
 
+def _x265_identity_source(root, tag="4.0", build=216):
+    (root / "source").mkdir(parents=True, exist_ok=True)
+    (root / "x265Version.txt").write_text(
+        f"#Attribute:         Values\nrepositorychangeset: 6318f22\n"
+        f"releasetagdistance: 1\nreleasetag: {tag}\n"
+    )
+    (root / "source" / "CMakeLists.txt").write_text(f"set(X265_BUILD {build})\n")
+
+
+def _x265_installed_prefix(root, version="4.0", generated=b"4.0+1-6318f22"):
+    (root / "lib" / "pkgconfig").mkdir(parents=True)
+    (root / "include").mkdir()
+    (root / "lib" / "pkgconfig" / "x265.pc").write_text(f"Name: x265\nVersion: {version}\n")
+    (root / "include" / "x265_config.h").write_text("#define X265_BUILD 216\n")
+    (root / "lib" / "libx265.a").write_bytes(b"!<arch>\n" + generated)
+    return SimpleNamespace(target_prefix=root)
+
+
+def test_x265_source_identity_is_recorded_and_fail_closed(tmp_path):
+    component = ComponentRegistry().get_by_name("x265")
+    identity = x265.SOURCE_IDENTITIES[component.version]
+    assert identity.upstream_commit.startswith("e444744c0397")
+    assert component.sha256 == "0a3d41f6b4e2fe5a49d783d6631bd1a49c44cdf999074a3ff09e2cb71ac8ed33"
+    _x265_identity_source(tmp_path / "good")
+    assert x265._verify_source_identity(component, tmp_path / "good") == identity
+    for name, kwargs in (("tag", {"tag": "4.2"}), ("api", {"build": 215})):
+        _x265_identity_source(tmp_path / name, **kwargs)
+        with pytest.raises(BuildError, match="recorded upstream identity"):
+            x265._verify_source_identity(component, tmp_path / name)
+    with pytest.raises(BuildError, match="source version data is missing"):
+        x265._verify_source_identity(component, tmp_path / "missing")
+
+
+def test_x265_installed_identity_requires_archive_generated_metadata(tmp_path):
+    component = ComponentRegistry().get_by_name("x265")
+    identity = x265.SOURCE_IDENTITIES[component.version]
+    x265._verify_installed_identity(_x265_installed_prefix(tmp_path / "ok"), component, identity)
+    for name, kwargs in (
+        ("version", {"version": "4.2"}),
+        ("empty", {"generated": b"no version"}),
+    ):
+        builder = _x265_installed_prefix(tmp_path / name, **kwargs)
+        with pytest.raises(BuildError, match="needs a host git executable"):
+            x265._verify_installed_identity(builder, component, identity)
+    with pytest.raises(BuildError, match="metadata is missing"):
+        x265._verify_installed_identity(
+            SimpleNamespace(target_prefix=tmp_path / "absent"), component, identity
+        )
+
+
 def test_x265_variant_failure_stops_merge_and_install(monkeypatch, tmp_path):
     source = tmp_path / "source"
     source.mkdir()
+    _x265_identity_source(tmp_path)
     component = ComponentRegistry().get_by_name("x265")
     cross = SimpleNamespace(
         cmake_toolchain_file="/target/toolchain.cmake",
@@ -148,7 +199,7 @@ def test_x265_variant_failure_stops_merge_and_install(monkeypatch, tmp_path):
 
 
 def test_x265_merge_failure_never_installs(monkeypatch, tmp_path):
-    (tmp_path / "source").mkdir()
+    _x265_identity_source(tmp_path)
     component = ComponentRegistry().get_by_name("x265")
     cross = SimpleNamespace(
         cmake_toolchain_file="/target/toolchain.cmake",

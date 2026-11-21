@@ -14,7 +14,7 @@ from types import TracebackType
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Type
 
 from ..build_steps import BuildStepContext, run_install, run_make, run_step
-from ..build_types import CATEGORY_EXTERNAL_PREREQUISITE, BuildError
+from ..build_types import CATEGORY_TOOLCHAIN_INSTALL, BuildError
 from ..config import TARGET_BACKEND_CROSS_MINGW
 from ..executor import CommandExecutor
 from ..state import ComponentStatus, StateManager
@@ -402,6 +402,41 @@ def _seed_cross_cargo_cache(local_home: Path, cache_home: Path) -> None:
             shutil.copytree(source, local_home / relative, dirs_exist_ok=True)
 
 
+def _managed_cargo_c(
+    context: ComponentBuildContext, component: "Component", env: Dict[str, str]
+) -> str:
+    """Return the verified store cargo-cinstall; PATH never selects it."""
+    cross_env = context.builder.platform_context.cross_environment
+    tool = getattr(getattr(cross_env, "rust_tools", None), "cargo_cinstall", None)
+    if tool is None:
+        raise BuildError(
+            component.name,
+            f"Required project-managed cargo-c {CARGO_C_VERSION} is unavailable; acquire "
+            "it with the Toolchain Store (scripts/prepare_toolchains.py --backend "
+            "linux-cross-mingw). Automatic installation is disabled for linux-cross-mingw.",
+            category=CATEGORY_TOOLCHAIN_INSTALL,
+            code="wsl_mingw_cargo_c_unavailable",
+        )
+    result = context.executor.execute([str(tool), "--version"], env=env)
+    match = re.search(r"\bcargo-c (\d+\.\d+\.\d+)\b", result.stdout or "")
+    if not result.success or not match:
+        raise BuildError(
+            component.name,
+            f"Project-managed cargo-c version could not be verified: {tool}.",
+            category=CATEGORY_TOOLCHAIN_INSTALL,
+            code="wsl_mingw_cargo_c_version_unavailable",
+        )
+    if match.group(1) != CARGO_C_VERSION:
+        raise BuildError(
+            component.name,
+            f"Project-managed cargo-c {tool} reports version {match.group(1)}, which does "
+            f"not match the required pinned version {CARGO_C_VERSION}.",
+            category=CATEGORY_TOOLCHAIN_INSTALL,
+            code="wsl_mingw_cargo_c_version_mismatch",
+        )
+    return str(tool)
+
+
 def build_cargo(context: ComponentBuildContext, component: "Component", source_dir: Path) -> None:
     """Build component with Cargo."""
     env = context.builder.get_build_env(component)
@@ -428,51 +463,11 @@ def build_cargo(context: ComponentBuildContext, component: "Component", source_d
             "cargo-c requires rustc 1.95 or newer",
         )
 
-    cargo_c_path = None
-    version_found = None
-    version_unavailable = False
     if cross:
-        seen = set()
-        for directory in env.get("PATH", os.defpath).split(os.pathsep):
-            candidate = shutil.which("cargo-cinstall", path=directory)
-            if candidate is None or candidate in seen:
-                continue
-            seen.add(candidate)
-            result = context.executor.execute([candidate, "--version"], env=env)
-            match = re.search(r"\b(\d+\.\d+\.\d+)\b", result.stdout)
-            if not result.success or not match:
-                version_unavailable = True
-                continue
-            version_found = match.group(1)
-            if version_found == CARGO_C_VERSION:
-                cargo_c_path = candidate
-                break
-        if cargo_c_path is None and version_found is not None:
-            raise BuildError(
-                component.name,
-                f"Prepared WSL host cargo-c version {version_found} does not match "
-                f"the required pinned version {CARGO_C_VERSION}.",
-                category=CATEGORY_EXTERNAL_PREREQUISITE,
-                code="wsl_mingw_cargo_c_version_mismatch",
-            )
-        if cargo_c_path is None and version_unavailable:
-            raise BuildError(
-                component.name,
-                "Prepared WSL host prerequisite cargo-c version could not be verified.",
-                category=CATEGORY_EXTERNAL_PREREQUISITE,
-                code="wsl_mingw_cargo_c_version_unavailable",
-            )
+        cargo_c_path: Optional[str] = _managed_cargo_c(context, component, env)
     else:
         cargo_c_path = shutil.which("cargo-c", path=env.get("PATH"))
     if cargo_c_path is None:
-        if context.builder.config.target_backend == TARGET_BACKEND_CROSS_MINGW:
-            raise BuildError(
-                component.name,
-                f"Required prepared WSL host prerequisite cargo-c {CARGO_C_VERSION} "
-                "is unavailable; automatic installation is disabled for linux-cross-mingw.",
-                category=CATEGORY_EXTERNAL_PREREQUISITE,
-                code="wsl_mingw_cargo_c_unavailable",
-            )
         run_step(
             context,
             component,

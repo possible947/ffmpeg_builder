@@ -528,8 +528,11 @@ each component's build environment as `CC`/`CXX`/`PATH`.
 Pinned profiles: `gcc12 12.5.0`, `gcc13 13.4.0`, `gcc15 15.2.0`,
 `gmp 6.3.0`, `mpfr 4.2.1`, `mpc 1.3.1`, `rust 1.99.0`
 (`rav1e` builds with the store's Rust via `toolchain: rust`).
-`cargo-c` has no store source: the rav1e build installs it on demand
-(`cargo install cargo-c`, pinned 0.10.25).
+`cargo-c 0.10.25` is a store binary profile (official static
+`x86_64-unknown-linux-musl` release archive, Git LFS in `third_party/sources`)
+required by `linux-cross-mingw`, whose rav1e build uses only the store
+`cargo-cinstall`; native builds still use a PATH `cargo-c` or install the
+pinned version on demand (`cargo install cargo-c`).
 
 ### Recommended flow
 

@@ -162,12 +162,17 @@ Portability:
 
 ### Backlog — cargo-c into the store (after Phase 3c)
 
-- [ ] Give the `cargo-c` profile a real acquisition source so
+Done for `linux-cross-mingw` in post-G7 stabilisation: `cargo-c` is a binary
+store profile (offline Git LFS archive) and the cross Cargo path uses only the
+store `cargo-cinstall`. The native route intentionally still uses PATH or
+`cargo install`.
+
+- [x] Give the `cargo-c` profile a real acquisition source so
       `builders/base.py`'s implicit `cargo install cargo-c --version 0.10.25`
       (`builders/base.py:366-378`) disappears: either a `binary`/`download`
       archive or a `cargo`-based recipe with `CARGO_HOME` inside the store
       (vendored crates for a true offline run), bootstrapped after `rust`.
-- [ ] Then `build_cargo()` resolves `cargo-c` from the store env
+- [x] Then `build_cargo()` resolves `cargo-c` from the store env
       (`PATH_PREPEND`) and never reaches the network, restoring the
       offline-first contract flagged in `docs/toolchain_analysis_report.md`.
 

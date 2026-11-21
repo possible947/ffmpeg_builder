@@ -206,7 +206,8 @@ The registered rav1e 0.8.1 source was built offline with the project Rust
 `cargo-c` 0.10.25. Its locked Cargo dependencies were provisioned from the
 local Cargo source cache, copied into the identity-local
 `generated/cargo-home/registry/{cache,index}` before the offline run; the
-pinned `cargo-cinstall` was supplied on the host PATH. Offline builds require
+pinned `cargo-cinstall` was supplied on the host PATH (superseded after G7 by
+the store-managed cargo-c profile). Offline builds require
 those locked crates to be provisioned locally. Host build-script pkg-config
 discovery is separated from the target wrapper; target-native Rust tuning,
 NASM assembly and runtime dispatch remain enabled. Staged installation prevents
@@ -347,7 +348,8 @@ metadata publishes libc++/libunwind, with `libc++.dll` and its transitive
 The pinned x265 archive's own `x265Version.txt` reports `4.0+1-6318f22`, and
 its generated pkg-config version is `4.0`, despite the registry's 4.2 label;
 the archive checksum matches the registry. This provenance discrepancy is not
-silently rewritten. At that acceptance point Wave 4C and FFmpeg had not been built.
+silently rewritten. (Resolved after G7: the archive is upstream tag 4.2, whose
+shipped `x265Version.txt` is stale; see "Post-G7 stabilisation".) At that acceptance point Wave 4C and FFmpeg had not been built.
 
 ### G4 Wave 4A — CMake AV1 codecs
 
@@ -461,10 +463,12 @@ builder treats it as an always-system prerequisite. It is not selected as a
 WSL-Mingw target output. `opencl-icd-loader` is native-only for component
 builds and is retained as G2 `OpenCL.def` provenance for the generated
 `libOpenCL.a` interface; Windows runtime policy remains system
-`OpenCL.dll` plus the vendor ICD. `cargo-c` is an explicit prepared WSL host
-prerequisite, not a ToolchainStore-managed artifact: the cross Cargo path
-requires the pinned 0.10.25 executable and fails closed if missing or
-mismatched, without invoking `cargo install`.
+`OpenCL.dll` plus the vendor ICD. `cargo-c` 0.10.25 is a ToolchainStore
+binary profile required by the WSL-Mingw platform profiles (post-G7
+stabilisation; it was previously a prepared PATH prerequisite). The cross
+Cargo path invokes only the verified store `cargo-cinstall`, checks its
+version, and fails closed if it is missing or mismatched, without consulting
+PATH or invoking `cargo install`.
 
 The cross dry-run reports G4 Wave-0 roles, host-tool satisfaction,
 conditional components, target inputs, and target-build selection after G1/G2
@@ -1484,6 +1488,40 @@ removed; no Windows FFmpeg 8.1 acceptance or TUI integration was performed.
   acceptance of absent devices.
 - **Reuse:** Early evidence is an acceptance-test blueprint only; G7 must
   exercise production-built artifacts and current host identity.
+
+### Post-G7 stabilisation — source, tool and provenance closure
+
+- **libjxl sources:** the nested Brotli and Highway revisions pinned by libjxl
+  0.12.0's `deps.sh` are project-managed Git LFS archives in
+  `third_party/sources` (`libjxl-brotli-028fb5a2….tar.gz`,
+  `libjxl-highway-457c8917….tar.gz`). `jxl_sources.py` resolves them through
+  the project downloader: local mirror first, verified network fallback only
+  with `allow_network_downloads`. It checks the sha256, the `deps.sh` pins and
+  the archive roots, and names an unresolved LFS pointer explicitly.
+- **cargo-c:** the `cargo-c` 0.10.25 binary profile is required by the
+  WSL-Mingw platform profiles alongside LLVM-MinGW and Rust, acquired offline by
+  `scripts/prepare_toolchains.py --backend linux-cross-mingw` and shared by the
+  TUI and headless preparation. `RustTargetTools.cargo_cinstall` carries the
+  store executable, which must sit inside its verified prefix. The rav1e
+  builder version-checks it and invokes it by absolute path. PATH order is not
+  a selection mechanism, and missing or mismatched store state fails closed.
+- **x265 identity:** registry 4.2 = upstream tag 4.2, commit
+  `e444744c03978c1fb4e037168967020cf2648427`, archive sha256 `0a3d41f6…ac8ed33`,
+  `X265_BUILD 216`. The tag's own stale `x265Version.txt` makes upstream
+  `Version.cmake` (which reads it when a host `git` exists) generate
+  `4.0+1-6318f22` and pkg-config `Version: 4.0`. That generated string is
+  legitimate upstream output, not evidence of a different source. FFmpeg
+  checks only `X265_BUILD`. Both relationships are verified fail-closed on the
+  cross path, and the source is unpatched.
+- **Post-G7 PREFERRED regression PASS:** a new clean full FFmpeg 9.0
+  `linux-cross-mingw` build (target `a457dec65db7f3e9`, offline sources, no
+  `~/.cargo/bin` on PATH, stale `/usr/bin` cargo-c 0.10.16 present) built all 46
+  components in 1991.85 s. rav1e used the store `cargo-cinstall`, libjxl's
+  nested sources came from the local mirror, and x265 produced the recorded
+  metadata. Software, CUDA scale, CUDA libvmaf, Vulkan/libplacebo, OpenCL and
+  relocated-package acceptance passed. An identical rerun reused all 46
+  components in 350 s; only the release manifest's `generated_at` changed. BASE
+  was not rerun.
 
 ## 8. Open issues, grouped by resolving gate
 

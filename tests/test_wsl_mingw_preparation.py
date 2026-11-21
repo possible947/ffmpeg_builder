@@ -102,6 +102,24 @@ def _resolved_profiles(prefix, rust_extras):
                 "verified": True,
             },
         },
+        "cargo-c": {
+            "profile": "cargo-c",
+            "version": "0.10.25",
+            "prefix": str(prefix / "cargo-c"),
+            "paths": {"CARGO_CINSTALL": str(prefix / "cargo-c/cargo-cinstall")},
+            "target": None,
+            "provenance": {
+                "profile": "cargo-c",
+                "version": "0.10.25",
+                "variant": "binary",
+                "archive_filename": "cargo-c.tar.gz",
+                "source_sha256": "c" * 64,
+                "runtime": "",
+                "schema_version": 2,
+                "extras": [],
+                "verified": True,
+            },
+        },
     }
 
 
@@ -259,6 +277,7 @@ def test_material_projection_is_relocation_safe_and_sorts_rust_extras(tmp_path):
     assert json.dumps(first.to_dict()) == json.dumps(third.to_dict())
     assert first.toolchains["rust_target_std"]["target"] == "x86_64-pc-windows-gnullvm"
     assert first.toolchains["llvm_mingw"]["provenance"]["source_sha256"] == "f" * 64
+    assert first.toolchains["cargo_c"]["provenance"]["source_sha256"] == "c" * 64
     assert "store-a" not in json.dumps(first.to_dict())
     assert "store-b" not in json.dumps(second.to_dict())
 

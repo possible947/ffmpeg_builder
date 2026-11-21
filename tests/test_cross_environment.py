@@ -504,7 +504,10 @@ def test_shared_builder_helpers_emit_scoped_cross_commands(tmp_path, monkeypatch
         ),
         cmake_toolchain_file=toolchain_file,
         meson_cross_file=meson_file,
-        rust_tools=SimpleNamespace(cargo=Path(cargo_env["CARGO"])),
+        rust_tools=SimpleNamespace(
+            cargo=Path(cargo_env["CARGO"]),
+            cargo_cinstall=Path("/pinned/bin/cargo-cinstall"),
+        ),
     )
     builder = object.__new__(FFmpegBuilder)
     builder.platform_strategy = LinuxCrossMingwPlatform()
@@ -980,3 +983,30 @@ def test_real_cross_environment_and_build_system_acceptance(tmp_path):
         )
     assert raised.value.code == "wsl_mingw_target_inputs_invalid"
     assert header.read_bytes() == original + b"\n"
+
+
+def test_cargo_c_resolves_only_from_verified_store_prefix(tmp_path):
+    from ffmpeg_builder.cross_environment import _resolve_cargo_c
+
+    prefix = tmp_path / "store/cargo-c-0.10.25"
+    prefix.mkdir(parents=True)
+    tool = prefix / "cargo-cinstall"
+    tool.write_text("#!/bin/sh\n")
+    tool.chmod(0o755)
+    stale = tmp_path / "usr/bin/cargo-cinstall"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("#!/bin/sh\n")
+    stale.chmod(0o755)
+
+    def preparation(path):
+        profile = {"prefix": str(prefix), "paths": {"CARGO_CINSTALL": str(path)}}
+        return SimpleNamespace(project_toolchains={"cargo-c": profile})
+
+    assert _resolve_cargo_c(preparation(tool)) == tool
+    with pytest.raises(BuildError) as missing:
+        _resolve_cargo_c(SimpleNamespace(project_toolchains={}))
+    assert missing.value.code == "wsl_mingw_cargo_c_toolchain_missing"
+    for path in (stale, prefix / "absent"):
+        with pytest.raises(BuildError) as invalid:
+            _resolve_cargo_c(preparation(path))
+        assert invalid.value.code == "wsl_mingw_cargo_c_toolchain_invalid"

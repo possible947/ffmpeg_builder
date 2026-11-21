@@ -11,6 +11,8 @@ from typing import Any, Callable, Dict, Iterable, List, Optional
 import requests
 from tqdm import tqdm
 
+LFS_POINTER_PREFIX = b"version https://git-lfs.github.com/spec/v1"
+
 ProgressCB = Callable[[int, int], None]
 
 
@@ -297,12 +299,26 @@ class Downloader:
         if actual == normalized:
             return
 
+        pointer = _is_lfs_pointer(path)
         if delete_on_mismatch:
             try:
                 path.unlink()
             except OSError:
                 pass
+        if pointer:
+            raise RuntimeError(
+                f"{path.name} is an unresolved Git LFS pointer, not the archive "
+                f"(expected sha256 {normalized}); run 'git lfs pull' to materialise it."
+            )
         raise RuntimeError(f"SHA256 mismatch for {path.name}: expected {normalized}, got {actual}")
+
+
+def _is_lfs_pointer(path: Path) -> bool:
+    try:
+        with open(path, "rb") as handle:
+            return handle.read(len(LFS_POINTER_PREFIX)) == LFS_POINTER_PREFIX
+    except OSError:
+        return False
 
 
 class AsyncDownloadManager:

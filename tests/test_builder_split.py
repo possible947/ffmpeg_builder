@@ -6,6 +6,7 @@ import os
 import shutil
 import tarfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -775,48 +776,104 @@ def test_cross_cargo_cache_reuses_downloads_without_host_configuration(tmp_path)
     assert (cache / "registry/cache/crates.io/dependency.crate").is_file()
 
 
-def test_build_cargo_cross_fails_closed_when_cargo_c_is_missing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+def _cross_cargo_builder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cargo_cinstall):
     builder = _make_builder_with_archives(tmp_path, str(tmp_path / "archives"))
     builder.config.target_backend = TARGET_BACKEND_CROSS_MINGW
-    component = _make_libplacebo_component()
-    commands = []
-
+    rust_tools = SimpleNamespace(cargo_cinstall=cargo_cinstall)
+    monkeypatch.setattr(
+        builder,
+        "platform_context",
+        SimpleNamespace(
+            cross_environment=SimpleNamespace(
+                rust_tools=rust_tools,
+                host_environment={"CARGO_HOME": str(tmp_path / "cargo-cache")},
+                paths=SimpleNamespace(generated_files_root=tmp_path),
+            )
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        builder,
+        "get_build_env",
+        lambda component: {
+            "PATH": "/stale/bin",
+            "CARGO_BUILD_TARGET": "x86_64-pc-windows-gnullvm",
+            "CARGO_HOME": str(tmp_path / "cargo-home"),
+        },
+    )
     monkeypatch.setattr(
         "ffmpeg_builder.builders.base.get_rustc_version",
         lambda context, component=None: (1, 95, 0),
     )
-    monkeypatch.setattr(shutil, "which", lambda name, path=None: None)
+    return builder
+
+
+def test_build_cargo_cross_fails_closed_when_cargo_c_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    builder = _cross_cargo_builder(tmp_path, monkeypatch, None)
+    component = _make_libplacebo_component()
+    commands = []
+    monkeypatch.setattr(shutil, "which", lambda name, path=None: "/stale/bin/cargo-c")
     builder.executor.execute_with_log = lambda *args, **kwargs: commands.append(args)
 
-    with pytest.raises(BuildError, match="automatic installation is disabled") as error:
+    with pytest.raises(BuildError, match="Automatic installation is disabled") as error:
         builder._build_cargo(component, tmp_path / "src")
 
     assert error.value.code == "wsl_mingw_cargo_c_unavailable"
     assert not commands
 
 
-def test_build_cargo_cross_rejects_unpinned_cargo_c_version(
+def test_build_cargo_cross_rejects_managed_cargo_c_with_wrong_version(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    builder = _make_builder_with_archives(tmp_path, str(tmp_path / "archives"))
-    builder.config.target_backend = TARGET_BACKEND_CROSS_MINGW
+    builder = _cross_cargo_builder(tmp_path, monkeypatch, Path("/store/bin/cargo-cinstall"))
     component = _make_libplacebo_component()
+    probed = []
 
-    monkeypatch.setattr(
-        "ffmpeg_builder.builders.base.get_rustc_version",
-        lambda context, component=None: (1, 95, 0),
-    )
-    monkeypatch.setattr(shutil, "which", lambda name, path=None: "/host/bin/cargo-c")
-    builder.executor.execute = lambda *args, **kwargs: type(
-        "Result", (), {"success": True, "stdout": "cargo-c 0.10.24"}
-    )()
+    def execute(command, **kwargs):
+        probed.append(command)
+        return SimpleNamespace(success=True, stdout="cargo-c 0.10.24")
 
+    builder.executor.execute = execute
     with pytest.raises(BuildError, match="does not match the required pinned version") as error:
         builder._build_cargo(component, tmp_path / "src")
 
     assert error.value.code == "wsl_mingw_cargo_c_version_mismatch"
+    assert probed == [["/store/bin/cargo-cinstall", "--version"]]
+
+
+def test_build_cargo_cross_ignores_stale_external_cargo_c(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    builder = _cross_cargo_builder(tmp_path, monkeypatch, Path("/store/bin/cargo-cinstall"))
+    component = _make_libplacebo_component()
+    executed = []
+
+    def which(name, path=None):
+        pytest.fail(f"PATH lookup must not select cargo-c: {name}")
+
+    def execute(command, **kwargs):
+        executed.append(command)
+        return SimpleNamespace(success=True, stdout=f"cargo-c {CARGO_C_VERSION}+cargo-0.99.0")
+
+    class Selected(Exception):
+        pass
+
+    def run_step(context, component, status, detail, message, command, *args):
+        executed.append(command)
+        raise Selected
+
+    monkeypatch.setattr(shutil, "which", which)
+    monkeypatch.setattr("ffmpeg_builder.builders.base.run_step", run_step)
+    builder.executor.execute = execute
+    with pytest.raises(Selected):
+        builder._build_cargo(component, tmp_path / "src")
+
+    assert executed[0] == ["/store/bin/cargo-cinstall", "--version"]
+    assert executed[1][:2] == ["/store/bin/cargo-cinstall", "cinstall"]
+    assert all("/stale/bin" not in str(command[0]) for command in executed)
+    assert all(command[:2] != ["cargo", "install"] for command in executed)
 
 
 def test_cross_host_tool_availability_does_not_create_component_status(

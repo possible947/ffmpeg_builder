@@ -530,8 +530,9 @@ settings are not used by this backend; `windows.target_override` and
 Headless profiles can be kept separate from the local user configuration:
 
 ```bash
-# Required prepared host cargo-c (pinned version in builders/base.py):
-export PATH="$HOME/.cargo/bin:$PATH"
+# Project-managed tools (LLVM-MinGW, Rust + target std, cargo-c 0.10.25)
+# come from the Toolchain Store; no PATH preparation is needed:
+python scripts/prepare_toolchains.py --backend linux-cross-mingw --ffmpeg-version 9.0
 python scripts/run_build.py --config /path/to/profile.yaml --workspace workspace_windows
 # Identical command validates and reuses matching accepted component outputs.
 python scripts/run_build.py --config /path/to/profile.yaml --workspace workspace_windows

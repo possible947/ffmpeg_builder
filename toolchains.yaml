@@ -215,16 +215,32 @@ toolchains:
         archive_filename: "llvm-mingw-{version}-ucrt-ubuntu-22.04-x86_64.tar.xz"
         sha256: 919380403de87dca3c581c2053230cd298af5e891286628ba0613b7fed370926
   cargo-c:
+    # Project-managed WSL host build tool for linux-cross-mingw Cargo C-API
+    # components (rav1e). The official upstream static-pie (musl) release
+    # archive is a managed offline input in third_party/sources (Git LFS); its
+    # four subcommand binaries sit at the archive root. Cross builds resolve
+    # cargo-cinstall only from this verified store prefix, never from PATH.
+    # Native builds keep the existing on-demand "cargo install" fallback.
     kind: rust_tool
+    version: "0.10.25"
     platforms: [linux]
     provides: [cargo-c]
     materialize:
-      bin_subdir: bin
-    note: >-
-      No store source: linux-cross-mingw treats cargo-c 0.10.25 as an
-      externally prepared WSL host prerequisite, verifies its version, and
-      fails closed when it is missing. Native builds retain the existing
-      on-demand "cargo install" fallback, which requires network access.
+      cargo_cinstall: cargo-cinstall
+    verify:
+      required_tools: [cargo-capi, cargo-cbuild, cargo-cinstall, cargo-ctest]
+      version_checks:
+        - {tool: cargo-capi, pattern: '\Acargo-c 0\.10\.25\+'}
+        - {tool: cargo-cbuild, pattern: '\Acargo-c 0\.10\.25\+'}
+        - {tool: cargo-cinstall, pattern: '\Acargo-c 0\.10\.25\+'}
+        - {tool: cargo-ctest, pattern: '\Acargo-c 0\.10\.25\+'}
+    source:
+      default: binary
+      binary:
+        type: binary
+        url: "https://github.com/lu-zero/cargo-c/releases/download/v{version}/cargo-c-x86_64-unknown-linux-musl.tar.gz"
+        archive_filename: "cargo-c-{version}-x86_64-unknown-linux-musl.tar.gz"
+        sha256: 2fbf0d1b56a9a0b52431c2a159d9544b4b0729f2eabaed3904a41cce0e8cd4b0
 
 platform_profiles:
   linux-ffmpeg-8.1:
@@ -259,12 +275,12 @@ platform_profiles:
     ffmpeg_version: "8.1"
     platform: linux
     backend: linux-cross-mingw
-    required_toolchains: [llvm-mingw, rust]
+    required_toolchains: [llvm-mingw, rust, cargo-c]
   wsl-mingw-ffmpeg-9.0:
     ffmpeg_version: "9.0"
     platform: linux
     backend: linux-cross-mingw
-    required_toolchains: [llvm-mingw, rust]
+    required_toolchains: [llvm-mingw, rust, cargo-c]
 
 cuda:
   "12.2": gcc12

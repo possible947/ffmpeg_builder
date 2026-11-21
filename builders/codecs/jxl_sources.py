@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import re
 import tarfile
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from ...build_types import BuildError
 
@@ -23,6 +24,10 @@ class JxlDependency:
     @property
     def filename(self) -> str:
         return f"libjxl-{self.name}-{self.revision}.tar.gz"
+
+    @property
+    def archive_root(self) -> str:
+        return f"google-{self.name}-{self.revision[:7]}"
 
     @property
     def url(self) -> str:
@@ -43,7 +48,20 @@ DEPENDENCIES = (
 )
 
 
-def _extract_dependency(archive: Path, destination: Path) -> None:
+def _check_upstream_pins(source_dir: Path) -> None:
+    """Bind the recorded revisions to the ones the libjxl source itself pins."""
+    deps = (source_dir / "deps.sh").read_text(encoding="utf-8")
+    for dependency in DEPENDENCIES:
+        variable = f"THIRD_PARTY_{dependency.name.upper()}"
+        match = re.search(rf'^{variable}="([0-9a-f]{{40}})"', deps, re.MULTILINE)
+        if match is None or match.group(1) != dependency.revision:
+            raise ValueError(
+                f"libjxl deps.sh pins {variable}={match.group(1) if match else None}, "
+                f"but the recorded {dependency.name} source is {dependency.revision}"
+            )
+
+
+def _extract_dependency(archive: Path, destination: Path, root_name: Optional[str] = None) -> None:
     """Extract one verified archive without overwriting an existing source tree."""
     if destination.is_symlink() or (
         destination.exists() and (not destination.is_dir() or any(destination.iterdir()))
@@ -58,6 +76,11 @@ def _extract_dependency(archive: Path, destination: Path) -> None:
             roots = {PurePosixPath(member.name).parts[0] for member in members if member.name}
             if len(roots) != 1 or not members:
                 raise ValueError(f"Unexpected archive layout: {archive}")
+            if root_name is not None and roots != {root_name}:
+                raise ValueError(
+                    f"Archive {archive.name} root {sorted(roots)} does not match the "
+                    f"pinned revision root {root_name}"
+                )
             root = next(iter(roots))
             for member in members:
                 parts = PurePosixPath(member.name).parts
@@ -82,6 +105,7 @@ def prepare_libjxl_sources(builder: FFmpegBuilder, source_dir: Path) -> dict[str
     """Use the project's verified archive cache and download policy."""
     result: dict[str, dict[str, str]] = {}
     try:
+        _check_upstream_pins(source_dir)
         for dependency in DEPENDENCIES:
             archive = builder.downloader.download(
                 dependency.url,
@@ -89,7 +113,11 @@ def prepare_libjxl_sources(builder: FFmpegBuilder, source_dir: Path) -> dict[str
                 expected_sha256=dependency.sha256,
                 show_progress=False,
             )
-            _extract_dependency(Path(archive), source_dir / "third_party" / dependency.name)
+            _extract_dependency(
+                Path(archive),
+                source_dir / "third_party" / dependency.name,
+                dependency.archive_root,
+            )
             result[dependency.name] = {
                 "revision": dependency.revision,
                 "sha256": dependency.sha256,

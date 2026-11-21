@@ -25,13 +25,17 @@ def _fixture(tmp_path, monkeypatch):
     cache = tmp_path / "cache"
     cache.mkdir()
     deps = []
-    for name in ("brotli", "highway"):
-        path = cache / f"libjxl-{name}-revision.tar.gz"
-        digest = _archive(path, {"root/CMakeLists.txt": b"project(test)\n"})
-        deps.append(jxl_sources.JxlDependency(name, "revision", digest))
+    for name, revision in (("brotli", "a" * 40), ("highway", "b" * 40)):
+        path = cache / f"libjxl-{name}-{revision}.tar.gz"
+        root = f"google-{name}-{revision[:7]}"
+        digest = _archive(path, {f"{root}/CMakeLists.txt": b"project(test)\n"})
+        deps.append(jxl_sources.JxlDependency(name, revision, digest))
     monkeypatch.setattr(jxl_sources, "DEPENDENCIES", tuple(deps))
     source = tmp_path / "source"
     (source / "third_party").mkdir(parents=True)
+    (source / "deps.sh").write_text(
+        "".join(f'THIRD_PARTY_{d.name.upper()}="{d.revision}" # pin\n' for d in deps)
+    )
     builder = SimpleNamespace(downloader=Downloader(cache, allow_network_downloads=False))
     return builder, source, deps
 
@@ -60,7 +64,8 @@ def test_missing_or_corrupt_cached_source_fails_closed(tmp_path, monkeypatch):
 def test_source_extraction_rejects_traversal_and_existing_tree(tmp_path, monkeypatch):
     builder, source, deps = _fixture(tmp_path, monkeypatch)
     archive = builder.downloader.packages_dir / deps[0].filename
-    digest = _archive(archive, {"root/CMakeLists.txt": b"ok", "root/../../escape": b"bad"})
+    root = deps[0].archive_root
+    digest = _archive(archive, {f"{root}/CMakeLists.txt": b"ok", f"{root}/../../escape": b"bad"})
     monkeypatch.setattr(
         jxl_sources,
         "DEPENDENCIES",
@@ -102,3 +107,58 @@ def test_native_builder_retains_existing_recipe(tmp_path, monkeypatch):
     jxl.build_libjxl(builder, component, tmp_path)
     assert calls[0][4] == ["./deps.sh"]
     assert calls[-1][4] == ["cmake", "--install", "."]
+
+
+def test_registered_pins_match_libjxl_and_local_mirror():
+    root = Path(__file__).resolve().parents[1]
+    component = ComponentRegistry().get_by_name("libjxl")
+    upstream = root / "third_party/sources" / f"libjxl-{component.version}.tar.gz"
+    if upstream.read_bytes()[:7] == b"version":
+        pytest.skip("Git LFS archives are not materialised in this checkout")
+    with tarfile.open(upstream) as tar:
+        member = next(m for m in tar.getmembers() if m.name.endswith("/deps.sh"))
+        deps = tar.extractfile(member).read().decode()
+    attributes = (root / ".gitattributes").read_text()
+    assert "third_party/sources/* filter=lfs" in attributes
+    for dep in jxl_sources.DEPENDENCIES:
+        assert f'THIRD_PARTY_{dep.name.upper()}="{dep.revision}"' in deps
+        mirror = root / "third_party/sources" / dep.filename
+        assert mirror.is_file()
+        if mirror.read_bytes()[:7] != b"version":
+            assert hashlib.sha256(mirror.read_bytes()).hexdigest() == dep.sha256
+
+
+def test_offline_preparation_resolves_local_source_mirror(tmp_path, monkeypatch):
+    builder, source, deps = _fixture(tmp_path, monkeypatch)
+    mirror = tmp_path / "mirror"
+    mirror.mkdir()
+    for dep in deps:
+        (builder.downloader.packages_dir / dep.filename).rename(mirror / dep.filename)
+    builder.downloader = Downloader(
+        tmp_path / "packages", source_archives_dir=mirror, allow_network_downloads=False
+    )
+    jxl_sources.prepare_libjxl_sources(builder, source)
+    for dep in deps:
+        assert (source / "third_party" / dep.name / "CMakeLists.txt").is_file()
+
+
+def test_lfs_pointer_wrong_root_and_pin_drift_fail_clearly(tmp_path, monkeypatch):
+    builder, source, deps = _fixture(tmp_path, monkeypatch)
+    archive = builder.downloader.packages_dir / deps[0].filename
+    original = archive.read_bytes()
+    archive.write_bytes(b"version https://git-lfs.github.com/spec/v1\noid sha256:x\nsize 1\n")
+    with pytest.raises(BuildError, match="unresolved Git LFS pointer"):
+        jxl_sources.prepare_libjxl_sources(builder, source)
+    digest = _archive(archive, {"google-brotli-other00/CMakeLists.txt": b"x"})
+    monkeypatch.setattr(
+        jxl_sources,
+        "DEPENDENCIES",
+        (jxl_sources.JxlDependency(deps[0].name, deps[0].revision, digest), deps[1]),
+    )
+    with pytest.raises(BuildError, match="does not match the pinned revision root"):
+        jxl_sources.prepare_libjxl_sources(builder, source)
+    archive.write_bytes(original)
+    monkeypatch.setattr(jxl_sources, "DEPENDENCIES", tuple(deps))
+    (source / "deps.sh").write_text(f'THIRD_PARTY_BROTLI="{"c" * 40}"\n')
+    with pytest.raises(BuildError, match="deps.sh pins THIRD_PARTY_BROTLI"):
+        jxl_sources.prepare_libjxl_sources(builder, source)

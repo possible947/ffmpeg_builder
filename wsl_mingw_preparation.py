@@ -110,10 +110,11 @@ def project_material_build_inputs(
     """Project the already-resolved production inputs into semantic identity."""
     llvm = project_toolchains.get("llvm-mingw")
     rust = project_toolchains.get("rust")
-    if llvm is None or rust is None:
+    cargo_c = project_toolchains.get("cargo-c")
+    if llvm is None or rust is None or cargo_c is None:
         raise BuildError(
             "WSL-Mingw identity",
-            "Resolved LLVM-MinGW and Rust toolchain descriptions are required.",
+            "Resolved LLVM-MinGW, Rust and cargo-c toolchain descriptions are required.",
             category=CATEGORY_TOOLCHAIN_INSTALL,
             code="wsl_mingw_identity_toolchain_missing",
         )
@@ -207,6 +208,7 @@ def project_material_build_inputs(
         "llvm_mingw": profile_identity("llvm-mingw", llvm),
         "rust": profile_identity("rust", rust),
         "rust_target_std": rust_std_identity,
+        "cargo_c": profile_identity("cargo-c", cargo_c),
         "cuda_ccbin": None,
     }
     effective_cuda: Optional[dict[str, Any]] = None

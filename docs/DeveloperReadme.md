@@ -21,6 +21,10 @@ G7 CLI also passed: separate clean full BASE/PREFERRED FFmpeg 9.0 builds
 automatically constructed all 40/46 selected components, passed the appropriate
 runtime/package checks, and reused all components on identical invocations.
 Windows TUI integration remains a separate, not-yet-completed task.
+Post-G7 stabilisation made the libjxl Brotli/Highway archives and cargo-c
+0.10.25 project-managed offline inputs (no `~/.cargo/bin` PATH setup) and
+recorded x265 4.2's upstream identity (commit `e444744c0397`; its stale
+archive `x265Version.txt` legitimately yields `4.0+1-6318f22`).
 Wave 1 accepted seven Windows target dependencies;
 Wave 2 accepted eleven more through production Autotools and CMake paths with
 the mandatory primary profile (`native_build=true`, `openmp=true`), and Wave
@@ -956,9 +960,12 @@ Implementer rules:
 - **Cargo caches are not build artifacts:** Windows Cargo uses identity-local
   configuration and target outputs. The rav1e builder copies ordinary registry
   download/index and Git database caches into its isolated Cargo home, never
-  host configuration, credentials or binaries. Prepared pinned `cargo-cinstall`
-  must be on the WSL host PATH; neither network provisioning nor an older
-  ambient cargo-c substitutes for it.
+  host configuration, credentials or binaries. `cargo-c` 0.10.25 is a
+  required ToolchainStore binary profile for `linux-cross-mingw`;
+  `CrossEnvironment.rust_tools.cargo_cinstall` projects the verified store
+  executable, which `build_cargo()` version-checks and invokes by absolute
+  path. PATH ordering never selects it, so an older ambient cargo-c cannot
+  substitute; native builds keep the PATH/`cargo install` route.
 - **Windows runtime probing goes through Windows interop** (fresh probe of CPU
   features, GPU, drivers, Vulkan/OpenCL runtimes), never through WSL's Linux
   view. Drivers/runtimes (NVIDIA driver, Windows Vulkan loader/ICD, OpenCL
