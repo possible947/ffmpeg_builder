@@ -1,6 +1,6 @@
 # FFmpeg Builder 3.0
 
-Interactive Python-based build system for FFmpeg 8.1 (default) and 9.0 on macOS and Linux. Windows builds follow the **WSL-Mingw** route (WSL2 Ubuntu → LLVM-MinGW/UCRT cross toolchain); G1–G5 passed on the accepted physical target and G6 packaging has not started — see [Windows (WSL-Mingw)](#windows-wsl-mingw).
+Interactive Python-based build system for FFmpeg 8.1 (default) and 9.0 on macOS and Linux. Windows builds follow the **WSL-Mingw** route (WSL2 Ubuntu → LLVM-MinGW/UCRT cross toolchain); G1–G6 passed on the accepted physical target — see [Windows (WSL-Mingw)](#windows-wsl-mingw).
 
 FFmpeg Builder replaces the traditional bash `build-ffmpeg` script with a modern, interactive interface featuring real-time progress tracking, configuration management, platform-aware hardware acceleration detection, and resumable builds.
 
@@ -31,7 +31,7 @@ guide.
 - **~60 Components** — All codecs, libraries, and tools built from source in correct dependency order
 - **macOS Support** — Macports clang detection, OpenMP, VideoToolbox, glibtool handling
 - **Linux Support** — GCC/Clang detection, C11/C++17 standards, host-tuned (`-march=native -mtune=native -fopenmp`) builds
-- **Windows (WSL-Mingw) — G1–G4 PASS** — FFmpeg 9.0 and the configured target dependency stack passed production integration and physical-Windows software smoke tests; hardware-matrix validation and packaging remain future work
+- **Windows (WSL-Mingw) — G1–G6 PASS** — FFmpeg 9.0 passed production integration, consumer-driven hardware acceptance and relocated internal-bundle runtime acceptance on the recorded physical Windows target
 
 ## Requirements
 
@@ -133,14 +133,17 @@ Or use the environment check script:
 
 ## Windows (WSL-Mingw)
 
-> **Status: G1–G5 PASS; G6 packaging not started.** Production FFmpeg 9.0
+> **Status: G1–G6 PASS.** Production FFmpeg 9.0
 > integrated the configured Windows target stack, and `ffmpeg.exe` and
-> `ffprobe.exe` passed startup, software H.264 encode/decode and probing on the
-> physical Windows target. CUDA/NVENC/NVDEC/CUVID, Vulkan/libplacebo, OpenCL
-> and CUDA-enabled libvmaf passed consumer-oriented hardware validation on the
-> recorded target, not an exhaustive hardware validation. Intel QSV/oneVPL and AMD AMF were not selected because the
-> corresponding GPUs were absent. The accepted GPL/nonfree configuration is
-> **not redistributable**. Resume is guarded by target-and-input identity.
+> `ffprobe.exe` passed software and representative CUDA/libvmaf, Vulkan and
+> OpenCL operations from a relocated bundle under a controlled PATH on the
+> physical target. G5 provides the broader consumer-driven hardware results;
+> this is not exhaustive hardware validation. The bundle contains only the
+> accepted LLVM-MinGW runtime DLLs and is **internal, target-specific and not
+> redistributable** under the accepted GPL/nonfree configuration. Windows,
+> UCRT, GPU-driver, Vulkan/OpenCL loader and vendor runtimes remain external;
+> `VSScript.dll` is an optional VapourSynth prerequisite. Resume is guarded by
+> target-and-input identity.
 > The previous MSYS2 route is unsupported legacy code. See
 > [`windows_build_strategy.md`](windows_build_strategy.md) for evidence.
 
@@ -225,10 +228,12 @@ wave commands, acceptance and reuse details.
 GPU drivers and runtimes belong to Windows itself: the NVIDIA driver and CUDA
 driver runtime, the Windows Vulkan loader and vendor ICD, the Windows OpenCL
 dispatcher and vendor implementations, and the Windows UCRT/system runtime.
-`VSScript.dll` is external when using VapourSynth. G4 acceptance stages the
-required LLVM-MinGW `libc++.dll`, `libunwind.dll`, `libwinpthread-1.dll` and
-`libomp.dll` temporarily for Windows execution; it does not create a release
-package. Do not copy Windows system or driver DLLs into WSL.
+`VSScript.dll` is external when using VapourSynth. G6 packages the required,
+hash-verified LLVM-MinGW `libc++.dll`, `libunwind.dll`, `libwinpthread-1.dll`
+and `libomp.dll`; the Windows system/UCRT, NVIDIA driver DLLs, Vulkan loader
+and vendor ICD, and OpenCL dispatcher/vendor ICD remain external. The
+accepted GPL/nonfree bundle is internal and not redistributable. Do not copy
+system or driver DLLs into the bundle.
 
 Architecture, gates and verified results: [`windows_build_strategy.md`](windows_build_strategy.md).
 Implementation notes: [`DeveloperReadme.md`](DeveloperReadme.md).
@@ -710,11 +715,13 @@ workspace_<version>/bin/ffprobe
 workspace_<version>/bin/ffplay
 ```
 
-For the accepted Windows cross build, binaries are at
+For the accepted Windows cross build, source binaries are at
 `workspace_90/targets/linux-cross-mingw-<identity>/bin/ffmpeg.exe` and
 `ffprobe.exe`; target headers, libraries and metadata are in that identity's
-`prefix/`. Acceptance temporarily stages the required LLVM-MinGW DLLs; system
-and vendor runtimes remain external. Windows release packaging has not started.
+`prefix/`. The G6 production bundle is in that identity's `release/`, with a
+runtime-ownership `manifest.json`; `g6-acceptance.json` records repeated
+packaging and relocated runtime acceptance. The bundle is target-specific and
+not redistributable.
 
 For native builds, if `make_release: true`, an additional release folder is generated:
 

@@ -25,6 +25,7 @@ def test_parse_args_defaults():
     assert args.dry_run is False
     assert args.no_release is False
     assert args.g4_wave6 is False
+    assert args.g6 is False
 
 
 def test_parse_args_accepts_all_options():
@@ -35,6 +36,10 @@ def test_parse_args_accepts_all_options():
     assert args.ffmpeg_version == "9.0"
     assert args.dry_run is True
     assert args.no_release is True
+
+
+def test_parse_args_accepts_g6():
+    assert run_build.parse_args(["--g6"]).g6 is True
 
 
 def test_parse_args_accepts_g4_wave6():
@@ -286,6 +291,60 @@ def _config(**overrides):
     config = SimpleNamespace(**values)
     config.to_dict = lambda: dict(values)
     return config
+
+
+def test_main_g6_configures_fixed_cross_target(monkeypatch):
+    seen = {}
+
+    class FakeApp:
+        def __init__(self):
+            self.config_manager = SimpleNamespace(get=lambda: _config())
+
+        def _sync_workspace(self, config):
+            seen["workspace_version"] = config.ffmpeg_version
+
+    class FakeDetector:
+        def __init__(self, config):
+            seen["detector_backend"] = config.target_backend
+
+        def detect_all(self):
+            return (None, None, None)
+
+    monkeypatch.setattr(run_build, "FFmpegBuilderApp", FakeApp)
+    monkeypatch.setattr(run_build, "PlatformDetector", FakeDetector)
+    monkeypatch.setattr(
+        run_build,
+        "run_g6",
+        lambda app, config: seen.update(
+            version=config.ffmpeg_version,
+            backend=config.target_backend,
+            release=config.make_release,
+        )
+        or 0,
+    )
+
+    assert run_build.main(["--g6"]) == 0
+    assert seen == {
+        "workspace_version": "9.0",
+        "detector_backend": run_build.TARGET_BACKEND_CROSS_MINGW,
+        "version": "9.0",
+        "backend": run_build.TARGET_BACKEND_CROSS_MINGW,
+        "release": True,
+    }
+
+
+def test_cross_release_runs_g6_after_g4(monkeypatch):
+    seen = []
+    config = _config(
+        ffmpeg_version="9.0",
+        target_backend=run_build.TARGET_BACKEND_CROSS_MINGW,
+        make_release=True,
+    )
+    monkeypatch.setattr(run_build, "run_g4_final", lambda app, config: seen.append("g4") or 0)
+    monkeypatch.setattr(run_build, "run_g6", lambda app, config: seen.append("g6") or 0)
+
+    assert run_build.run_build(None, config, resume=False, no_release=False) == 0
+    assert seen == ["g4", "g6"]
 
 
 def test_describe_plan_lists_components_with_toolchain_cc(capsys):

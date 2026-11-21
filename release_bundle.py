@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import shutil
@@ -12,6 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Dict, List, Optional, Set, Tuple
 
 from .build_types import BuildError
+from .config import TARGET_BACKEND_CROSS_MINGW
 
 if TYPE_CHECKING:
     from .builder import FFmpegBuilder
@@ -20,9 +22,19 @@ if TYPE_CHECKING:
 OPTIONAL_TOOLS = ("x265", "SvtAv1EncApp")
 
 
-def make_release_bundle(builder: "FFmpegBuilder") -> Path:
-    """Create a redistributable release directory for built FFmpeg binaries."""
+def make_release_bundle(
+    builder: "FFmpegBuilder",
+    windows_runtime_policy: Optional[Dict[str, object]] = None,
+) -> Path:
+    """Create a release directory and collect its project-owned runtime files."""
     backend = builder.platform_detector.get_build_backend_name()
+    cross_mingw = getattr(builder.config, "target_backend", "native") == TARGET_BACKEND_CROSS_MINGW
+    target_platform = "windows" if cross_mingw else builder.platform
+    if cross_mingw and windows_runtime_policy is None:
+        raise BuildError(
+            "release",
+            "linux-cross-mingw packaging requires verified G4/G5 Windows runtime metadata.",
+        )
     release_dir = builder.workspace / "release"
 
     if release_dir.exists():
@@ -35,9 +47,10 @@ def make_release_bundle(builder: "FFmpegBuilder") -> Path:
     copied_binaries: List[str] = []
     missing_binaries: List[str] = []
 
-    for name in ("ffmpeg", "ffprobe", "ffplay"):
+    binary_names = ("ffmpeg", "ffprobe") if cross_mingw else ("ffmpeg", "ffprobe", "ffplay")
+    for name in binary_names:
         candidates = [source_bin / name]
-        if builder.platform == "windows":
+        if target_platform == "windows":
             candidates.insert(0, source_bin / f"{name}.exe")
 
         source = next((candidate for candidate in candidates if candidate.exists()), None)
@@ -52,14 +65,19 @@ def make_release_bundle(builder: "FFmpegBuilder") -> Path:
 
     if not source_binaries:
         raise BuildError("release", f"No FFmpeg binaries found in {source_bin}")
+    if cross_mingw and missing_binaries:
+        raise BuildError(
+            "release",
+            "Accepted Windows bundle binaries are missing: " + ", ".join(sorted(missing_binaries)),
+        )
 
     # Standalone encoder CLIs consumed by downstream packaging. They are
     # optional (not every profile builds them) and go through the same
     # dependency collection / relocation as ffmpeg.
     copied_tools: List[str] = []
-    for name in OPTIONAL_TOOLS:
+    for name in (() if cross_mingw else OPTIONAL_TOOLS):
         candidates = [source_bin / name]
-        if builder.platform == "windows":
+        if target_platform == "windows":
             candidates.insert(0, source_bin / f"{name}.exe")
         source = next((candidate for candidate in candidates if candidate.exists()), None)
         if source is None:
@@ -70,9 +88,16 @@ def make_release_bundle(builder: "FFmpegBuilder") -> Path:
         copied_binaries.append(str(destination))
         copied_tools.append(source.name)
 
-    dependencies, missing_dependencies, aliases = _collect_runtime_dependencies(
-        builder, source_binaries
-    )
+    if cross_mingw:
+        assert windows_runtime_policy is not None
+        dependencies, missing_dependencies, aliases, windows_runtime = (
+            _collect_cross_mingw_dependencies(builder, source_binaries, windows_runtime_policy)
+        )
+    else:
+        dependencies, missing_dependencies, aliases = _collect_runtime_dependencies(
+            builder, source_binaries
+        )
+        windows_runtime = None
     copied_dependencies: List[str] = []
 
     for dep in sorted(dependencies, key=lambda item: item.name.lower()):
@@ -83,39 +108,182 @@ def make_release_bundle(builder: "FFmpegBuilder") -> Path:
         copied_dependencies.append(str(destination))
 
     created_aliases: List[str] = []
-    if builder.platform == "linux":
+    if target_platform == "linux":
         created_aliases = _create_dependency_aliases(release_dir, aliases)
 
     install_name_rewrites: List[str] = []
-    if builder.platform == "darwin":
+    if target_platform == "darwin":
         install_name_rewrites = _make_macos_bundle_relocatable(
             builder, release_dir, source_binaries, dependencies
         )
         _verify_macos_signatures(builder, release_dir)
 
     rpath_rewrites: List[str] = []
-    if builder.platform == "linux" and dependencies:
+    if target_platform == "linux" and dependencies:
         rpath_rewrites = _make_linux_bundle_relocatable(
             builder, release_dir, [Path(p) for p in copied_binaries + copied_dependencies]
         )
 
-    manifest = {
+    manifest_binaries = (
+        [Path(path).name for path in copied_binaries] if cross_mingw else copied_binaries
+    )
+    manifest_dependencies = (
+        [Path(path).name for path in copied_dependencies] if cross_mingw else copied_dependencies
+    )
+    manifest: Dict[str, object] = {
         "generated_at": datetime.now().isoformat(),
-        "platform": builder.platform,
+        "platform": target_platform,
         "build_backend": backend,
         "ffmpeg_version": builder.config.ffmpeg_version,
-        "binaries": copied_binaries,
+        "binaries": manifest_binaries,
         "missing_binaries": sorted(missing_binaries),
         "tools": copied_tools,
-        "dependencies": copied_dependencies,
+        "dependencies": manifest_dependencies,
         "missing_dependencies": sorted(missing_dependencies),
         "install_name_rewrites": install_name_rewrites,
         "rpath_rewrites": rpath_rewrites,
         "dependency_aliases": created_aliases,
     }
+    if cross_mingw:
+        manifest["target_backend"] = TARGET_BACKEND_CROSS_MINGW
+    if windows_runtime is not None:
+        manifest.update(
+            {
+                "distribution": {
+                    "scope": "internal-target-specific",
+                    "redistributable": False,
+                    "reason": "The accepted FFmpeg GPL/nonfree configuration is unredistributable.",
+                },
+                "runtime": windows_runtime,
+            }
+        )
     (release_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
     return release_dir
+
+
+def _collect_cross_mingw_dependencies(
+    builder: "FFmpegBuilder",
+    binaries: List[Path],
+    policy: Dict[str, object],
+) -> Tuple[Set[Path], Set[str], Dict[Path, Set[str]], Dict[str, object]]:
+    """Collect only the accepted LLVM-MinGW DLL closure for a cross-built bundle."""
+    cross = builder.platform_context.cross_environment
+    if cross is None or cross.backend != TARGET_BACKEND_CROSS_MINGW:
+        raise BuildError("release", "The accepted linux-cross-mingw toolchain is unavailable.")
+
+    raw_toolchain = policy.get("toolchain_dlls")
+    raw_system = policy.get("system_imports")
+    raw_imports = policy.get("pe_imports")
+    raw_external = policy.get("external_runtime_prerequisites")
+    if (
+        not isinstance(raw_toolchain, dict)
+        or not all(
+            isinstance(name, str) and isinstance(digest, str)
+            for name, digest in raw_toolchain.items()
+        )
+        or not isinstance(raw_system, list)
+        or not all(isinstance(name, str) for name in raw_system)
+        or not isinstance(raw_imports, list)
+        or not all(isinstance(name, str) for name in raw_imports)
+        or not isinstance(raw_external, list)
+        or not all(
+            isinstance(item, dict)
+            and all(
+                isinstance(item.get(key), str) and item[key]
+                for key in ("name", "classification", "source_identity")
+            )
+            for item in raw_external
+        )
+    ):
+        raise BuildError("release", "Verified Windows runtime metadata is malformed.")
+
+    approved = {name.lower(): digest for name, digest in raw_toolchain.items()}
+    system = {name.lower() for name in raw_system}
+    external = {
+        str(item.get("name", "")).lower(): item
+        for item in raw_external
+        if isinstance(item.get("name"), str)
+    }
+    expected_imports = {name.lower() for name in raw_imports}
+    runtime_dir = cross.target_tools.prefix / "x86_64-w64-mingw32" / "bin"
+    available = {path.name.lower(): path for path in runtime_dir.glob("*.dll")}
+    if len(available) != len(list(runtime_dir.glob("*.dll"))):
+        raise BuildError("release", "Ambiguous DLL names in the accepted LLVM-MinGW runtime.")
+
+    def imports(path: Path) -> Set[str]:
+        result = builder.executor.execute(
+            [str(cross.target_tools.objdump), "-p", str(path)], env=builder.get_build_env()
+        )
+        if not result.success:
+            raise BuildError(
+                "release",
+                f"Failed to inspect dependencies for {path.name}: {result.stderr.strip()}",
+            )
+        names = {
+            match.group(1).lower()
+            for line in result.stdout.splitlines()
+            if (match := re.search(r"DLL Name:\s*(\S+)", line))
+        }
+        return names
+
+    roots: Set[str] = set()
+    for binary in binaries:
+        roots.update(imports(binary))
+    if roots != expected_imports:
+        raise BuildError(
+            "release",
+            "FFmpeg PE imports differ from the accepted G4 manifest: "
+            f"unexpected={sorted(roots - expected_imports)}, "
+            f"missing={sorted(expected_imports - roots)}",
+        )
+
+    pending = list(roots)
+    visited: Set[str] = set()
+    copied: Set[str] = set()
+    dependencies: Set[Path] = set()
+    missing: Set[str] = set()
+    while pending:
+        name = pending.pop()
+        if name in visited:
+            continue
+        visited.add(name)
+        if name in approved:
+            source = available.get(name)
+            if source is None:
+                raise BuildError("release", f"Accepted LLVM-MinGW runtime DLL is missing: {name}")
+            if _file_digest(source) != approved[name]:
+                raise BuildError("release", f"Accepted LLVM-MinGW runtime DLL changed: {name}")
+            dependencies.add(source)
+            copied.add(name)
+            pending.extend(imports(source))
+        elif name not in system and name not in external:
+            missing.add(name)
+
+    if copied != set(approved):
+        raise BuildError(
+            "release",
+            "The Windows runtime closure differs from G5: "
+            f"unused={sorted(set(approved) - copied)}, unexpected={sorted(copied - set(approved))}",
+        )
+    if missing:
+        raise BuildError(
+            "release",
+            "Unclassified Windows runtime imports: " + ", ".join(sorted(missing)),
+        )
+
+    runtime: Dict[str, object] = {
+        "pe_imports": sorted(roots),
+        "toolchain_dlls": {name: approved[name] for name in sorted(copied)},
+        "system_imports": sorted(system - set(external)),
+        "external_runtime_prerequisites": [external[name] for name in sorted(external)],
+    }
+    return dependencies, set(), {}, runtime
+
+
+def _file_digest(path: Path) -> str:
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
 def _rmtree(builder: "FFmpegBuilder", path: Path) -> None:
@@ -567,7 +735,11 @@ def _runtime_search_dirs(builder: "FFmpegBuilder", binary_path: Path) -> List[Pa
         builder.workspace / "lib64",
     ]
 
-    if builder.platform == "windows":
+    if getattr(builder.config, "target_backend", "native") == TARGET_BACKEND_CROSS_MINGW:
+        cross = builder.platform_context.cross_environment
+        if cross is not None:
+            candidates.append(cross.target_tools.prefix / "x86_64-w64-mingw32" / "bin")
+    elif builder.platform == "windows":
         msys_root = Path(builder.config.windows.msys2_root)
         windows_root = Path(os.environ.get("WINDIR", r"C:\Windows"))
         candidates.extend(

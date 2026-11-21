@@ -12,6 +12,11 @@ each, smoke-tested). WSL-Mingw G1/G2 preparation and offline-closure
 acceptance are complete; G3 has established and validated the
 `linux-cross-mingw` cross-environment and shared build contracts. G3 is PASS;
 G4 and Waves 0–9 are complete; G5 consumer hardware validation passed.
+G6 packaging/runtime-closure acceptance also passed for the recorded target:
+the relocated bundle contains `ffmpeg.exe`, `ffprobe.exe`, and the four
+hash-verified LLVM-MinGW runtime DLLs, while Windows/UCRT, GPU-driver,
+Vulkan/OpenCL loader and vendor runtimes, and optional `VSScript.dll` remain
+external. The accepted GPL/nonfree bundle is internal and nonredistributable.
 Wave 1 accepted seven Windows target dependencies;
 Wave 2 accepted eleven more through production Autotools and CMake paths with
 the mandatory primary profile (`native_build=true`, `openmp=true`), and Wave
@@ -56,11 +61,12 @@ integrated the 45 selected dependencies into FFmpeg 9.0 using LLVM-MinGW,
 target metadata, host CUDA PTX and Vulkan shader tools. Windows PE `ffmpeg.exe`
 and `ffprobe.exe` passed version/startup, software H.264 encode/decode and
 probing; same-identity reuse and 706 prior output hashes passed. The build is
-nonfree and unredistributable. Windows runtime acceptance stages LLVM-MinGW
-libc++, libunwind, winpthread and libomp DLLs; system, driver, Vulkan/OpenCL
-and optional VapourSynth runtimes remain external. The cross route requires
-the already accepted component waves; it does not yet orchestrate a fresh
-stack build automatically. The
+nonfree and unredistributable. G6 packages LLVM-MinGW libc++, libunwind,
+winpthread and libomp DLLs, and the relocated bundle passed software plus
+representative CUDA/libvmaf, Vulkan and OpenCL checks with a controlled PATH.
+System/UCRT, driver, Vulkan/OpenCL loader and vendor, and optional VapourSynth
+runtimes remain external. The cross route requires the already accepted
+component waves; it does not yet orchestrate a fresh stack build automatically. The
 compatibility/portable profile is `native_build=false`,
 `openmp=false`; it is for portable releases/diagnostics and cannot substitute
 for a failed primary-profile build.

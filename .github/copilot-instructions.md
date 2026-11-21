@@ -85,8 +85,10 @@ such as `from ffmpeg_builder.components import ComponentRegistry`.
 - The root `build_config.yaml` is environment-specific and gitignored. Do not
   treat a local copy as a tracked default or commit it.
 - Keep native Linux/macOS and `linux-cross-mingw` behavior distinct. WSL-Mingw
-  is the Windows route; G1–G4 passed for the configured physical target, while
-  G5 hardware validation and packaging have not started. Legacy MSYS2 code is not a
+  is the Windows route; G1–G6 passed for the configured physical target.
+  G6 packages the accepted LLVM-MinGW runtime DLLs and leaves Windows, UCRT,
+  GPU-driver, Vulkan/OpenCL and optional VapourSynth runtimes external. The
+  GPL/nonfree bundle is internal and nonredistributable. Legacy MSYS2 code is not a
   supported backend; do not extend it. For cross builds, keep Linux host tools
   separate from Windows-target inputs and do not let Linux SDK/library paths
   satisfy target dependency lookups.

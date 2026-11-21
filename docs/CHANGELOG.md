@@ -1,10 +1,31 @@
+### Accepted — G6 Windows packaging and relocation
+
+- The normal `release_bundle.py` path packages the accepted G4 FFmpeg 9.0
+  binaries with only the hash-verified LLVM-MinGW runtime DLL closure:
+  `libc++.dll`, `libomp.dll`, `libunwind.dll` and `libwinpthread-1.dll`.
+- PE imports are compared with the accepted G4 manifest; recursive imports
+  from toolchain DLLs are inspected. Component runtime metadata and accepted
+  G5 features classify dynamically loaded NVIDIA driver interfaces,
+  `OpenCL.dll`, `vulkan-1.dll` and optional `VSScript.dll` as external. Windows
+  system/UCRT, GPU drivers, Vulkan/OpenCL loaders and vendor ICDs are not
+  copied into the package.
+- Repeated packaging preserved payload hashes. A bundle relocated under
+  `g6-runs/` passed controlled-PATH Windows startup for ffmpeg/ffprobe,
+  software H.264 encode/probe/decode, CUDA scaling and CUDA libvmaf, Vulkan
+  scaling, and OpenCL filtering on the recorded target. G4/G5 inputs and
+  evidence were reverified.
+- The accepted GPL/nonfree configuration remains internal, target-specific
+  and unredistributable; packaging acceptance does not imply legal
+  redistributability. See `windows_build_strategy.md` and the workspace
+  `g6-acceptance.json`/release `manifest.json` for acceptance details.
+
 ### Accepted — G5 hardware acceptance
 
 - Production FFmpeg hardware tests cover consumer-relevant cross-platform
   functionality; Windows-only D3D APIs and their earlier test failures are
   out of scope. Neural support is planned and ONNX Runtime investigation was
   exploratory only. Physical-target runtime acceptance and same-identity
-  evidence reuse passed; G6 has not started.
+  evidence reuse passed; G6 packaging acceptance is recorded above.
 
 ### Accepted — G4 final Windows FFmpeg integration
 

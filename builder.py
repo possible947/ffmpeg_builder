@@ -1440,6 +1440,8 @@ class FFmpegBuilder:
         """Build FFmpeg."""
         build_ffmpeg(self, component, source_dir)
 
-    def make_release_bundle(self) -> Path:
-        """Create a redistributable release directory for built FFmpeg binaries."""
-        return create_release_bundle(self)
+    def make_release_bundle(
+        self, windows_runtime_policy: Optional[Dict[str, object]] = None
+    ) -> Path:
+        """Create a release directory for built FFmpeg binaries."""
+        return create_release_bundle(self, windows_runtime_policy)

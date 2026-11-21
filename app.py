@@ -1068,6 +1068,11 @@ class FFmpegBuilderApp:
                 )
             elif result:
                 self.console.print("[red]G4 FFmpeg integration failed.[/red]")
+            elif config.make_release:
+                from .g6 import run_g6
+
+                if run_g6(self, config):
+                    self.console.print("[red]G6 Windows packaging acceptance failed.[/red]")
             return
         try:
             session = self.prepare_target(config, resume)

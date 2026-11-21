@@ -1,7 +1,7 @@
 # Windows FFmpeg cross-build strategy
 
 **Status:** G1 **PASS**; G2.1–G2.8 **PASS**; G3 **PASS**; G4 **PASS**;
-G5 **PASS** on the recorded physical target. G6 packaging has not started.
+G5 **PASS**; G6 **PASS** on the recorded physical target.
 
 ### G5 — accepted, consumer-oriented hardware validation
 
@@ -66,7 +66,7 @@ must not become a required FFmpeg dependency before a consumer architecture
 explicitly selects it. Its build, runtime, dependencies and acceptance belong to
 dedicated feature development, not a retroactive expansion of G5. G5 verifies
 correctness and runtime operation, not benchmarking. G6 packaging/release is
-separate from hardware capability acceptance.
+separate from hardware capability acceptance and is recorded below.
 
 ### G4 final — configured Windows FFmpeg
 
@@ -96,7 +96,40 @@ LLVM-MinGW `libc++.dll`, `libunwind.dll`, `libwinpthread-1.dll` and
 `libomp.dll`; Windows/UCRT, `OpenCL.dll`, `vulkan-1.dll`, vendor ICDs and
 NVIDIA driver libraries are external runtime prerequisites. `VSScript.dll` is
 an external prerequisite when VapourSynth is used. G5 hardware acceptance and
-G6 release packaging are separate gates.
+G6 release packaging were accepted separately as documented below.
+
+### G6 — accepted Windows runtime bundle
+
+The normal `release_bundle.py` path produced an internal, target-specific
+bundle from the accepted G4 FFmpeg 9.0 binaries and G5 runtime metadata.
+`release/` contains only `ffmpeg.exe`, `ffprobe.exe` and the four hash-verified
+LLVM-MinGW runtime DLLs: `libc++.dll`, `libomp.dll`, `libunwind.dll` and
+`libwinpthread-1.dll`. Repeating packaging preserved the bundle payload and
+runtime manifest apart from its generation timestamp.
+
+PE imports were checked against G4 acceptance; the approved LLVM-MinGW DLL
+closure was recursively inspected and hash-verified. Windows system/UCRT
+imports and dynamically loaded external prerequisites are classified, not
+copied. Component runtime metadata and accepted G5 features record NVIDIA
+driver interfaces (`nvcuda.dll`, `nvEncodeAPI64.dll`, `nvcuvid.dll`),
+`OpenCL.dll`, `vulkan-1.dll` and optional `VSScript.dll`. GPU drivers,
+Vulkan/OpenCL loaders and vendor ICDs, Windows/UCRT/system files, and
+VapourSynth's `VSScript.dll` remain external.
+
+The bundle was copied to an identity-specific `g6-runs/<id>/bundle` path and
+launched on the physical Windows target with PATH restricted to that relocated
+directory and `%SystemRoot%\\System32`. `ffmpeg.exe` and `ffprobe.exe` started;
+software H.264 encode/probe/decode and representative CUDA scaling,
+CUDA-enabled libvmaf, Vulkan scaling and OpenCL filtering passed. G6 reused the
+accepted G5 device identity and ordinal for the CUDA probe; Vulkan and OpenCL
+reported the NVIDIA TITAN V. Full hardware acceptance remains the G5 evidence,
+not a G6 goal.
+
+The accepted build is GPL/nonfree and unredistributable. G6 verifies packaging
+and runtime closure only; this bundle is internal to the recorded target and
+does not establish legal redistributability or clean-machine portability.
+Acceptance evidence is in `g6-acceptance.json`; the release `manifest.json`
+records bundled hashes, PE imports, system imports and external prerequisites.
 
 ### G4 Wave 9 — physical-Windows OpenCL interface
 
@@ -1323,25 +1356,25 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
   production binaries, never PoC binaries. Reuse completed G5 evidence only
   after contract, G4 artifacts, runtime identity and staged DLLs match.
 
-### G6 — Windows packaging and runtime policy
+### G6 — Windows packaging and runtime policy — PASS
 
-- **Scope / code:** Extend `release_bundle.py` and package metadata for the
-  produced Windows binaries. Inspect PE imports and dynamically loaded
-  dependencies; classify UCRT/system Windows DLLs, LLVM-MinGW runtime DLLs,
-  libc++/libunwind where required, and Windows graphics/GPU driver runtimes.
-- **Tests:** Controlled PATH launch independent of WSL; dependency
-  inspection; package relocation; start `ffmpeg.exe`/`ffprobe.exe`; applicable
-  host hardware smoke. Do not assume dynamically loaded APIs appear in the
-  PE import table.
-- **Inputs/artifacts:** Identity-specific G4/G5 binaries, dependency graph,
-  runtime DLL closure and documented external system/driver prerequisites.
-- **Pass:** Bundle starts from intended location on the physical target,
-  contains required distributable toolchain DLLs, and does not copy system or
-  driver-owned GPU runtimes blindly.
-- **Non-goals:** Clean-machine or cross-host portability; repackaging Windows
-  system DLLs.
-- **Reuse:** G0/G0A observed UCRT, libc++, libunwind, libomp, Windows loader
-  and driver paths as dependency classifications only.
+- **Scope / code:** The production `release_bundle.py` path packages the
+  accepted FFmpeg binaries and hash-verified LLVM-MinGW runtime closure.
+  Runtime metadata joins PE imports with component runtime declarations and
+  G5-accepted dynamically loaded NVIDIA, Vulkan and OpenCL interfaces.
+- **Tests:** Repeated packaging; PE import/recursive DLL closure comparison;
+  relocated bundle launch with a controlled Windows PATH; software operation
+  and representative CUDA/libvmaf, Vulkan and OpenCL smoke tests.
+- **Inputs/artifacts:** Identity-specific G4/G5 artifacts, release
+  `manifest.json` and `g6-acceptance.json`.
+- **Pass:** The package runs from the relocated path on the recorded target,
+  includes project/toolchain-owned runtime DLLs and classifies external
+  Windows/system/driver dependencies without copying them.
+- **Non-goals:** Clean-machine or cross-host portability; bundling Windows
+  system/UCRT, GPU drivers, Vulkan/OpenCL runtimes or optional `VSScript.dll`;
+  legal redistribution of the accepted GPL/nonfree configuration.
+- **Reuse:** G4/G5 acceptance artifacts are verified and reused; G5's complete
+  hardware matrix is not rerun.
 
 ### G7 — regression, documentation, and full acceptance
 
@@ -1373,11 +1406,8 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
 
 | Gate | Open issue | Required resolution |
 |---|---|---|
-| G3 | Compatibility-workaround classification. | Scope `_GNU_SOURCE` workaround narrowly. CPU tuning policy is the ordered `-march=native -mtune=native` pair, interpreted by LLVM-MinGW and not reconstructed from G1. |
-| G4 | Remaining full software component cross-build issues and full-stack source/build closure. | Resolve builder/registry/provisioning gaps component-by-component with target-isolation tests. |
-| Future feature | Neural processing and unspecified consumer interoperability. | Select requirements through consumer architecture and develop/accept separately; not required for G5. |
+| Future feature | Neural processing and unspecified consumer interoperability. | Select requirements through consumer architecture and develop/accept separately; not required by G1–G6. |
 | Future coverage | Hardware absent or unsupported on TITAN V and untested codec/profile combinations. | Retain their explicit classifications; validate when relevant hardware and consumer requirements exist. |
-| G6 | Final runtime DLL closure and redistribution policy for all production dependencies. | Inspect built package; include LLVM-MinGW/C++ runtime DLLs where required and document external Windows/driver prerequisites. |
 
 No separate feasibility risk remains for LLVM-MinGW/UCRT smoke execution,
 contained C ABI mixed Rust/C++ use, native compiler tuning on the tested
@@ -1417,7 +1447,7 @@ project-owned artifact and never a Windows target component.
    PE/COFF, no Linux leakage, runtime and resume.
 5. **G5 — PASS:** Validate consumer-relevant production hardware features,
    retaining absent, unsupported, out-of-scope and deferred statuses.
-6. **G6:** Build and validate the Windows bundle with explicit DLL and external
-   system/driver runtime policy.
+6. **G6 — PASS:** Build and validate the Windows bundle with explicit DLL and
+   external system/driver runtime policy.
 7. **G7:** Run full regressions and acceptance; update user/developer docs and
    changelog; confirm no stale MSYS2 Windows instructions remain.

@@ -51,6 +51,7 @@ from ffmpeg_builder.g4_wave7 import run_g4_wave7  # noqa: E402
 from ffmpeg_builder.g4_wave8 import run_g4_wave8  # noqa: E402
 from ffmpeg_builder.g4_wave9 import run_g4_wave9  # noqa: E402
 from ffmpeg_builder.g4_final import run_g4_final  # noqa: E402
+from ffmpeg_builder.g6 import run_g6  # noqa: E402
 from ffmpeg_builder.g5 import run_g5  # noqa: E402
 from ffmpeg_builder.platform_detect import PlatformDetector  # noqa: E402
 from ffmpeg_builder.cuda_prerequisites import (  # noqa: E402
@@ -162,6 +163,11 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         action="store_true",
         help="Run consumer-oriented G5 hardware acceptance against the accepted G4 build.",
     )
+    parser.add_argument(
+        "--g6",
+        action="store_true",
+        help="Package and accept the G4/G5 Windows runtime bundle on the physical target.",
+    )
     return parser.parse_args(argv)
 
 
@@ -180,7 +186,10 @@ def describe_plan(app: FFmpegBuilderApp, config: BuildConfig) -> int:
 def run_build(app: FFmpegBuilderApp, config: BuildConfig, resume: bool, no_release: bool) -> int:
     """Execute the build; return an exit code."""
     if getattr(config, "target_backend", "native") == TARGET_BACKEND_CROSS_MINGW:
-        return run_g4_final(app, config)
+        result = run_g4_final(app, config)
+        if result == 0 and config.make_release and not no_release:
+            return run_g6(app, config)
+        return result
     try:
         session = app.prepare_target(config, resume)
         all_components = app._get_buildable_components(config)
@@ -359,13 +368,16 @@ def main(argv: Optional[List[str]] = None) -> int:
                 args.g4_wave9,
                 args.g4_final,
                 args.g5,
+                args.g6,
             )
         )
         > 1
     ):
-        raise SystemExit("G4 wave and G5 options are mutually exclusive.")
+        raise SystemExit("G4 wave, G5, and G6 options are mutually exclusive.")
     if args.g5 and args.dry_run:
         raise SystemExit("--g5 performs runtime acceptance and cannot be combined with --dry-run.")
+    if args.g6 and args.dry_run:
+        raise SystemExit("--g6 performs runtime acceptance and cannot be combined with --dry-run.")
     if args.g4_wave1 and args.dry_run:
         raise SystemExit("--g4-wave1 performs real builds and cannot be combined with --dry-run.")
     if args.g4_wave2 and args.dry_run:
@@ -413,6 +425,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         or args.g4_wave9
         or args.g4_final
         or args.g5
+        or args.g6
     ) and args.ffmpeg_version not in (
         None,
         "9.0",
@@ -439,10 +452,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         or args.g4_wave9
         or args.g4_final
         or args.g5
+        or args.g6
     ):
         config.ffmpeg_version = "9.0"
         config.target_backend = TARGET_BACKEND_CROSS_MINGW
-        config.make_release = False
+        config.make_release = bool(args.g6)
         app.platform_detector = PlatformDetector(config=config)
         app.system_info, app.platform_info, app.tools = app.platform_detector.detect_all()
     app._sync_workspace(config)
@@ -479,6 +493,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return run_g4_final(app, config)
     if args.g5:
         return run_g5(app, config)
+    if args.g6:
+        return run_g6(app, config)
     if args.dry_run:
         if getattr(config, "target_backend", "native") == TARGET_BACKEND_CROSS_MINGW:
             return dry_run_cross_backend(app, config, resume=args.resume)

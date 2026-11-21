@@ -20,9 +20,9 @@ phase-era checklists. For current results see `docs/CHANGELOG.md` and
    the FFmpeg 9.0 path.
 3. **Linux + GCC 12 via WSL** — validates the deployed/lower-profile path for
    FFmpeg 8.1 on a modern host.
-4. **Windows (WSL-Mingw)** — `linux-cross-mingw` G1–G4 passed on the recorded
-   physical target; G5 consumer hardware validation passed and G6 packaging
-   has not started.
+4. **Windows (WSL-Mingw)** — `linux-cross-mingw` G1–G6 passed on the recorded
+   physical target, including relocated runtime/package acceptance. G7
+   regression and full acceptance remains the next planned gate.
    See `windows_build_strategy.md`. The former MSYS2 route is not a validation target.
 
 ## Automated tests (run on the target machine)
@@ -188,4 +188,6 @@ Portability:
 - [x] G1–G4 production integration and physical-Windows software acceptance
   passed for the recorded target; see `windows_build_strategy.md`.
 - [x] G5 consumer hardware validation passed on the recorded target; see
-  `windows_build_strategy.md`. G6 packaging has not started.
+  `windows_build_strategy.md`.
+- [x] G6 Windows bundle, runtime-closure and relocation acceptance passed on
+  the recorded target; see `windows_build_strategy.md`.
