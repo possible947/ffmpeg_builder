@@ -57,6 +57,20 @@ def test_final_config_requires_all_selected_features_and_cuda_filters(tmp_path):
         _validate_config(tmp_path, ["--enable-libx264"], True, True)
 
 
+def test_software_profile_rejects_accidentally_enabled_hardware(tmp_path):
+    (tmp_path / "config.h").write_text(
+        "#define CONFIG_LIBX264 1\n#define CONFIG_CUDA 0\n#define CONFIG_IAMF 1\n"
+        "#define CONFIG_D3D12_MOTION_ESTIMATOR 1\n"
+    )
+    (tmp_path / "config_components.h").write_text(
+        "#define CONFIG_SCALE_CUDA_FILTER 0\n#define CONFIG_IAMF_MUXER 1\n"
+    )
+    _validate_config(tmp_path, ["--enable-libx264"], False, False, False)
+    (tmp_path / "config_components.h").write_text("#define CONFIG_SCALE_CUDA_FILTER 1\n")
+    with pytest.raises(BuildError, match="Disabled hardware"):
+        _validate_config(tmp_path, ["--enable-libx264"], False, False, False)
+
+
 def test_ffmpeg_cross_uses_target_tools_and_scoped_host_cuda_vulkan(tmp_path):
     prefix = tmp_path / "prefix"
     prefix.mkdir()

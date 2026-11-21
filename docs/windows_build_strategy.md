@@ -1,7 +1,8 @@
 # Windows FFmpeg cross-build strategy
 
 **Status:** G1 **PASS**; G2.1–G2.8 **PASS**; G3 **PASS**; G4 **PASS**;
-G5 **PASS**; G6 **PASS** on the recorded physical target.
+G5 **PASS**; G6 **PASS**; G7 CLI **PASS** on the recorded physical target.
+Windows TUI integration remains separate and **not yet completed**.
 
 ### G5 — accepted, consumer-oriented hardware validation
 
@@ -1376,8 +1377,90 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
 - **Reuse:** G4/G5 acceptance artifacts are verified and reused; G5's complete
   hardware matrix is not rerun.
 
-### G7 — regression, documentation, and full acceptance
+### G7 — regression, documentation, and full acceptance — CLI PASS
 
+The normal headless production workflow completed these independent FFmpeg
+9.0 acceptance runs in BASE-then-PREFERRED order. Neither clean workspace
+contained historical G4 wave acceptance state.
+
+| Profile | Target identity | Clean full build | Identical second invocation |
+|---|---|---|---|
+| BASE | `eb96209a1a3d4ba5` | 40 built, 0 reused; 1617.08 s | 0 built, 40 reused; 229.51 s |
+| PREFERRED | `4a8b548bf74703f7` | 46 built, 0 reused; 1867.13 s | 0 built, 46 reused; 365.08 s |
+
+Both clean records have `clean_full_build: true`. BASE configuration SHA-256
+is `bd79ed0dbbd47f490f4c1e2db9c93de2d001e2c6e01b5db5b6200099a595c51b`;
+PREFERRED is `26915b360b0e17cf9efd515404cf6b1ce33f9e01bc7fd76e974e2fd77ac6d1be`.
+Their identity workspaces are under `workspace_g7_base/targets/` and
+`workspace_g7_preferred/targets/`, respectively. Original clean invocation
+records remain under `g7-runs/` even after `g7-acceptance.json` records reuse.
+Evidence snapshots and exact input/effective YAML profiles are preserved in
+the G7 session's `files/` directory
+(`~/.copilot/session-state/f2138ce7-a169-47a0-8c1c-a9844d6b160f/files/`):
+`G7_{BASE,PREFERRED}_{clean,reuse}_PASS.json`,
+`G7_{BASE,PREFERRED}_reuse_verification.json`, and
+`G7_{BASE,PREFERRED}_effective.yaml`.
+
+BASE passed software H.264 encode/probe/decode and relocated controlled-PATH
+startup without hardware tests. PREFERRED additionally passed representative
+CUDA scaling, CUDA libvmaf, Vulkan scaling/libplacebo and OpenCL filtering on
+the recorded Windows target. Both bundles contain `ffmpeg.exe`, `ffprobe.exe`,
+the four accepted LLVM-MinGW DLLs and the release manifest. Payload hashes
+were unchanged on repeated packaging. Reuse left all 127 BASE and 134
+PREFERRED build logs/binaries unchanged by both hash and modification time.
+The immutable reference and live configuration retain SHA-256
+`97d8331cfedbdb0f51623112ac041fd9d0717b67f23b19da9cf3ef99b5a166d1`;
+the PREFERRED input changes only the target backend.
+
+Earlier diagnostic attempts do not count as clean acceptance. A first
+PREFERRED clean build passed runtime but exposed glslang inventory growth on
+reuse. Installing the complete pinned SPIR-V headers inside the target
+glslang builder before recording acceptance fixed ownership/invalidation;
+PREFERRED was then rebuilt entirely clean and passed reuse with all 83
+SPIR-V files already recorded. BASE does not select glslang and was unaffected.
+`G7_scope_impact.json` verifies that this isolated cross-glslang change is the
+only production-code fingerprint difference from accepted BASE. Independent
+review confirmed the affected-profile rebuild boundary.
+
+Final regression checks passed: 917 tests passed, one skipped, Black passed,
+the frozen mypy baseline passed with zero errors, and `git diff --check`
+passed. The preceding full clean linux-wsl2 build remains preserved,
+reference-only at `~/Temp/workspace_90`; no new full macOS build or arbitrary
+cross-host portability is claimed. No requested software functionality was
+removed; no Windows FFmpeg 8.1 acceptance or TUI integration was performed.
+
+- **CLI production path:** `scripts/run_build.py --config PROFILE.yaml
+  --workspace WORKSPACE` builds the effective selected dependency graph in
+  dependency order, applies the existing installed-output contracts, then
+  builds FFmpeg and performs profile-appropriate runtime/package acceptance.
+  Manual `--g4-wave*` invocations are diagnostic tools, not prerequisites.
+  Matching invocations validate installed/source hashes before reusing work.
+  `--resume` permits diagnostic retries; a final clean full acceptance must
+  build every selected component in one fresh invocation.
+- **Mandatory profiles:** BASE and PREFERRED both use FFmpeg 9.0,
+  `linux-cross-mingw`, GPL/nonfree-capable software and release packaging.
+  BASE sets `native_build: false`, `enable_hardware_acceleration: false`,
+  `cuda_build_mode: disabled`, `enable_libvmaf_cuda: false` and
+  `enable_libplacebo_vulkan: false`; it retains software libvmaf and OpenMP.
+  PREFERRED preserves the maintainer's immutable reference configuration,
+  changing only the target backend. It retains native tuning, required CUDA,
+  NVENC/NVDEC/CUVID, CUDA libvmaf, Vulkan/libplacebo and OpenCL.
+- **Clean boundary:** Remove only the profile's explicitly selected build
+  workspace, including target prefix, build trees, component state, binaries,
+  release output and acceptance files. Preserve the checkout, Python
+  environment, toolchain store, sources, ordinary caches, external SDKs,
+  Windows runtimes/drivers and the reference configuration. The preserved
+  native `~/Temp/workspace_90` is reference-only and never a build input.
+- **Normal evidence:** `cross-components-acceptance.json`,
+  `g4-final-acceptance.json`, `g7-runtime-acceptance.json`,
+  `g7-package-acceptance.json`, release `manifest.json`, and
+  `g7-acceptance.json` with immutable invocation records in `g7-runs/`.
+  The aggregate records effective configuration/hash, target identity,
+  production-code fingerprint, clean provenance, components/features and
+  built/reused lists. A reuse invocation is not itself a clean full build;
+  its corresponding original full-build record must also be retained.
+- **UI boundary:** G7 acceptance is headless CLI only. TUI integration is
+  separate and is not completed by the CLI implementation.
 - **Scope / code/docs:** Run the complete configured build and acceptance
   flow; native Linux, native WSL/Linux and macOS regression protection as
   applicable; migration/removal tests for any remaining legacy Windows
@@ -1449,5 +1532,7 @@ project-owned artifact and never a Windows target component.
    retaining absent, unsupported, out-of-scope and deferred statuses.
 6. **G6 — PASS:** Build and validate the Windows bundle with explicit DLL and
    external system/driver runtime policy.
-7. **G7:** Run full regressions and acceptance; update user/developer docs and
-   changelog; confirm no stale MSYS2 Windows instructions remain.
+7. **G7 CLI — PASS:** Separate clean full BASE/PREFERRED production builds,
+   runtime/package acceptance, identical-run reuse and regression checks
+   passed; user/developer docs and changelog updated. Windows TUI integration
+   remains a separate, not-yet-completed task.

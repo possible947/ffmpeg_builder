@@ -100,11 +100,12 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 class FFmpegBuilderApp:
     """Main application class."""
 
-    def __init__(self, workspace: Optional[Path] = None):
+    def __init__(self, workspace: Optional[Path] = None, config_path: Optional[Path] = None):
         """Initialize application.
 
         Args:
             workspace: Workspace directory. If None, uses versioned workspace (e.g. workspace_81).
+            config_path: Explicit headless profile; None uses the local user configuration.
         """
         self._custom_workspace = workspace
         self.console = Console()
@@ -115,7 +116,7 @@ class FFmpegBuilderApp:
         self.wsl_mingw_preparation: Optional[WslMingwPreparation] = None
         self.cross_environment: Optional[CrossEnvironment] = None
 
-        self.config_manager = ConfigManager(PROJECT_ROOT / "build_config.yaml")
+        self.config_manager = ConfigManager(config_path or PROJECT_ROOT / "build_config.yaml")
         config = self.config_manager.load()
         self._sync_workspace(config)
 
@@ -227,8 +228,10 @@ class FFmpegBuilderApp:
         ``IdentityError`` when prerequisites or reuse are unsafe, leaving saved
         state and artifacts untouched.
         """
-        if config.cuda_build_mode == "required" and not (
-            config.gpl_enabled or config.allow_nonfree_cuda
+        if (
+            config.enable_hardware_acceleration
+            and config.cuda_build_mode == "required"
+            and not (config.gpl_enabled or config.allow_nonfree_cuda)
         ):
             raise BuildError(
                 "CUDA",
@@ -269,9 +272,13 @@ class FFmpegBuilderApp:
                 config.ffmpeg_version, registry, store
             )
             cuda_inputs: Optional[ResolvedCudaBuildHostInputs] = None
-            cuda_enabled = config.cuda_build_mode != "disabled" and (
-                config.cuda_build_mode == "required"
-                or (config.enable_libvmaf and config.enable_libvmaf_cuda)
+            cuda_enabled = (
+                config.enable_hardware_acceleration
+                and config.cuda_build_mode != "disabled"
+                and (
+                    config.cuda_build_mode == "required"
+                    or (config.enable_libvmaf and config.enable_libvmaf_cuda)
+                )
             )
             if cuda_enabled:
                 cuda_inputs = resolve_wsl_mingw_cuda_inputs(config, registry, store, required=True)
@@ -293,7 +300,7 @@ class FFmpegBuilderApp:
                     cuda_inputs = validate_cuda_ptx_compatibility(cuda_inputs, target_state)
 
             vulkan: Optional[ResolvedVulkanSdk] = None
-            if config.enable_libplacebo_vulkan:
+            if config.enable_hardware_acceleration and config.enable_libplacebo_vulkan:
                 vulkan = resolve_wsl_mingw_vulkan_sdk(
                     config,
                     required=True,
@@ -506,7 +513,7 @@ class FFmpegBuilderApp:
         """Resolve and probe one NVCC profile before trusting saved consumers."""
         pi = self.platform_detector.platform_info
         pi.cuda_build_host_inputs = None
-        if config.cuda_build_mode == "disabled":
+        if not config.enable_hardware_acceleration or config.cuda_build_mode == "disabled":
             pi.cuda_nvcc_supported = False
             pi.libvmaf_cuda_supported = False
             pi.libvmaf_cuda_reason = "CUDA compilation disabled by configuration."
@@ -807,6 +814,7 @@ class FFmpegBuilderApp:
             full_static=config.full_static,
             ffmpeg_version=config.ffmpeg_version,
             toolchain_checker=self._component_toolchain_checker(config),
+            enable_hardware_acceleration=config.enable_hardware_acceleration,
         )
 
     def _get_component_selection(self, config: BuildConfig) -> ComponentSelection:
@@ -825,6 +833,7 @@ class FFmpegBuilderApp:
             target_backend=TARGET_BACKEND_CROSS_MINGW,
             host_tool_checker=self._host_tool_available,
             target_platform_info=self._cross_target_capabilities(config),
+            enable_hardware_acceleration=config.enable_hardware_acceleration,
         )
 
     def _cross_target_capabilities(self, config: BuildConfig) -> Optional[Any]:
@@ -832,16 +841,23 @@ class FFmpegBuilderApp:
         state = self.windows_target_state
         if state is None:
             return None
-        cuda_enabled = config.cuda_build_mode != "disabled" and (
-            config.cuda_build_mode == "required"
-            or (config.enable_libvmaf and config.enable_libvmaf_cuda)
+        cuda_enabled = (
+            config.enable_hardware_acceleration
+            and config.cuda_build_mode != "disabled"
+            and (
+                config.cuda_build_mode == "required"
+                or (config.enable_libvmaf and config.enable_libvmaf_cuda)
+            )
         )
         nvidia_api = next((value for value in state.nvidia.api.values() if value), None)
-        opencl_present = state.opencl.state == FeatureState.PRESENT
+        opencl_present = (
+            config.enable_hardware_acceleration and state.opencl.state == FeatureState.PRESENT
+        )
         return SimpleNamespace(
             cuda_available=cuda_enabled,
-            nvenc_api_version=nvidia_api,
-            vulkan_available=config.enable_libplacebo_vulkan,
+            nvenc_api_version=nvidia_api if config.enable_hardware_acceleration else None,
+            vulkan_available=config.enable_hardware_acceleration
+            and config.enable_libplacebo_vulkan,
             amf_available=False,
             opencl_available=opencl_present,
             opencl_runtime_available=opencl_present,

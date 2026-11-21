@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 from ...build_types import BuildError
 from ...state import ComponentStatus
 from .cross_install import promote_staged
-from .glslang_sources import prepare_glslang_sources
+from .glslang_sources import install_spirv_headers, prepare_glslang_sources
 
 if TYPE_CHECKING:
     from ...builder import FFmpegBuilder
@@ -95,6 +95,7 @@ def build_glslang(builder: FFmpegBuilder, component: Component, source_dir: Path
                 builder.target_prefix,
                 builder,
             )
+        install_spirv_headers(builder)
         return
 
     result, log_file = builder.executor.execute_with_log(

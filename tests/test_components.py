@@ -1,11 +1,12 @@
 """Tests for Component registry, filtering, and URL helpers."""
 
 from importlib.resources import files
+from types import SimpleNamespace
 
 import pytest
 import yaml
 
-from ffmpeg_builder.config import TARGET_BACKEND_CROSS_MINGW
+from ffmpeg_builder.config import BuildConfig, TARGET_BACKEND_CROSS_MINGW
 from ffmpeg_builder.components import (
     BuildRole,
     BuildSystem,
@@ -163,6 +164,105 @@ class TestComponentRegistry:
     @pytest.fixture(autouse=True)
     def _registry(self):
         self.registry = ComponentRegistry()
+
+    def test_application_forwards_software_only_policy(self, mock_tools, mock_platform_info):
+        from ffmpeg_builder.app import FFmpegBuilderApp
+        from ffmpeg_builder.windows_probe import FeatureState
+
+        app = FFmpegBuilderApp.__new__(FFmpegBuilderApp)
+        app.registry = self.registry
+        app.tools = mock_tools
+        app.platform_info = mock_platform_info
+        app.platform_detector = SimpleNamespace(get_platform_name=lambda: "linux")
+        app._component_toolchain_checker = lambda config: None
+        app._host_tool_available = lambda tool: True
+        app.windows_target_state = SimpleNamespace(
+            nvidia=SimpleNamespace(api={"nvenc": "13.0"}),
+            opencl=SimpleNamespace(state=FeatureState.PRESENT),
+        )
+        cfg = BuildConfig(
+            gpl_enabled=True,
+            target_backend=TARGET_BACKEND_CROSS_MINGW,
+            enable_hardware_acceleration=False,
+        )
+        capabilities = app._cross_target_capabilities(cfg)
+        assert not capabilities.cuda_available
+        assert capabilities.nvenc_api_version is None
+        assert not capabilities.opencl_available
+        assert not capabilities.vulkan_available
+        selection = app._get_component_selection(cfg)
+        assert not selection.target_inputs
+        assert all(
+            component.category != ComponentCategory.HW_ACCEL
+            for component in app._get_buildable_components(cfg)
+        )
+        cfg.target_backend = "native"
+        assert all(
+            component.category != ComponentCategory.HW_ACCEL
+            for component in app._get_buildable_components(cfg)
+        )
+
+    def test_software_only_selection_keeps_software_stack(self, mock_tools, mock_platform_info):
+        kwargs = dict(
+            gpl_enabled=True,
+            platform="linux",
+            tools=mock_tools,
+            platform_info=mock_platform_info,
+        )
+        native = self.registry.get_buildable(**kwargs, enable_hardware_acceleration=False)
+        cross = self.registry.get_buildable_selection(
+            **kwargs, enable_hardware_acceleration=False, host_tool_checker=lambda name: True
+        )
+        for selected in (native, cross.target_components + cross.mixed_components):
+            names = {component.name for component in selected}
+            assert {"x264", "x265", "libvmaf", "ffmpeg"} <= names
+            assert all(component.category != ComponentCategory.HW_ACCEL for component in selected)
+        assert not cross.target_inputs
+        assert not cross.conditional_components
+        assert {component.name for component in cross.skipped_by_feature} >= {
+            "nv-codec",
+            "libplacebo",
+            "opencl-headers",
+            "vulkan-headers",
+        }
+
+    @pytest.mark.parametrize("platform", ["linux", "darwin", "windows"])
+    @pytest.mark.parametrize("version", ["8.1", "9.0"])
+    def test_software_only_ffmpeg_flags_override_stale_gpu_state(
+        self, platform, version, mock_platform_info
+    ):
+        flags = self.registry.get_ffmpeg_configure_flags(
+            [component.name for component in self.registry.get_all()],
+            True,
+            platform,
+            mock_platform_info,
+            version,
+            enable_hardware_acceleration=False,
+        )
+        assert {"--enable-libx264", "--enable-libx265", "--enable-libvmaf"} <= set(flags)
+        for feature in (
+            "hwaccels",
+            "cuda",
+            "cuda-nvcc",
+            "ffnvcodec",
+            "nvenc",
+            "vulkan",
+            "libplacebo",
+            "opencl",
+            "amf",
+            "libvpl",
+            "vaapi",
+            "videotoolbox",
+            "d3d11va",
+            "d3d12va",
+            "dxva2",
+            "vdpau",
+            "mediafoundation",
+        ):
+            assert f"--enable-{feature}" not in flags
+            assert f"--disable-{feature}" in flags
+        assert ("--disable-omx" in flags) == (version == "8.1")
+        assert "--disable-autodetect" not in flags
 
     def test_get_all_returns_list(self):
         all_c = self.registry.get_all()

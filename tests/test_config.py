@@ -58,6 +58,28 @@ class TestBuildConfigDefaults:
 class TestBuildConfigRoundTrip:
     """Test to_dict / from_dict round-trip."""
 
+    def test_software_only_overrides_gpu_options_and_roundtrips(self):
+        cfg = BuildConfig.from_dict(
+            {
+                "gpl_enabled": True,
+                "enable_hardware_acceleration": False,
+                "cuda_build_mode": "required",
+                "enable_libvmaf_cuda": True,
+                "enable_libplacebo_vulkan": True,
+            }
+        )
+        assert cfg.gpl_enabled and cfg.enable_libvmaf
+        assert cfg.cuda_build_mode == "disabled"
+        assert not cfg.enable_libvmaf_cuda
+        assert not cfg.enable_libplacebo_vulkan
+        assert BuildConfig.from_dict(cfg.to_dict()) == cfg
+        assert BuildConfig.from_dict({}).enable_hardware_acceleration
+
+    @pytest.mark.parametrize("value", ["false", 0, None])
+    def test_hardware_switch_requires_boolean(self, value):
+        with pytest.raises(ValueError, match="enable_hardware_acceleration must be a boolean"):
+            BuildConfig.from_dict({"enable_hardware_acceleration": value})
+
     def test_roundtrip_defaults(self, sample_config_dict):
         cfg = BuildConfig.from_dict(sample_config_dict)
         out = cfg.to_dict()

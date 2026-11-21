@@ -749,6 +749,32 @@ def test_build_cargo_installs_pinned_cargo_c(tmp_path: Path, monkeypatch: pytest
     assert commands[1][:2] == ["cargo", "cinstall"]
 
 
+def test_cross_cargo_cache_reuses_downloads_without_host_configuration(tmp_path):
+    from ffmpeg_builder.builders.base import _seed_cross_cargo_cache
+
+    cache, local = tmp_path / "cache", tmp_path / "isolated"
+    for relative in (
+        "registry/cache/crates.io/dependency.crate",
+        "registry/index/crates.io/.cache/de/pe/dependency",
+        "git/db/dependency/HEAD",
+        "config.toml",
+        "credentials.toml",
+        "bin/cargo",
+    ):
+        path = cache / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(relative)
+    _seed_cross_cargo_cache(local, cache)
+    assert (local / "registry/cache/crates.io/dependency.crate").is_file()
+    assert (local / "registry/index/crates.io/.cache/de/pe/dependency").is_file()
+    assert (local / "git/db/dependency/HEAD").is_file()
+    assert not (local / "config.toml").exists()
+    assert not (local / "credentials.toml").exists()
+    assert not (local / "bin").exists()
+    (local / "registry/cache/crates.io/dependency.crate").unlink()
+    assert (cache / "registry/cache/crates.io/dependency.crate").is_file()
+
+
 def test_build_cargo_cross_fails_closed_when_cargo_c_is_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -1035,6 +1061,57 @@ def test_build_ffmpeg_omits_libplacebo_without_vulkan(
 
     assert "--enable-vulkan" in commands[0]
     assert "--enable-libplacebo" not in commands[0]
+
+
+@pytest.mark.parametrize("platform", ["linux", "darwin", "windows"])
+def test_build_ffmpeg_software_only_ignores_detected_and_saved_hardware(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform: str
+):
+    builder = _make_libplacebo_builder(tmp_path, platform=platform)
+    builder.config = BuildConfig(gpl_enabled=True, enable_hardware_acceleration=False)
+    info = builder.platform_detector.platform_info
+    for name in ("cuda_available", "vulkan_available", "qsv_available", "vaapi_available"):
+        setattr(info, name, True)
+    info.nvenc_api_version = "13.0"
+    info.cuda_build_host_inputs = object()
+    for name in ("nv-codec", "libplacebo", "vulkan-headers", "onevpl", "libvmaf", "x264"):
+        builder.state_manager.mark_component_status(name, ComponentStatus.COMPLETED)
+    source_dir = tmp_path / "ffmpeg"
+    source_dir.mkdir()
+    commands = []
+    monkeypatch.setattr(
+        FFmpegBuilder,
+        "_run_step",
+        lambda self, component, status, detail, error, command, *args: commands.append(command),
+    )
+    monkeypatch.setattr(
+        FFmpegBuilder,
+        "_patch_libplacebo_pc",
+        lambda self: pytest.fail("software-only builds must not inspect libplacebo"),
+    )
+
+    builder.build_ffmpeg(_make_patch_component("ffmpeg"), source_dir)
+
+    flags = commands[0]
+    assert "--enable-gpl" in flags
+    assert "--enable-libvmaf" in flags
+    assert "--enable-libx264" in flags
+    assert not any(flag.startswith("--nvcc=") for flag in flags)
+    for name in (
+        "cuda-nvcc",
+        "ffnvcodec",
+        "cuvid",
+        "nvenc",
+        "nvdec",
+        "libvpl",
+        "vaapi",
+        "videotoolbox",
+        "vulkan",
+        "libplacebo",
+        "opencl",
+    ):
+        assert f"--enable-{name}" not in flags
+        assert f"--disable-{name}" in flags
 
 
 def test_build_libplacebo_merges_windows_pkg_config_path_and_patches_glslang(

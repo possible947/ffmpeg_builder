@@ -1718,7 +1718,10 @@ def _run_cmake_probe(environment: CrossEnvironment, scratch: Path) -> dict[str, 
     _inspect_artifact(environment.target_tools, cpp_exe, executable=True)
     compile_commands = json.loads((build / "compile_commands.json").read_text(encoding="utf-8"))
     if len(compile_commands) != 2 or any(
-        entry["command"].count("-march=native") != 1 or entry["command"].count("-mtune=native") != 1
+        any(
+            shlex.split(entry["command"]).count(flag) != int(flag in environment.cpu_tuning_flags)
+            for flag in CPU_TUNING_FLAGS
+        )
         for entry in compile_commands
     ):
         raise _build_error(
@@ -1804,7 +1807,10 @@ def _run_meson_probe(environment: CrossEnvironment, scratch: Path) -> dict[str, 
         [environment.host_tools["ninja"], "-C", str(build), "-t", "commands"], env=env
     ).stdout.splitlines()
     if len(command_lines) != 2 or any(
-        line.count("-march=native") != 1 or line.count("-mtune=native") != 1
+        any(
+            shlex.split(line).count(flag) != int(flag in environment.cpu_tuning_flags)
+            for flag in CPU_TUNING_FLAGS
+        )
         for line in command_lines
     ):
         raise _build_error(
@@ -2040,8 +2046,11 @@ def _run_role_environment_probe(environment: CrossEnvironment) -> dict[str, Any]
     for label, projected in target_environments.items():
         if (
             projected.get("CC") != str(environment.target_tools.cc)
-            or projected.get("CFLAGS", "").split().count("-march=native") != 1
-            or projected.get("CFLAGS", "").split().count("-mtune=native") != 1
+            or any(
+                shlex.split(projected.get("CFLAGS", "")).count(flag)
+                != int(flag in environment.cpu_tuning_flags)
+                for flag in CPU_TUNING_FLAGS
+            )
             or projected.get("PKG_CONFIG") != str(environment.pkg_config_wrapper)
         ):
             raise _build_error(

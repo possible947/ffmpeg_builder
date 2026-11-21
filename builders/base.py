@@ -392,6 +392,16 @@ def get_rustc_version(
     return (int(match.group(1)), int(match.group(2)), int(match.group(3)))
 
 
+def _seed_cross_cargo_cache(local_home: Path, cache_home: Path) -> None:
+    """Reuse ordinary downloads without importing host Cargo configuration."""
+    if local_home.resolve() == cache_home.resolve():
+        return
+    for relative in ("registry/cache", "registry/index", "git/db"):
+        source = cache_home / relative
+        if source.is_dir():
+            shutil.copytree(source, local_home / relative, dirs_exist_ok=True)
+
+
 def build_cargo(context: ComponentBuildContext, component: "Component", source_dir: Path) -> None:
     """Build component with Cargo."""
     env = context.builder.get_build_env(component)
@@ -501,6 +511,8 @@ def build_cargo(context: ComponentBuildContext, component: "Component", source_d
 
     cross_env = context.builder.platform_context.cross_environment
     assert cross_env is not None
+    cache_home = Path(cross_env.host_environment.get("CARGO_HOME", str(Path.home() / ".cargo")))
+    _seed_cross_cargo_cache(Path(env["CARGO_HOME"]), cache_home)
     prefix = context.builder._component_prefix(component)
     with tempfile.TemporaryDirectory(
         prefix="cargo-install-", dir=cross_env.paths.generated_files_root

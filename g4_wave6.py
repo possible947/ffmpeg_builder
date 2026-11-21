@@ -130,7 +130,11 @@ def validate_prior_manifests(
 ) -> int:
     """Verify prior-wave hashes without treating this wave's manifest as prior."""
     paths: set[str] = set()
-    for path in sorted(workspace.glob("g4-wave*-acceptance.json")):
+    manifests = [
+        *workspace.glob("g4-wave*-acceptance.json"),
+        *workspace.glob("cross-*-acceptance.json"),
+    ]
+    for path in sorted(manifests):
         if path.name in (current_wave, "g4-wave2-openmp-acceptance.json"):
             continue
         try:

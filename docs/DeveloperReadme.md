@@ -17,6 +17,10 @@ the relocated bundle contains `ffmpeg.exe`, `ffprobe.exe`, and the four
 hash-verified LLVM-MinGW runtime DLLs, while Windows/UCRT, GPU-driver,
 Vulkan/OpenCL loader and vendor runtimes, and optional `VSScript.dll` remain
 external. The accepted GPL/nonfree bundle is internal and nonredistributable.
+G7 CLI also passed: separate clean full BASE/PREFERRED FFmpeg 9.0 builds
+automatically constructed all 40/46 selected components, passed the appropriate
+runtime/package checks, and reused all components on identical invocations.
+Windows TUI integration remains a separate, not-yet-completed task.
 Wave 1 accepted seven Windows target dependencies;
 Wave 2 accepted eleven more through production Autotools and CMake paths with
 the mandatory primary profile (`native_build=true`, `openmp=true`), and Wave
@@ -887,9 +891,11 @@ Built with the `rich` library. Static screens use `Table`, `Panel`, and `Prompt`
 The Windows build route is **WSL-Mingw**: a Windows host runs a WSL2 Ubuntu
 build environment, which uses the LLVM-MinGW/UCRT cross toolchain to produce
 a Windows FFmpeg target. **WSL-Mingw** is the user-facing name; the backend
-identifier is **`linux-cross-mingw`**. G1–G5 are PASS on the recorded
-physical target, and G6 release
-packaging has not started. The gate history, verified results and open issues are in
+identifier is **`linux-cross-mingw`**. G1–G6 and G7 CLI are PASS on the recorded
+physical target, including separate clean BASE/PREFERRED builds, controlled
+relocated release packaging and identical-run reuse. Windows TUI integration
+has not yet been completed.
+The gate history, verified results and open issues are in
 [`windows_build_strategy.md`](windows_build_strategy.md), which is the
 authoritative plan. The previous MSYS2-based Windows build path was replaced
 by this route.
@@ -931,9 +937,28 @@ Implementer rules:
   G2.6 prefix, generates the target-only pkg-config wrapper, CMake toolchain,
   Meson cross file and Autotools projection, and runs isolated configure/link
   acceptance. The G3 test itself does not build components; the current normal
-  cross route continues to G4 final integration with the already accepted
-  component stack. G4 software acceptance is distinct from G5 hardware tests
-  and subsequent packaging.
+  headless cross route continues through `cross_build.run_cross_build`, which
+  dependency-orders the effective selection and builds every target component.
+  `cross_component_contracts` adapts the accepted output validators without
+  invoking historical wave runners. Normal component evidence lives in
+  `cross-components-acceptance.json`; G4 final accepts that normal evidence
+  instead of requiring manually accumulated wave manifests.
+  G7 reuses G5 runtime helpers for profile-specific representative checks and
+  G6 for runtime ownership, deterministic packaging and controlled relocation.
+  TUI integration remains a separate, uncompleted task.
+- **Headless profiles:** `--config PATH` is loaded before platform discovery;
+  `--workspace PATH` keeps profile build state independent without rewriting
+  the user's ignored `build_config.yaml`. `enable_hardware_acceleration`
+  defaults to true; false excludes hardware components and explicitly
+  disables FFmpeg hardware APIs while preserving the full configured software
+  stack. BASE disables native tuning; PREFERRED retains the reference policy.
+  Both G7 acceptance profiles build FFmpeg 9.0 with GPL/nonfree-capable software.
+- **Cargo caches are not build artifacts:** Windows Cargo uses identity-local
+  configuration and target outputs. The rav1e builder copies ordinary registry
+  download/index and Git database caches into its isolated Cargo home, never
+  host configuration, credentials or binaries. Prepared pinned `cargo-cinstall`
+  must be on the WSL host PATH; neither network provisioning nor an older
+  ambient cargo-c substitutes for it.
 - **Windows runtime probing goes through Windows interop** (fresh probe of CPU
   features, GPU, drivers, Vulkan/OpenCL runtimes), never through WSL's Linux
   view. Drivers/runtimes (NVIDIA driver, Windows Vulkan loader/ICD, OpenCL

@@ -2,8 +2,8 @@
 
 Interactive Python-based build system for FFmpeg 8.1 (default) and 9.0 on
 macOS and Linux. Windows builds follow the **WSL-Mingw** route (WSL2 Ubuntu →
-LLVM-MinGW/UCRT cross toolchain). G1–G6 are PASS on the accepted physical
-Windows target — see
+LLVM-MinGW/UCRT cross toolchain). G1–G6 and **G7 CLI are PASS** on the accepted
+physical Windows target; Windows TUI integration is still separate — see
 [Windows (WSL-Mingw)](#windows-wsl-mingw).
 
 FFmpeg Builder replaces the traditional bash `build-ffmpeg` script with a modern, interactive interface featuring real-time progress tracking, configuration management, platform-aware hardware acceleration detection, and resumable builds.
@@ -35,7 +35,7 @@ guide.
 - **~60 Components** — All codecs, libraries, and tools built from source in correct dependency order
 - **macOS Support** — Macports clang detection, OpenMP, VideoToolbox, glibtool handling
 - **Linux Support** — GCC/Clang detection, C11/C++17 standards, host-tuned (`-march=native -mtune=native -fopenmp`) builds
-- **Windows (WSL-Mingw) — G1–G6 PASS** — FFmpeg 9.0 passed production integration, consumer-driven hardware acceptance and relocated internal-bundle runtime acceptance on the recorded physical Windows target
+- **Windows (WSL-Mingw) — G7 CLI PASS** — FFmpeg 9.0 passed separate clean full BASE/PREFERRED builds, runtime/package acceptance and identical-run reuse on the recorded physical Windows target; Windows TUI integration remains separate
 
 ## Requirements
 
@@ -156,7 +156,11 @@ Or use the environment check script:
 
 ## Windows (WSL-Mingw)
 
-> **Status: G1–G6 PASS.** Production FFmpeg 9.0
+> **Status: G1–G6 and G7 CLI PASS.** Separate clean full BASE (40 components)
+> and PREFERRED (46 components) FFmpeg 9.0 builds completed through the normal
+> headless workflow without historical wave state. Both passed runtime,
+> relocated packaging and identical-run reuse. Windows TUI integration is
+> **not yet completed**. Production FFmpeg 9.0
 > integrated the configured Windows target stack, and `ffmpeg.exe` and
 > `ffprobe.exe` passed software and representative CUDA/libvmaf, Vulkan and
 > OpenCL operations from a relocated bundle under a controlled PATH on the
@@ -494,6 +498,7 @@ cuda_build_mode: auto
 cuda_compute_capability: null  # auto-detect; or set e.g. "70"
 allow_nonfree_cuda: false
 enable_libplacebo_vulkan: false
+enable_hardware_acceleration: true
 target_backend: native
 # Optional SDK roots (vulkan is used by WSL-Mingw preparation):
 # target_backend: linux-cross-mingw
@@ -516,9 +521,38 @@ macos:
 
 ```
 
-There is no supported `windows:` configuration block. Selecting
-`linux-cross-mingw` routes the normal build to final G4 integration against
-the previously accepted, identity-matched component stack.
+Selecting `linux-cross-mingw` in the headless workflow builds the selected
+Windows dependencies automatically before FFmpeg, runtime acceptance and
+packaging. Historical G4 wave commands are not prerequisites. Legacy MSYS2
+settings are not used by this backend; `windows.target_override` and
+`windows.probe_timeout_seconds` configure physical-target probing.
+
+Headless profiles can be kept separate from the local user configuration:
+
+```bash
+# Required prepared host cargo-c (pinned version in builders/base.py):
+export PATH="$HOME/.cargo/bin:$PATH"
+python scripts/run_build.py --config /path/to/profile.yaml --workspace workspace_windows
+# Identical command validates and reuses matching accepted component outputs.
+python scripts/run_build.py --config /path/to/profile.yaml --workspace workspace_windows
+```
+
+For a software-only Windows profile, use FFmpeg 9.0, `gpl_enabled: true`,
+`make_release: true`, `native_build: false` and
+`enable_hardware_acceleration: false`. The latter disables GPU components
+and FFmpeg hardware APIs, normalizes CUDA/Vulkan settings off, and preserves
+the normal software codec/library policy, software libvmaf and OpenMP.
+This is the G7 **BASE** profile, not the project's literal defaults.
+**PREFERRED** instead preserves the maintainer's full host-tuned reference
+configuration with only `target_backend` changed to `linux-cross-mingw`.
+Both GPL/nonfree-capable bundles remain internal and nonredistributable.
+
+The normal workflow records component/output hashes, FFmpeg acceptance,
+representative runtime results and G6-style deterministic packaging/relocation
+under its identity workspace. `--no-release` skips packaging, not runtime
+acceptance. A clean acceptance removes only that profile's generated workspace;
+keep toolchains, caches and external SDKs. TUI integration is separate and is
+not implemented by G7 CLI work.
 
 Supported `ffmpeg_version` values are `8.1` (the default) and `9.0`. Each version
 uses a separately verified source archive checksum. Add its archive to the local

@@ -47,6 +47,16 @@ def build_ffmpeg(builder: FFmpegBuilder, component: Component, source_dir: Path)
         for name, state in builder.state_manager.get().components.items()
         if state.status in (ComponentStatus.COMPLETED, ComponentStatus.SYSTEM)
     ]
+    hardware_enabled = builder.config.enable_hardware_acceleration
+    if not hardware_enabled:
+        from ...components import ComponentCategory
+
+        hardware_components = {
+            entry.name
+            for entry in builder.registry.get_all()
+            if entry.category == ComponentCategory.HW_ACCEL
+        }
+        built_components = [name for name in built_components if name not in hardware_components]
 
     # Resume builds may skip libplacebo rebuild. Re-apply pkg-config
     # normalization so FFmpeg's configure probe remains stable.
@@ -158,9 +168,11 @@ def build_ffmpeg(builder: FFmpegBuilder, component: Component, source_dir: Path)
         builder.platform_detector.platform_info,
         builder.config.ffmpeg_version,
         builder.config.target_backend,
+        hardware_enabled,
     )
     if (
         cross is not None
+        and hardware_enabled
         and "libplacebo" in built_components
         and builder.config.enable_libplacebo_vulkan
         and "--enable-vulkan" not in configure_flags
@@ -208,7 +220,7 @@ def build_ffmpeg(builder: FFmpegBuilder, component: Component, source_dir: Path)
                 f"--bindir={cross.paths.workspace_root / 'bin'}",
             ]
         )
-        if builder.config.enable_libplacebo_vulkan:
+        if hardware_enabled and builder.config.enable_libplacebo_vulkan:
             shader_compiler = cross.target_interfaces.host_shader_tools.get("shader_compiler")
             if not shader_compiler:
                 raise BuildError(component.name, "Verified host Vulkan shader compiler is missing.")
@@ -231,17 +243,22 @@ def build_ffmpeg(builder: FFmpegBuilder, component: Component, source_dir: Path)
     cuda_available_for_build = inputs is not None or (
         cross_cuda is not None and cross_cuda.nvcc is not None
     )
-    use_nvcc = inputs is not None and (
-        builder.config.gpl_enabled or builder.config.allow_nonfree_cuda
+    use_nvcc = (
+        hardware_enabled
+        and inputs is not None
+        and (builder.config.gpl_enabled or builder.config.allow_nonfree_cuda)
     )
     if cross is not None:
-        use_nvcc = cuda_available_for_build and (
-            builder.config.gpl_enabled or builder.config.allow_nonfree_cuda
+        use_nvcc = (
+            hardware_enabled
+            and cuda_available_for_build
+            and (builder.config.gpl_enabled or builder.config.allow_nonfree_cuda)
         )
     configure_args.append("--disable-cuda-llvm")
     # CUDA compilation and hardware encode/decode are separate capabilities.
-    if builder.platform_detector.platform_info.cuda_available or getattr(
-        platform_info, "nvenc_api_version", None
+    if hardware_enabled and (
+        builder.platform_detector.platform_info.cuda_available
+        or getattr(platform_info, "nvenc_api_version", None)
     ):
         # cuda-nvcc requires MSVC cl.exe on Windows which is not available
         # in the MSYS2 UCRT64 toolchain.  Hardware encode/decode APIs
@@ -291,13 +308,14 @@ def build_ffmpeg(builder: FFmpegBuilder, component: Component, source_dir: Path)
     # VAAPI support (Linux-only policy in current implementation).
     if (
         cross is None
+        and hardware_enabled
         and builder.platform == "linux"
         and builder.platform_detector.platform_info.vaapi_available
         and not builder.config.full_static
     ):
         configure_args.append("--enable-vaapi")
 
-    qsv_available = builder.platform_detector.platform_info.qsv_available
+    qsv_available = hardware_enabled and builder.platform_detector.platform_info.qsv_available
     windows_ucrt64_qsv = builder._is_windows_ucrt64_backend() and qsv_available
 
     # Intel QSV support.

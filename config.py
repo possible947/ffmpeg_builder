@@ -97,6 +97,9 @@ class BuildConfig:
     macos: MacOSConfig = field(default_factory=MacOSConfig)
     linux: LinuxConfig = field(default_factory=LinuxConfig)
     windows: WindowsConfig = field(default_factory=WindowsConfig)
+    # Software-only builds retain GPL codecs and libvmaf, but never require
+    # GPU SDKs or enable hardware APIs (including FFmpeg autodetection).
+    enable_hardware_acceleration: bool = True
 
     def __post_init__(self) -> None:
         """Validate settings that have a fixed supported-value set."""
@@ -112,6 +115,12 @@ class BuildConfig:
             )
         if self.cuda_build_mode not in ("auto", "required", "disabled"):
             raise ValueError("cuda_build_mode must be auto, required, or disabled")
+        if not isinstance(self.enable_hardware_acceleration, bool):
+            raise ValueError("enable_hardware_acceleration must be a boolean")
+        if not self.enable_hardware_acceleration:
+            self.cuda_build_mode = "disabled"
+            self.enable_libvmaf_cuda = False
+            self.enable_libplacebo_vulkan = False
 
     @property
     def workspace_dir_name(self) -> str:

@@ -53,6 +53,7 @@ from ffmpeg_builder.g4_wave9 import run_g4_wave9  # noqa: E402
 from ffmpeg_builder.g4_final import run_g4_final  # noqa: E402
 from ffmpeg_builder.g6 import run_g6  # noqa: E402
 from ffmpeg_builder.g5 import run_g5  # noqa: E402
+from ffmpeg_builder.cross_build import run_cross_build  # noqa: E402
 from ffmpeg_builder.platform_detect import PlatformDetector  # noqa: E402
 from ffmpeg_builder.cuda_prerequisites import (  # noqa: E402
     cuda_nv_codec_identity,
@@ -70,6 +71,16 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument(
+        "--config",
+        type=Path,
+        help="Read configuration from this file without rewriting build_config.yaml.",
+    )
+    parser.add_argument(
+        "--workspace",
+        type=Path,
+        help="Use a separate build workspace (including isolated target state).",
+    )
+    parser.add_argument(
         "--resume",
         action="store_true",
         help="Resume from the previous build state instead of starting fresh.",
@@ -83,7 +94,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         action="store_true",
         help=(
             "Validate the configured environment and show its plan; "
-            "cross builds stop after G4 Wave-0 selection."
+            "cross builds stop after target preparation and component selection."
         ),
     )
     parser.add_argument(
@@ -186,10 +197,7 @@ def describe_plan(app: FFmpegBuilderApp, config: BuildConfig) -> int:
 def run_build(app: FFmpegBuilderApp, config: BuildConfig, resume: bool, no_release: bool) -> int:
     """Execute the build; return an exit code."""
     if getattr(config, "target_backend", "native") == TARGET_BACKEND_CROSS_MINGW:
-        result = run_g4_final(app, config)
-        if result == 0 and config.make_release and not no_release:
-            return run_g6(app, config)
-        return result
+        return run_cross_build(app, config, resume=resume, no_release=no_release)
     try:
         session = app.prepare_target(config, resume)
         all_components = app._get_buildable_components(config)
@@ -303,7 +311,7 @@ def run_build(app: FFmpegBuilderApp, config: BuildConfig, resume: bool, no_relea
 
 
 def dry_run_cross_backend(app: FFmpegBuilderApp, config: BuildConfig, resume: bool) -> int:
-    """Run G1-G3 preparation and report G4 Wave-0 selection without building."""
+    """Validate cross preparation and report the effective production selection."""
     try:
         session = app.prepare_target(config, resume)
         environment = app.prepare_cross_environment(config, session)
@@ -341,7 +349,7 @@ def dry_run_cross_backend(app: FFmpegBuilderApp, config: BuildConfig, resume: bo
     for component in selection.skipped_by_backend:
         print(f"  SKIPPED BY BACKEND {component.name}", flush=True)
     print(
-        "Stopped after G4 Wave-0 selection; no Wave-1 component was built.",
+        "Stopped after target selection; no production component was built.",
         flush=True,
     )
     return 0
@@ -431,7 +439,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         "9.0",
     ):
         raise SystemExit("G4 wave options are fixed to FFmpeg 9.0.")
-    app = FFmpegBuilderApp()
+    app_options = {}
+    if args.workspace is not None:
+        app_options["workspace"] = args.workspace
+    if args.config is not None:
+        app_options["config_path"] = args.config
+    app = FFmpegBuilderApp(**app_options)
     config = app.config_manager.get()
     if args.ffmpeg_version:
         config.ffmpeg_version = args.ffmpeg_version

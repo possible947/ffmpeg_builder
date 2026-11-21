@@ -629,6 +629,7 @@ class ComponentRegistry:
         full_static: bool = False,
         ffmpeg_version: str = "8.1",
         toolchain_checker: Optional[ToolchainChecker] = None,
+        enable_hardware_acceleration: bool = True,
     ) -> List[Component]:
         """Get list of components that should be built.
 
@@ -656,6 +657,7 @@ class ComponentRegistry:
             full_static: Whether this is a fully-static build.
             ffmpeg_version: FFmpeg target version to resolve.
             toolchain_checker: Optional per-component toolchain gate.
+            enable_hardware_acceleration: False excludes all hardware components.
 
         Returns:
             List of components to build.
@@ -669,6 +671,7 @@ class ComponentRegistry:
             )
             for comp in self._components
             if TARGET_BACKEND_NATIVE in comp.build_backends
+            if enable_hardware_acceleration or comp.category != ComponentCategory.HW_ACCEL
             if self._is_eligible(
                 comp, gpl_enabled, platform, tools, platform_info, disable_lv2, enable_libvmaf
             )
@@ -716,6 +719,7 @@ class ComponentRegistry:
         target_backend: str = TARGET_BACKEND_CROSS_MINGW,
         host_tool_checker: Optional[Callable[[str], bool]] = None,
         target_platform_info: Optional[Any] = None,
+        enable_hardware_acceleration: bool = True,
     ) -> ComponentSelection:
         """Select cross-build components without using WSL hardware as a gate.
 
@@ -740,7 +744,10 @@ class ComponentRegistry:
                     else component
                 )
             )
-            if self._feature_excludes(component, gpl_enabled, disable_lv2, enable_libvmaf):
+            if (
+                not enable_hardware_acceleration
+                and component.category == ComponentCategory.HW_ACCEL
+            ) or self._feature_excludes(component, gpl_enabled, disable_lv2, enable_libvmaf):
                 skipped_by_feature.append(selected)
                 continue
             if target_backend not in component.build_backends:
@@ -991,6 +998,7 @@ class ComponentRegistry:
         platform_info: Optional[Any] = None,
         ffmpeg_version: str = "8.1",
         target_backend: str = TARGET_BACKEND_NATIVE,
+        enable_hardware_acceleration: bool = True,
     ) -> List[str]:
         """Get FFmpeg configure flags based on built components.
 
@@ -1005,12 +1013,14 @@ class ComponentRegistry:
         flags = []
 
         for comp in self._components:
+            if not enable_hardware_acceleration and comp.category == ComponentCategory.HW_ACCEL:
+                continue
             if comp.name in built_components and comp.ffmpeg_configure_flag:
                 flags.extend(comp.ffmpeg_configure_flag.split())
             if comp.name in built_components:
                 flags.extend(comp.ffmpeg_configure_flags_by_version.get(ffmpeg_version, []))
 
-        if platform == "darwin":
+        if platform == "darwin" and enable_hardware_acceleration:
             flags.append("--enable-videotoolbox")
 
         opencl_components_built = (
@@ -1028,8 +1038,48 @@ class ComponentRegistry:
                 )
             )
 
-        if platform == "darwin" or opencl_components_built or opencl_system_ready:
+        if enable_hardware_acceleration and (
+            platform == "darwin" or opencl_components_built or opencl_system_ready
+        ):
             if "--enable-opencl" not in flags:
                 flags.append("--enable-opencl")
+
+        if not enable_hardware_acceleration:
+            # Disable APIs, not autodetection globally: software libraries and
+            # devices must retain their normal discovery behavior.
+            hardware_features = (
+                "hwaccels",
+                "amf",
+                "audiotoolbox",
+                "cuda",
+                "cuda-llvm",
+                "cuda-nvcc",
+                "cuda-sdk",
+                "cuvid",
+                "d3d11va",
+                "d3d12va",
+                "dxva2",
+                "ffnvcodec",
+                "libdrm",
+                "libmfx",
+                "libnpp",
+                "libplacebo",
+                "libvpl",
+                "mediacodec",
+                "mediafoundation",
+                "mmal",
+                "nvdec",
+                "nvenc",
+                "opencl",
+                "rkmpp",
+                "v4l2-m2m",
+                "vaapi",
+                "vdpau",
+                "videotoolbox",
+                "vulkan",
+            )
+            flags.extend(f"--disable-{feature}" for feature in hardware_features)
+            if ffmpeg_version == "8.1":
+                flags.append("--disable-omx")
 
         return flags

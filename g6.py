@@ -23,11 +23,15 @@ from .g5 import (
     _windows_path,
     parse_opencl_listing,
     pending_features,
+    profile_runtime,
     resolve_g5_environment,
     stage_g4,
     validate_framemd5,
     verify_g4,
+    verify_production_outputs,
+    verify_stage,
 )
+from .build_identity import runtime_identity
 from .windows_probe import WindowsInterop
 
 
@@ -86,7 +90,12 @@ def _external_runtime_prerequisites(
             )
 
     feature_status = {item["feature"]: item["status"] for item in g5_evidence["features"]}
-    if feature_status.get("h264_nvenc") == "PASS" or feature_status.get("hevc_nvenc") == "PASS":
+    configure_flags = set(g4_manifest.get("configure_flags", []))
+    if (
+        "--enable-nvenc" in configure_flags
+        or feature_status.get("h264_nvenc") == "PASS"
+        or feature_status.get("hevc_nvenc") == "PASS"
+    ):
         add(
             "nvEncodeAPI64.dll",
             "external-runtime-prerequisite",
@@ -94,7 +103,8 @@ def _external_runtime_prerequisites(
             "NVENC",
         )
     if (
-        feature_status.get("h264_cuvid_decode") == "PASS"
+        "--enable-cuvid" in configure_flags
+        or feature_status.get("h264_cuvid_decode") == "PASS"
         or feature_status.get("hevc_cuvid_decode") == "PASS"
     ):
         add(
@@ -155,7 +165,16 @@ def _powershell_array(values: list[str]) -> str:
     return "@(" + ",".join("'" + value.replace("'", "''") + "'" for value in values) + ")"
 
 
-def _run_relocated_smoke(bundle: Path, work: Path, expected_device: str) -> dict[str, Any]:
+def _run_relocated_smoke(
+    bundle: Path,
+    work: Path,
+    expected_device: str,
+    *,
+    config: BuildConfig | None = None,
+    target: Any = None,
+) -> dict[str, Any]:
+    if config is not None:
+        return profile_runtime(config, target, bundle, work, WindowsInterop())
     work.mkdir(parents=True, exist_ok=False)
     bundle_windows = _windows_path(bundle)
     work_windows = _windows_path(work)
@@ -285,18 +304,79 @@ Write-Output (ConvertTo-Json -InputObject $tests -Compress -Depth 4)
     }
 
 
-def run_g6(app: Any, config: BuildConfig) -> int:
-    """Package verified G4/G5 outputs and accept their relocated Windows runtime."""
+def run_g6(
+    app: Any,
+    config: BuildConfig,
+    *,
+    production_evidence: Path | None = None,
+    session: Any = None,
+    environment: Any = None,
+    runtime_only: bool = False,
+) -> int:
+    """Package G4/G5 outputs, or normal-workflow profile acceptance when supplied."""
+    gate = "G7" if production_evidence is not None else "G6"
+    if runtime_only and production_evidence is None:
+        raise ValueError("Runtime-only acceptance requires production evidence.")
     if config.target_backend != TARGET_BACKEND_CROSS_MINGW or config.ffmpeg_version != "9.0":
-        print("BLOCKED: G6 requires the accepted FFmpeg 9.0 linux-cross-mingw target.", flush=True)
+        print(
+            f"BLOCKED: {gate} requires the accepted FFmpeg 9.0 linux-cross-mingw target.",
+            flush=True,
+        )
         return 2
     builder: FFmpegBuilder | None = None
     try:
-        session = app.prepare_target(config, resume=True)
-        cross = app.prepare_cross_environment(config, session)
+        session = session if session is not None else app.prepare_target(config, resume=True)
+        cross = (
+            environment
+            if environment is not None
+            else app.prepare_cross_environment(config, session)
+        )
         g5_environment = resolve_g5_environment(app, config, session)
-        g4 = verify_g4(app, config, session, g5_environment)
-        g5_path, g5_evidence, g4_manifest = _verified_g5(app, config, session, g5_environment)
+        if production_evidence is None:
+            g4 = verify_g4(app, config, session, g5_environment)
+            g5_path, g5_evidence, g4_manifest = _verified_g5(app, config, session, g5_environment)
+        else:
+            g4, g4_manifest = verify_production_outputs(
+                app, config, session, g5_environment, production_evidence
+            )
+            target = app.windows_target_state
+            if target is None or target.uses_override:
+                raise BuildError(
+                    "G7", "A fresh physical Windows probe without overrides is required."
+                )
+            stage = session.workspace / "g7-runtime-runs" / uuid.uuid4().hex / "stage"
+            interop = WindowsInterop()
+            stage_details = stage_g4(session.workspace, g5_environment, g4_manifest, stage, interop)
+            runtime = profile_runtime(config, target, stage, stage.parent / "work", interop)
+            verify_stage(stage, g5_environment, stage_details)
+            after, after_manifest = verify_production_outputs(
+                app, config, session, g5_environment, production_evidence
+            )
+            if after != g4 or after_manifest != g4_manifest:
+                raise BuildError("G7", "Production inputs changed during runtime acceptance.")
+            observed = app._probe_windows_target(config)
+            if observed.uses_override or runtime_identity(observed) != session.identity.runtime:
+                raise BuildError("G7", "Windows runtime identity changed during acceptance.")
+            if resolve_g5_environment(app, config, session) != g5_environment:
+                raise BuildError("G7", "Target tools changed during runtime acceptance.")
+            g5_evidence = {
+                "schema_version": 1,
+                "status": "PASS",
+                "identity": session.identity.to_dict(),
+                "contract": _contract_digest(),
+                "g4": g4,
+                "stage": {"path": str(stage), **stage_details, "rechecked": True},
+                "features": runtime["features"],
+                "runtime": runtime,
+                "runtime_identity_rechecked": True,
+            }
+            g5_path = session.workspace / "g7-runtime-acceptance.json"
+            g5_path.write_text(
+                json.dumps(g5_evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            )
+            if runtime_only:
+                print(f"PASS: G7 profile runtime accepted. Evidence: {g5_path}", flush=True)
+                return 0
         g5_digest = _digest(g5_path)
         if g5_evidence["g4"] != g4:
             raise BuildError("G6", "G5 acceptance does not match the current G4 outputs.")
@@ -317,8 +397,11 @@ def run_g6(app: Any, config: BuildConfig) -> int:
             ("opencl", "avgblur_opencl"),
         }
         accepted = {(item["technology"], item["feature"]): item for item in g5_evidence["features"]}
-        if not expected_device or any(
-            accepted.get(feature, {}).get("status") != "PASS" for feature in required_features
+        if production_evidence is None and (
+            not expected_device
+            or any(
+                accepted.get(feature, {}).get("status") != "PASS" for feature in required_features
+            )
         ):
             raise BuildError("G6", "G5 lacks a PASS for each planned relocation smoke feature.")
 
@@ -360,19 +443,47 @@ def run_g6(app: Any, config: BuildConfig) -> int:
             raise BuildError("G6", "Repeated production packaging changed bundle contents.")
 
         run_id = uuid.uuid4().hex
-        run_dir = session.workspace / "g6-runs" / run_id
+        run_dir = (
+            session.workspace / ("g7-package-runs" if production_evidence else "g6-runs") / run_id
+        )
         run_dir.mkdir(parents=True, exist_ok=False)
         relocated = run_dir / "bundle"
         shutil.copytree(repeated_dir, relocated)
         if _file_hashes(relocated) != repeated_files:
             raise BuildError("G6", "Relocated bundle hashes differ from the production package.")
-        smoke = _run_relocated_smoke(relocated, run_dir / "work", expected_device)
+        smoke = (
+            _run_relocated_smoke(relocated, run_dir / "work", expected_device)
+            if production_evidence is None
+            else _run_relocated_smoke(
+                relocated,
+                run_dir / "work",
+                expected_device,
+                config=config,
+                target=app.windows_target_state,
+            )
+        )
         if _file_hashes(relocated) != repeated_files:
             raise BuildError("G6", "Relocated runtime smoke changed package contents.")
 
-        g4_after = verify_g4(app, config, session, g5_environment)
+        g4_after = (
+            verify_g4(app, config, session, g5_environment)
+            if production_evidence is None
+            else verify_production_outputs(
+                app, config, session, g5_environment, production_evidence
+            )[0]
+        )
         if g4_after != g4 or _digest(g5_path) != g5_digest:
             raise BuildError("G6", "Accepted G4/G5 inputs changed during packaging acceptance.")
+        if production_evidence is not None:
+            observed = app._probe_windows_target(config)
+            if (
+                observed.uses_override
+                or runtime_identity(observed) != session.identity.runtime
+                or resolve_g5_environment(app, config, session) != g5_environment
+            ):
+                raise BuildError(
+                    "G7", "Runtime identity or target tools changed during relocation."
+                )
         report = {
             "schema_version": 1,
             "status": "PASS",
@@ -391,16 +502,62 @@ def run_g6(app: Any, config: BuildConfig) -> int:
                 "redistributable": False,
             },
         }
-        report_path = session.workspace / "g6-acceptance.json"
+        if production_evidence is not None:
+            report["runtime_evidence"] = report.pop("g5_evidence")
+            report["runtime_evidence_sha256"] = report.pop("g5_evidence_sha256")
+            report["hardware_enabled"] = bool(getattr(config, "enable_hardware_acceleration", True))
+        report_path = session.workspace / (
+            "g7-package-acceptance.json" if production_evidence else "g6-acceptance.json"
+        )
         report_path.write_text(
             json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
-        print(f"PASS: G6 Windows bundle accepted: {release_dir}", flush=True)
+        print(f"PASS: {gate} Windows bundle accepted: {release_dir}", flush=True)
         print(f"Relocated runtime: {relocated}", flush=True)
         return 0
-    except (BuildError, OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
-        print(f"FAIL: G6 Windows packaging acceptance: {exc}", flush=True)
+    except (
+        BuildError,
+        OSError,
+        RuntimeError,
+        ValueError,
+        KeyError,
+        TypeError,
+        subprocess.SubprocessError,
+    ) as exc:
+        if production_evidence is not None and session is not None:
+            try:
+                (session.workspace / "g7-package-acceptance.json").write_text(
+                    json.dumps(
+                        {
+                            "schema_version": 1,
+                            "status": "FAIL",
+                            "identity_key": session.identity.build_key,
+                            "error": str(exc),
+                        },
+                        indent=2,
+                        sort_keys=True,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+            except OSError:
+                pass
+        print(f"FAIL: {gate} Windows packaging acceptance: {exc}", flush=True)
         return 1
     finally:
         if builder is not None:
             builder.shutdown_downloads(wait=False)
+
+
+def run_g7_package(
+    app: Any, config: BuildConfig, session: Any, environment: Any, *, package: bool = True
+) -> int:
+    """Always accept the normal profile runtime; optionally accept its package."""
+    return run_g6(
+        app,
+        config,
+        production_evidence=session.workspace / "g4-final-acceptance.json",
+        session=session,
+        environment=environment,
+        runtime_only=not package,
+    )

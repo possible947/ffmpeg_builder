@@ -333,18 +333,27 @@ def test_main_g6_configures_fixed_cross_target(monkeypatch):
     }
 
 
-def test_cross_release_runs_g6_after_g4(monkeypatch):
+def test_cross_build_routes_to_normal_workflow(monkeypatch):
     seen = []
     config = _config(
         ffmpeg_version="9.0",
         target_backend=run_build.TARGET_BACKEND_CROSS_MINGW,
         make_release=True,
     )
-    monkeypatch.setattr(run_build, "run_g4_final", lambda app, config: seen.append("g4") or 0)
-    monkeypatch.setattr(run_build, "run_g6", lambda app, config: seen.append("g6") or 0)
+    monkeypatch.setattr(
+        run_build,
+        "run_cross_build",
+        lambda app, config, **options: seen.append(options) or 0,
+    )
 
     assert run_build.run_build(None, config, resume=False, no_release=False) == 0
-    assert seen == ["g4", "g6"]
+    assert seen == [{"resume": False, "no_release": False}]
+
+
+def test_explicit_config_and_workspace_paths():
+    args = run_build.parse_args(["--config", "base.yaml", "--workspace", "workspace_base"])
+    assert args.config == Path("base.yaml")
+    assert args.workspace == Path("workspace_base")
 
 
 def test_describe_plan_lists_components_with_toolchain_cc(capsys):

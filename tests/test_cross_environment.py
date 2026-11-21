@@ -625,12 +625,12 @@ def test_shared_builder_helpers_emit_scoped_cross_commands(tmp_path, monkeypatch
     assert all("MSYS" not in value and "sh.exe" not in value for call in calls for value in call[2])
 
 
-def test_headless_cross_route_uses_final_integration(monkeypatch):
+def test_headless_cross_route_uses_normal_production_workflow(monkeypatch):
     app = object()
     calls = []
     monkeypatch.setattr(
-        "ffmpeg_builder.scripts.run_build.run_g4_final",
-        lambda actual_app, config: calls.append((actual_app, config)) or 7,
+        "ffmpeg_builder.scripts.run_build.run_cross_build",
+        lambda actual_app, config, **options: calls.append((actual_app, config, options)) or 7,
     )
     config = BuildConfig(target_backend=TARGET_BACKEND_CROSS_MINGW, cuda_build_mode="disabled")
     status = run_build(
@@ -641,7 +641,7 @@ def test_headless_cross_route_uses_final_integration(monkeypatch):
     )
 
     assert status == 7
-    assert calls == [(app, config)]
+    assert calls == [(app, config, {"resume": False, "no_release": True})]
 
 
 def test_headless_cross_dry_run_reports_wave_zero_selection_without_building(capsys):
@@ -693,7 +693,7 @@ def test_headless_cross_dry_run_reports_wave_zero_selection_without_building(cap
     assert "MIXED mixed-generator" in output
     assert "CONDITIONAL amf" in output
     assert "SKIPPED BY FEATURE libvmaf" in output
-    assert "no Wave-1 component was built" in output
+    assert "no production component was built" in output
 
 
 def _available_cross_inputs(tmp_path: Path):
@@ -781,6 +781,8 @@ def test_real_cross_environment_and_build_system_acceptance(tmp_path):
         {
             "CC": "/usr/bin/gcc",
             "CXX": "/usr/bin/g++",
+            "CFLAGS": "-march=skylake -mtune=native -mavx2",
+            "CXXFLAGS": "-march=skylake -mtune=native -mavx2",
             "CPATH": "/usr/include",
             "CUDA_HOME": "/opt/cuda",
             "VULKAN_SDK": "/opt/vulkan-sdk",
@@ -865,6 +867,8 @@ def test_real_cross_environment_and_build_system_acceptance(tmp_path):
         preparation,
         BuildConfig(
             target_backend=TARGET_BACKEND_CROSS_MINGW,
+            gpl_enabled=True,
+            enable_hardware_acceleration=False,
             cuda_build_mode="disabled",
             native_build=False,
             openmp=False,
@@ -879,10 +883,15 @@ def test_real_cross_environment_and_build_system_acceptance(tmp_path):
         flags = portable.compiler_environment[key].split()
         assert "-march=native" not in flags
         assert "-mtune=native" not in flags
+        assert "-march=skylake" not in flags
+        assert "-mavx2" not in flags
         assert "-fopenmp" not in flags
     assert environment.cmake_toolchain_file.is_file()
     assert environment.meson_cross_file.is_file()
 
+    generic_acceptance = run_cross_environment_acceptance(portable)
+    assert generic_acceptance["cmake"]["built"] is True
+    assert generic_acceptance["meson"]["built"] is True
     acceptance = run_cross_environment_acceptance(environment)
 
     assert set(acceptance) == {

@@ -20,7 +20,7 @@ from .g4_wave1 import Wave1TargetValidator
 from .g4_wave2 import Wave2TargetValidator
 from .g4_wave3a import Wave3ATargetValidator, _OutputSpec
 from .g4_wave3b import Wave3BTargetValidator
-from .g4_wave5a import Wave5ATargetValidator
+from .g4_wave5a import Wave5ATargetValidator, _cpu_flags
 from .state import ComponentStatus
 from .windows_probe import WindowsInterop, WindowsProbeError
 
@@ -230,7 +230,7 @@ class Wave5BTargetValidator(Wave3BTargetValidator):
             re.MULTILINE,
         ):
             raise BuildError(component.name, "Unexpected optional target feature enabled.")
-        for value in (str(tools.cc), str(tools.cxx), "-march=native", "-mtune=native"):
+        for value in (str(tools.cc), str(tools.cxx), *_cpu_flags(self.environment)):
             if value not in makefile:
                 raise BuildError(component.name, f"Missing target build setting: {value}")
         self._link_and_runtime(component, flags, env)

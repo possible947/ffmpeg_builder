@@ -28,9 +28,10 @@ def _digest(path: Path) -> str:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def _accepted_names(workspace: Path) -> set[str]:
+def _accepted_names(workspace: Path, production: bool = False) -> set[str]:
     result: set[str] = set()
-    for path in workspace.glob("g4-wave*-acceptance.json"):
+    pattern = "cross-*-acceptance.json" if production else "g4-wave*-acceptance.json"
+    for path in workspace.glob(pattern):
         if path.name == "g4-wave2-openmp-acceptance.json":
             continue
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -84,7 +85,13 @@ def _imports(environment: Any, binary: Path) -> set[str]:
     return set(re.findall(r"^\s*Name: (.+)$", result.stdout, re.MULTILINE))
 
 
-def _validate_config(source: Path, flags: list[str], cuda: bool, vmaf_cuda: bool) -> None:
+def _validate_config(
+    source: Path,
+    flags: list[str],
+    cuda: bool,
+    vmaf_cuda: bool,
+    hardware_enabled: bool = True,
+) -> None:
     config = (source / "config.h").read_text(encoding="utf-8")
     names = {
         flag.removeprefix("--enable-").replace("-", "_").upper()
@@ -116,6 +123,47 @@ def _validate_config(source: Path, flags: list[str], cuda: bool, vmaf_cuda: bool
     if "--enable-opencl" in flags:
         expected_components.add("OVERLAY_OPENCL_FILTER")
     components = (source / "config_components.h").read_text(encoding="utf-8")
+    if not hardware_enabled:
+        apis = (
+            "CUDA",
+            "CUDA_LLVM",
+            "CUDA_NVCC",
+            "CUVID",
+            "NVDEC",
+            "NVENC",
+            "FFNVCODEC",
+            "VULKAN",
+            "OPENCL",
+            "LIBPLACEBO",
+            "D3D11VA",
+            "D3D12VA",
+            "DXVA2",
+            "VAAPI",
+            "VDPAU",
+            "LIBVPL",
+            "LIBMFX",
+            "AMF",
+            "VIDEOTOOLBOX",
+            "MEDIACODEC",
+            "MEDIAFOUNDATION",
+            "V4L2_M2M",
+        )
+        forbidden = [
+            f"CONFIG_{name}"
+            for name in apis
+            if re.search(rf"^#define CONFIG_{name} 1$", config, re.M)
+        ]
+        forbidden.extend(
+            re.findall(
+                r"^#define (CONFIG_(?:[A-Z0-9]+_)*(?:CUDA|NVENC|CUVID|NVDEC|VULKAN|"
+                r"OPENCL|LIBPLACEBO|D3D11VA|D3D12VA|DXVA2|VAAPI|VDPAU|QSV|AMF|"
+                r"VIDEOTOOLBOX|MEDIACODEC|MEDIAFOUNDATION|V4L2M2M)(?:_[A-Z0-9]+)*) 1$",
+                components,
+                re.M,
+            )
+        )
+        if forbidden:
+            raise BuildError("ffmpeg", f"Disabled hardware features enabled: {forbidden}")
     for name in sorted(expected_components):
         if not re.search(rf"^#define CONFIG_{name} 1$", components, re.M):
             raise BuildError("ffmpeg", f"Configured FFmpeg component missing: {name}")
@@ -188,14 +236,21 @@ def _windows_smoke(environment: Any, binaries: list[Path], version: str) -> dict
     return {"imports": sorted(imports), "toolchain_dlls": sorted(copied)}
 
 
-def run_g4_final(app: Any, config: BuildConfig) -> int:
+def run_g4_final(
+    app: Any,
+    config: BuildConfig,
+    *,
+    production: bool = False,
+    session: Any = None,
+    environment: Any = None,
+) -> int:
     """Build and accept FFmpeg only after all selected G4 inputs are accepted."""
     if config.target_backend != TARGET_BACKEND_CROSS_MINGW:
         raise BuildError("G4", "Final acceptance requires the linux-cross-mingw backend.")
     try:
-        session = app.prepare_target(config, resume=True)
+        session = session or app.prepare_target(config, resume=True)
         session.stamp(app.state_manager)
-        environment = app.prepare_cross_environment(config, session)
+        environment = environment or app.prepare_cross_environment(config, session)
     except BuildError as exc:
         print(f"BLOCKED by identity guard or cross-environment preparation: {exc}", flush=True)
         return 2
@@ -204,7 +259,8 @@ def run_g4_final(app: Any, config: BuildConfig) -> int:
     build_attempted = False
     try:
         selection = app._get_component_selection(config)
-        validate_target_capabilities(app, config)
+        if not production:
+            validate_target_capabilities(app, config)
         selected = (
             selection.target_inputs
             + selection.target_components_to_build
@@ -215,7 +271,7 @@ def run_g4_final(app: Any, config: BuildConfig) -> int:
             raise BuildError("G4", "FFmpeg was not selected exactly once.")
         component = ffmpeg[0]
         dependencies = [item for item in selected if item.name != "ffmpeg"]
-        accepted = _accepted_names(session.workspace)
+        accepted = _accepted_names(session.workspace, production)
         for item in dependencies:
             if item.name not in accepted or not app.state_manager.is_component_completed(
                 item.name, item.version
@@ -267,6 +323,7 @@ def run_g4_final(app: Any, config: BuildConfig) -> int:
             app.platform_info,
             config.ffmpeg_version,
             config.target_backend,
+            enable_hardware_acceleration=config.enable_hardware_acceleration,
         )
         if (
             config.enable_libplacebo_vulkan
@@ -274,6 +331,19 @@ def run_g4_final(app: Any, config: BuildConfig) -> int:
             and "--enable-vulkan" not in flags
         ):
             flags.append("--enable-vulkan")
+        cuda = environment.cuda_host_tools.nvcc is not None and (
+            config.gpl_enabled or config.allow_nonfree_cuda
+        )
+        if cuda:
+            flags.extend(
+                [
+                    "--enable-cuda-nvcc",
+                    "--enable-ffnvcodec",
+                    "--enable-cuvid",
+                    "--enable-nvdec",
+                    "--enable-nvenc",
+                ]
+            )
         reused = app.state_manager.is_component_completed(component.name, component.version)
         if reused:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -292,11 +362,12 @@ def run_g4_final(app: Any, config: BuildConfig) -> int:
         else:
             build_attempted = True
             builder.build_component(component)
-        cuda = environment.cuda_host_tools.nvcc is not None and (
-            config.gpl_enabled or config.allow_nonfree_cuda
-        )
         _validate_config(
-            source, flags, cuda, cuda and config.enable_libvmaf_cuda and config.enable_libvmaf
+            source,
+            flags,
+            cuda,
+            cuda and config.enable_libvmaf_cuda and config.enable_libvmaf,
+            config.enable_hardware_acceleration,
         )
         runtime = _windows_smoke(environment, binaries, component.version)
         if (

@@ -36,6 +36,49 @@ def test_wave7_uses_real_registry_dependency_order():
         select_components(registry, incomplete)
 
 
+def test_target_glslang_finishes_header_inventory_before_acceptance(tmp_path, monkeypatch):
+    from ffmpeg_builder.builders.graphics import glslang
+
+    source, prefix = tmp_path / "source", tmp_path / "prefix"
+    cmake = source / "External/spirv-tools/source/CMakeLists.txt"
+    cmake.parent.mkdir(parents=True)
+    cmake.write_text(
+        "add_library(${SPIRV_TOOLS}-shared SHARED ${SPIRV_SOURCES})\n"
+        "set(SPIRV_TOOLS_TARGETS ${SPIRV_TOOLS} ${SPIRV_TOOLS}-shared)\n"
+    )
+    component = ComponentRegistry().get_by_name("glslang")
+    cross = SimpleNamespace(
+        cmake_toolchain_file=tmp_path / "toolchain.cmake",
+        paths=SimpleNamespace(generated_files_root=tmp_path),
+    )
+    builder = SimpleNamespace(
+        platform_context=SimpleNamespace(cross_environment=cross),
+        target_prefix=prefix,
+        num_jobs=2,
+        get_build_env=lambda component: {},
+        _run_step=lambda *args: None,
+    )
+
+    def install_partial(*args):
+        header = prefix / "include/spirv/unified1/spirv.hpp"
+        header.parent.mkdir(parents=True)
+        header.write_text("cmake-installed header")
+
+    def install_complete(builder):
+        header = prefix / "include/spirv/unified1/spirv.h"
+        header.parent.mkdir(parents=True, exist_ok=True)
+        header.write_text("pinned FFmpeg consumer header")
+
+    monkeypatch.setattr(glslang, "prepare_glslang_sources", lambda *args: None)
+    monkeypatch.setattr(glslang, "promote_staged", install_partial)
+    monkeypatch.setattr(glslang, "install_spirv_headers", install_complete)
+    glslang.build_glslang(builder, component, source)
+    accepted = {p.relative_to(prefix) for p in prefix.rglob("*") if p.is_file()}
+    assert (prefix / "include/spirv/unified1/spirv.h").is_file()
+    install_complete(builder)
+    assert {p.relative_to(prefix) for p in prefix.rglob("*") if p.is_file()} == accepted
+
+
 def test_glslang_pins_must_match_upstream_and_use_project_downloader(tmp_path, monkeypatch):
     source = tmp_path / "source"
     source.mkdir()

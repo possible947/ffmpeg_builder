@@ -1,3 +1,33 @@
+### Accepted — G7 CLI clean production workflow
+
+- The normal `linux-cross-mingw` headless route builds the entire effective
+  dependency graph through existing production builders and output contracts,
+  then FFmpeg 9.0, profile-specific runtime checks and G6-style packaging.
+  Historical G4 wave commands/state are no longer prerequisites.
+- `--config` and `--workspace` support independent BASE/PREFERRED profiles
+  without rewriting the maintainer's configuration. Hardware-disabled BASE
+  retains the full GPL/nonfree software stack and OpenMP; PREFERRED preserves
+  native tuning, required CUDA, CUDA libvmaf, NVENC/NVDEC/CUVID,
+  Vulkan/libplacebo and OpenCL. Runtime acceptance also runs without packaging.
+- Integration fixes cover effective generic/native CPU validation, isolated
+  Cargo source-cache seeding, exact disabled-hardware checks and complete
+  glslang SPIR-V header ownership before component acceptance. Missing pinned
+  libjxl auxiliary sources were materialized with maintainer approval; both
+  acceptance profiles retained offline source policy.
+- Separate clean full runs passed: BASE built all 40 components in 1617.08 s;
+  PREFERRED built all 46 in 1867.13 s. Software encode/probe/decode,
+  controlled relocated bundles and PREFERRED representative CUDA/libvmaf,
+  Vulkan/libplacebo and OpenCL execution passed. Identical invocations reused
+  every component with no build-log/binary changes or payload-hash changes.
+  Superseded diagnostic runs are not counted as clean acceptance.
+- The reference configuration, live configuration, and reference-only
+  `~/Temp/workspace_90` were preserved. Final checks: 917 tests passed, one
+  skipped; Black, frozen mypy baseline and diff whitespace checks passed.
+  See `windows_build_strategy.md` for identities, evidence and rebuild scope.
+- **G7 CLI PASS; Windows TUI integration is separate and not yet completed.**
+  Existing G5 consumer scope and G6 internal/nonredistributable runtime
+  ownership remain unchanged. No FFmpeg 8.1 Windows acceptance was added.
+
 ### Accepted — G6 Windows packaging and relocation
 
 - The normal `release_bundle.py` path packages the accepted G4 FFmpeg 9.0

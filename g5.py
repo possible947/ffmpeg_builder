@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import math
 import os
 import re
 import shutil
@@ -12,7 +13,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from .app import PROJECT_ROOT
@@ -271,6 +272,50 @@ def verify_g4(app: Any, config: BuildConfig, session: Any, environment: Any) -> 
     }
 
 
+def verify_production_outputs(
+    app: Any, config: BuildConfig, session: Any, environment: Any, manifest_path: Path
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Verify normal-workflow outputs without requiring historical G4 wave runs."""
+    manifest_path = Path(manifest_path)
+    if manifest_path.is_symlink() or manifest_path.resolve().parent != session.workspace.resolve():
+        raise BuildError("G7", "Production acceptance must belong to the authorized workspace.")
+    before = _digest(manifest_path)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    selection = app._get_component_selection(config)
+    selected = (
+        selection.target_inputs + selection.target_components_to_build + selection.mixed_components
+    )
+    ffmpeg = [item for item in selected if item.name == "ffmpeg"]
+    if len(ffmpeg) != 1:
+        raise BuildError("G7", "FFmpeg was not selected exactly once.")
+    for item in selected:
+        if not app.state_manager.is_component_completed(item.name, item.version):
+            raise BuildError("G7", f"{item.name} {item.version} is not completed.")
+    archives = Path(config.source_archives_dir)
+    if not archives.is_absolute():
+        archives = PROJECT_ROOT / archives
+    source_hash = _digest(archives / ffmpeg[0].get_archive_filename())
+    binaries = {
+        name: _digest(session.workspace / "bin" / name) for name in ("ffmpeg.exe", "ffprobe.exe")
+    }
+    prefix = environment.paths.target_prefix
+    if (
+        manifest.get("identity_key") != session.identity.build_key
+        or manifest.get("source_sha256") != source_hash
+        or manifest.get("binaries") != binaries
+        or manifest.get("dependencies") != [item.name for item in selected if item.name != "ffmpeg"]
+        or manifest.get("installed") != _installed_hashes(prefix)
+        or manifest.get("interfaces") != _interface_hashes(prefix)
+        or _digest(manifest_path) != before
+    ):
+        raise BuildError("G7", "Production FFmpeg outputs or material inputs changed.")
+    return {
+        "manifests": {manifest_path.name: before},
+        "binaries": binaries,
+        "source_sha256": source_hash,
+    }, manifest
+
+
 def _ps_quote(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
@@ -377,28 +422,43 @@ def verify_stage(stage: Path, environment: Any, evidence: dict[str, Any]) -> Non
 
 
 def run_windows_ffmpeg(
-    stage: Path, label: str, arguments: list[str], interop: Any
+    stage: Path,
+    label: str,
+    arguments: list[str],
+    interop: Any,
+    *,
+    executable: str = "ffmpeg.exe",
+    work: Path | None = None,
+    controlled_path: bool = False,
 ) -> dict[str, Any]:
     """Run a staged executable and retain its exact output and invocation."""
     if not re.fullmatch(r"[a-z0-9_-]+", label):
         raise ValueError("Invalid runtime log label")
-    output = stage / f"{label}.stdout"
-    error = stage / f"{label}.stderr"
+    if executable not in ("ffmpeg.exe", "ffprobe.exe"):
+        raise ValueError("Invalid runtime executable")
+    work = work if work is not None else stage
+    output = work / f"{label}.stdout"
+    error = work / f"{label}.stderr"
     win_stage = _windows_path(stage)
+    win_work = _windows_path(work) if work != stage else win_stage
     ps_args = _ps_quote(subprocess.list2cmdline(arguments))
     script = (
         "$p=Start-Process -FilePath "
-        + _ps_quote(win_stage + "\\ffmpeg.exe")
+        + _ps_quote(win_stage + "\\" + executable)
         + " -WorkingDirectory "
-        + _ps_quote(win_stage)
+        + _ps_quote(win_work)
         + " -ArgumentList "
         + ps_args
         + " -RedirectStandardOutput "
-        + _ps_quote(win_stage + "\\" + output.name)
+        + _ps_quote(win_work + "\\" + output.name)
         + " -RedirectStandardError "
-        + _ps_quote(win_stage + "\\" + error.name)
+        + _ps_quote(win_work + "\\" + error.name)
         + " -NoNewWindow -Wait -PassThru; if (!$p) { exit 255 }; exit $p.ExitCode"
     )
+    if controlled_path:
+        script = (
+            "$env:PATH=" + _ps_quote(win_stage) + "+';'+$env:SystemRoot+'\\System32'; " + script
+        )
     result = interop.run_powershell(script, timeout=180)
     return {
         "arguments": arguments,
@@ -441,10 +501,16 @@ def _selector(
 
 
 def graphics_runtime(
-    target: Any, features: list[dict[str, str]], stage: Path, interop: Any
+    target: Any,
+    features: list[dict[str, str]],
+    stage: Path,
+    interop: Any,
+    *,
+    runner: Callable[..., dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Test each probe device independently; listing is used only for mapping."""
     discovery: dict[str, Any] = {}
+    run = runner if runner is not None else run_windows_ffmpeg
     work = [
         ("vulkan", target.vulkan.state),
         ("opencl", target.opencl.state),
@@ -461,7 +527,7 @@ def graphics_runtime(
             continue
         try:
             spec = "vulkan=vk:0" if technology == "vulkan" else "opencl=list"
-            listing = run_windows_ffmpeg(
+            listing = run(
                 stage,
                 f"{technology}-listing",
                 [
@@ -558,7 +624,7 @@ def graphics_runtime(
                     "-",
                 ]
                 try:
-                    result = run_windows_ffmpeg(stage, label, args, interop)
+                    result = run(stage, label, args, interop)
                     discovery[label] = result
                     if result["returncode"]:
                         raise ValueError(f"FFmpeg exited {result['returncode']}")
@@ -595,6 +661,219 @@ def graphics_runtime(
     return discovery
 
 
+def _nvidia_device(target: Any) -> Any:
+    physical = [
+        gpu
+        for gpu in target.gpus
+        if gpu.adapter_type == "hardware"
+        and (gpu.vendor_id or "").lower().removeprefix("0x") == "10de"
+    ]
+    devices = target.nvidia.devices
+    if target.nvidia.state != FeatureState.PRESENT or len(devices) != 1 or len(physical) != 1:
+        raise ValueError("NVIDIA ordinal mapping requires exactly one probed NVIDIA GPU.")
+    device = devices[0]
+    if (
+        not device.uuid
+        or not device.pci_bus_id
+        or not device.gpu_pnp_device_id
+        or not physical[0].pnp_device_id
+        or _normal_name(device.gpu_pnp_device_id) != _normal_name(physical[0].pnp_device_id)
+        or not _normal_name(device.name)
+    ):
+        raise ValueError("NVIDIA GPU UUID, PCI bus, or physical adapter mapping is unclear.")
+    return device
+
+
+def profile_runtime(
+    config: BuildConfig,
+    target: Any,
+    stage: Path,
+    work: Path,
+    interop: Any,
+    *,
+    controlled_path: bool = True,
+) -> dict[str, Any]:
+    """Run the production software contract and configured representative GPU filters.
+
+    Unlike G5, this deliberately does not claim codec/device-matrix acceptance.
+    The same commands run before packaging and after controlled relocation.
+    """
+    if not config.gpl_enabled:
+        raise BuildError("G7", "The production full-GPL software contract requires GPL enabled.")
+    work.mkdir(parents=True, exist_ok=False)
+    tests: dict[str, Any] = {}
+    features: list[dict[str, str]] = []
+
+    def run(
+        _stage: Path, label: str, arguments: list[str], _interop: Any, *, probe: bool = False
+    ) -> dict[str, Any]:
+        result = run_windows_ffmpeg(
+            stage,
+            label,
+            arguments,
+            interop,
+            executable="ffprobe.exe" if probe else "ffmpeg.exe",
+            work=work,
+            controlled_path=controlled_path,
+        )
+        tests[label] = result
+        return result
+
+    def checked(label: str, arguments: list[str], *, probe: bool = False) -> dict[str, Any]:
+        result = run(stage, label, arguments, interop, probe=probe)
+        if result["returncode"]:
+            raise BuildError("G7", f"{label} exited {result['returncode']}: {result['stderr']}")
+        return result
+
+    for executable, is_probe in (("ffmpeg", False), ("ffprobe", True)):
+        result = checked(executable + "-version", ["-hide_banner", "-version"], probe=is_probe)
+        if f"{executable} version {config.ffmpeg_version} " not in result["stdout"]:
+            raise BuildError("G7", f"{executable} did not report version {config.ffmpeg_version}.")
+    checked(
+        "software-encode",
+        [
+            "-hide_banner",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=128x96:rate=5",
+            "-frames:v",
+            "8",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-y",
+            "smoke.mp4",
+        ],
+    )
+    probe = checked(
+        "software-probe",
+        [
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=codec_name",
+            "-of",
+            "csv=p=0",
+            "smoke.mp4",
+        ],
+        probe=True,
+    )
+    if probe["stdout"].strip() != "h264":
+        raise BuildError("G7", "Software encode/probe did not produce H.264.")
+    decoded = checked(
+        "software-decode",
+        [
+            "-hide_banner",
+            "-v",
+            "error",
+            "-i",
+            "smoke.mp4",
+            "-pix_fmt",
+            "yuv420p",
+            "-f",
+            "framemd5",
+            "-",
+        ],
+    )
+    validate_framemd5(decoded["stdout"], frames=8, dimensions=(128, 96))
+    features.append({"technology": "software", "feature": "libx264_roundtrip", "status": "PASS"})
+    hardware = bool(getattr(config, "enable_hardware_acceleration", True))
+    device_name = ""
+    if hardware:
+        required = {"scale_vulkan", "avgblur_opencl"}
+        if config.enable_libplacebo_vulkan:
+            required.add("libplacebo")
+        features.extend(
+            item for item in pending_features(target, {}) if item["feature"] in required
+        )
+        graphics_runtime(target, features, stage, interop, runner=run)
+        if config.cuda_build_mode != "disabled":
+            device_name = _nvidia_device(target).name
+            cuda_filters = ["scale_cuda"]
+            if config.enable_libvmaf_cuda:
+                cuda_filters.append("libvmaf_cuda")
+            for name in cuda_filters:
+                args = [
+                    "-hide_banner",
+                    "-loglevel",
+                    "verbose",
+                    "-init_hw_device",
+                    "cuda=g7cuda:0",
+                    "-filter_hw_device",
+                    "g7cuda",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "testsrc2=size=320x180:rate=8:duration=1",
+                ]
+                if name == "scale_cuda":
+                    args += [
+                        "-frames:v",
+                        "4",
+                        "-an",
+                        "-vf",
+                        "format=nv12,hwupload_cuda,scale_cuda=160:90,hwdownload,format=nv12,format=yuv420p",
+                        "-f",
+                        "framemd5",
+                        "-",
+                    ]
+                else:
+                    args += [
+                        "-f",
+                        "lavfi",
+                        "-i",
+                        "testsrc2=size=320x180:rate=8:duration=1",
+                        "-filter_complex",
+                        "[0:v]format=yuv420p,hwupload_cuda[main];[1:v]format=yuv420p,hwupload_cuda[ref];[main][ref]libvmaf_cuda=shortest=1[out]",
+                        "-map",
+                        "[out]",
+                        "-frames:v",
+                        "8",
+                        "-an",
+                        "-f",
+                        "null",
+                        "-",
+                    ]
+                result = checked(name.replace("_", "-"), args)
+                if name not in result["stderr"]:
+                    raise BuildError("G7", f"CUDA runtime did not execute {name}.")
+                if name == "scale_cuda":
+                    validate_framemd5(result["stdout"], frames=4, dimensions=(160, 90))
+                else:
+                    score = re.search(
+                        r"VMAF score:\s*([-+]?(?:\d+(?:\.\d*)?|\.\d+))", result["stderr"]
+                    )
+                    if score is None or not math.isfinite(float(score.group(1))):
+                        raise BuildError("G7", "CUDA libvmaf did not report a finite score.")
+                features.append(
+                    {
+                        "technology": "nvidia",
+                        "feature": name,
+                        "device": device_name,
+                        "selector": "0",
+                        "status": "PASS",
+                    }
+                )
+        invalid = [item for item in features if item["status"] != "PASS"]
+        if invalid or not required.issubset({item["feature"] for item in features}):
+            raise BuildError("G7", f"Configured GPU runtime acceptance incomplete: {invalid}")
+    return {
+        "status": "PASS",
+        "scope": "production-representative",
+        "hardware_enabled": hardware,
+        "controlled_path": [str(stage), "%SystemRoot%\\System32"] if controlled_path else None,
+        "features": features,
+        "hardware_device": device_name,
+        "tests": tests,
+    }
+
+
 def nvidia_runtime(
     target: Any, features: list[dict[str, str]], stage: Path, interop: Any
 ) -> dict[str, Any]:
@@ -613,19 +892,7 @@ def nvidia_runtime(
             return {"status": "BLOCKED", "error": "NVIDIA probe contradicts GPU inventory."}
         return {"status": "NOT_RUN", "reason": f"NVIDIA probe: {target.nvidia.state.value}"}
     try:
-        devices = target.nvidia.devices
-        if len(devices) != 1 or len(physical) != 1:
-            raise ValueError("NVIDIA ordinal mapping requires exactly one probed NVIDIA GPU.")
-        device = devices[0]
-        if (
-            not device.uuid
-            or not device.pci_bus_id
-            or not device.gpu_pnp_device_id
-            or not physical[0].pnp_device_id
-            or _normal_name(device.gpu_pnp_device_id) != _normal_name(physical[0].pnp_device_id)
-            or not _normal_name(device.name)
-        ):
-            raise ValueError("NVIDIA GPU UUID, PCI bus, or physical adapter mapping is unclear.")
+        device = _nvidia_device(target)
     except (ValueError, AttributeError, TypeError) as exc:
         for item in entries:
             item.update(status="UNVALIDATED", detail=f"NVIDIA mapping blocked: {exc}")

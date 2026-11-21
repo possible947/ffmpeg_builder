@@ -22,6 +22,19 @@ from .g4_wave3b import Wave3BTargetValidator
 from .state import ComponentStatus
 
 G4_WAVE5A_COMPONENTS = ("openssl", "srt")
+
+
+def _cpu_flags(environment: Any) -> tuple[str, ...]:
+    return tuple(
+        dict.fromkeys(
+            flag
+            for variable in ("CFLAGS", "CXXFLAGS")
+            for flag in shlex.split(environment.compiler_environment.get(variable, ""))
+            if flag.startswith(("-march=", "-mtune=", "-mcpu="))
+        )
+    )
+
+
 _SPECS = {
     "openssl": _OutputSpec(
         "openssl",
@@ -259,8 +272,7 @@ class Wave5ATargetValidator(Wave3BTargetValidator):
                 "SSL_FOUND:INTERNAL=1",
                 str(self.environment.cmake_toolchain_file),
                 str(self.prefix),
-                "-march=native",
-                "-mtune=native",
+                *_cpu_flags(self.environment),
             ):
                 if value not in text:
                     raise BuildError(component.name, f"Missing SRT cross configuration: {value}")
@@ -275,7 +287,7 @@ class Wave5ATargetValidator(Wave3BTargetValidator):
             for value in ("Configure mingw64", "no-shared", "no-module", "--with-zlib-lib="):
                 if value not in log:
                     raise BuildError(component.name, f"Missing OpenSSL target option: {value}")
-            for value in (str(self.environment.target_tools.cc), "-march=native", "-mtune=native"):
+            for value in (str(self.environment.target_tools.cc), *_cpu_flags(self.environment)):
                 if value not in text:
                     raise BuildError(component.name, f"Missing OpenSSL target setting: {value}")
 
