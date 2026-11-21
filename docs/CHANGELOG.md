@@ -1,3 +1,13 @@
+### Accepted — G4 Wave 9 Windows OpenCL interface
+
+- Accepted G2's pinned OpenCL target headers and Windows import library based
+  on physical Windows capability evidence, without building a Linux loader.
+  Windows `OpenCL.dll` and the vendor ICD/driver remain external prerequisites.
+- The target consumer executed and checked a kernel on the NVIDIA TITAN V;
+  same-identity reuse and 687 prior manifest-recorded files passed. The target
+  had no Intel or AMD GPU, so oneVPL/QSV and AMF were not selected. Final
+  Windows FFmpeg integration has not started.
+
 ### Accepted — G4 Wave 8 CUDA libvmaf
 
 - Reused G2 nv-codec target headers and built static libvmaf with host NVCC,
@@ -5,7 +15,7 @@
   Windows target metadata records the C++ runtime and NVIDIA driver needs.
 - A Windows consumer ran the CUDA motion, ADM and VIF extractors; target COFF,
   static linking, same-identity reuse and 674 prior file hashes passed.
-- Wave 9 and the full Windows FFmpeg build have not started.
+- At that acceptance point Wave 9 and the full Windows FFmpeg build had not started.
 
 ### Accepted — G4 Wave 7 Vulkan chain
 

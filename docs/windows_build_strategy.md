@@ -1,7 +1,28 @@
 # Windows FFmpeg cross-build strategy
 
 **Status:** G1 **PASS**; G2.1–G2.8 **PASS**; G3 **PASS**; G4 **in progress**
-(Waves 0–8 complete). Wave 9 and the full Windows FFmpeg build have not started.
+(Waves 0–9 complete). The final Windows FFmpeg integration has not started.
+
+### G4 Wave 9 — physical-Windows OpenCL interface
+
+The configured physical target reports an NVIDIA TITAN V OpenCL GPU and an
+Intel OpenCL CPU, but no Intel or AMD GPU. Wave 9 therefore accepts the
+registered `opencl-headers` target input; `opencl-icd-loader` is native-only
+and supplies the pinned `OpenCL.def` used by G2 to generate the import
+library, not a Windows loader build. Intel oneVPL/QSV and AMD AMF are not
+selected for this target. The wave fails explicitly rather than silently
+claiming acceptance for a target with an Intel or AMD hardware GPU.
+
+The normal G2 preparation verifies OpenCL-Headers 2026.05.29, the matching
+ICD loader source definition, target headers and LLVM-MinGW `libOpenCL.a`.
+Wave 9 records their component state and hashes, validates the Windows COFF
+import interface and links a PE consumer. On physical Windows the consumer
+compiled and dispatched an OpenCL kernel on TITAN V and checked its results.
+`OpenCL.dll` and the vendor ICD/driver are external Windows runtime
+prerequisites. Target metadata exposes the import library and runtime
+requirement, and cross-target feature selection does not use a WSL OpenCL
+runtime as a substitute. Revalidation and reuse passed; 687 files from prior
+acceptance manifests retained their hashes. No FFmpeg build was run.
 
 ### G4 Wave 8 — CUDA and libvmaf
 
@@ -20,8 +41,8 @@ consumer that loaded the NVIDIA driver and ran the motion, ADM and VIF CUDA
 extractors; same-identity revalidation and reuse passed, with 674 prior
 manifest-recorded files unchanged. The external Windows `nvcuda.dll` and
 compatible driver/GPU, plus LLVM-MinGW's libc++, libunwind and winpthread DLLs,
-remain runtime requirements. Wave 9 and the full Windows FFmpeg build have not
-started.
+remain runtime requirements. At that acceptance point Wave 9 and the full
+Windows FFmpeg build had not started.
 
 ### G4 Wave 7 — Vulkan, glslang and libplacebo
 
@@ -1103,7 +1124,7 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
 ### G3 — `linux-cross-mingw` backend and platform strategy
 
 - **Status:** G1 **PASS**; G2 **PASS**; G3 **PASS**; G4 **in progress**
-  (Waves 0–8 complete; Wave 9 not started).
+  (Waves 0–9 complete; final FFmpeg integration not started).
 - **Pass 1 completed:** production strategy selection; typed host/target tool
   projections; identity-workspace `prefix/`, `build/`, `generated/`,
   `packages/`, and `diagnostics/`; safe G2.6 target-input reuse; explicit

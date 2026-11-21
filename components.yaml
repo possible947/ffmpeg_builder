@@ -1150,6 +1150,15 @@
     definition_path: loader/windows/OpenCL.def
     definition_format: def
     output: lib/libOpenCL.a
+  target_link_metadata:
+    import_interfaces:
+    - lib/libOpenCL.a
+    runtime_dependencies:
+    - name: OpenCL.dll
+      classification: external-runtime-prerequisite
+      source_identity: Windows OpenCL dispatcher and vendor ICD
+    provenance:
+    - G2 pinned OpenCL headers and loader definition
   archive_filename: OpenCL-Headers-{version}.tar.gz
   workdir: build
 - name: opencl-icd-loader

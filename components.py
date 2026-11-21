@@ -990,6 +990,7 @@ class ComponentRegistry:
         platform: str,
         platform_info: Optional[Any] = None,
         ffmpeg_version: str = "8.1",
+        target_backend: str = TARGET_BACKEND_NATIVE,
     ) -> List[str]:
         """Get FFmpeg configure flags based on built components.
 
@@ -1015,8 +1016,10 @@ class ComponentRegistry:
         opencl_components_built = (
             "opencl-headers" in built_components and "opencl-icd-loader" in built_components
         )
+        if target_backend == TARGET_BACKEND_CROSS_MINGW:
+            opencl_components_built = "opencl-headers" in built_components
         opencl_system_ready = False
-        if platform_info is not None:
+        if platform_info is not None and target_backend != TARGET_BACKEND_CROSS_MINGW:
             opencl_system_ready = bool(
                 getattr(platform_info, "opencl_available", False)
                 or (

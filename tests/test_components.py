@@ -5,6 +5,7 @@ from importlib.resources import files
 import pytest
 import yaml
 
+from ffmpeg_builder.config import TARGET_BACKEND_CROSS_MINGW
 from ffmpeg_builder.components import (
     BuildRole,
     BuildSystem,
@@ -826,6 +827,19 @@ class TestFfmpegConfigureFlags:
             platform="linux",
         )
         assert "--enable-opencl" in flags
+
+    def test_cross_opencl_uses_target_interface_not_host_runtime(self):
+        host = type("Host", (), {"opencl_available": True})()
+        flags = self.registry.get_ffmpeg_configure_flags(
+            [], True, "linux", host, target_backend=TARGET_BACKEND_CROSS_MINGW
+        )
+        assert "--enable-opencl" not in flags
+        flags = self.registry.get_ffmpeg_configure_flags(
+            ["opencl-headers"], True, "linux", host, target_backend=TARGET_BACKEND_CROSS_MINGW
+        )
+        assert "--enable-opencl" in flags
+        flags = self.registry.get_ffmpeg_configure_flags(["opencl-headers"], True, "linux")
+        assert "--enable-opencl" not in flags
 
     def test_get_ffmpeg_configure_flags_opencl_from_system_ready(self):
         class OpenCLSystemReady:

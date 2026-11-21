@@ -156,6 +156,7 @@ def build_ffmpeg(builder: FFmpegBuilder, component: Component, source_dir: Path)
         builder.platform,
         builder.platform_detector.platform_info,
         builder.config.ffmpeg_version,
+        builder.config.target_backend,
     )
     if (
         cross is not None
