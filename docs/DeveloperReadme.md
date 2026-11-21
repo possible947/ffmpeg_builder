@@ -11,7 +11,7 @@ with deployed gcc12 12.5.0 and 9.0 with the system GCC — 58/58 components
 each, smoke-tested). WSL-Mingw G1/G2 preparation and offline-closure
 acceptance are complete; G3 has established and validated the
 `linux-cross-mingw` cross-environment and shared build contracts. G3 is PASS;
-G4 and Waves 0–9 are complete; G5 hardware-matrix validation has not started.
+G4 and Waves 0–9 are complete; G5 consumer hardware validation passed.
 Wave 1 accepted seven Windows target dependencies;
 Wave 2 accepted eleven more through production Autotools and CMake paths with
 the mandatory primary profile (`native_build=true`, `openmp=true`), and Wave
@@ -881,15 +881,20 @@ Built with the `rich` library. Static screens use `Table`, `Panel`, and `Prompt`
 The Windows build route is **WSL-Mingw**: a Windows host runs a WSL2 Ubuntu
 build environment, which uses the LLVM-MinGW/UCRT cross toolchain to produce
 a Windows FFmpeg target. **WSL-Mingw** is the user-facing name; the backend
-identifier is **`linux-cross-mingw`**. G1–G4 are PASS on the recorded
-physical target; G5 hardware-matrix validation and release packaging have not
-started. The gate history, verified results and open issues are in
+identifier is **`linux-cross-mingw`**. G1–G5 are PASS on the recorded
+physical target, and G6 release
+packaging has not started. The gate history, verified results and open issues are in
 [`windows_build_strategy.md`](windows_build_strategy.md), which is the
 authoritative plan. The previous MSYS2-based Windows build path was replaced
 by this route.
 
 Implementer rules:
 
+- **Consumer-driven capability requirements:** GPU compute/filter paths and
+  CUDA libvmaf are required as described in the
+  [permanent testing policy](windows_build_strategy.md#permanent-capability-and-testing-policy).
+  Feature listings are not runtime acceptance. Windows-only APIs are optional
+  unless required by a consumer; neural support is planned, not implemented.
 - **Legacy MSYS2 code is migration/removal work, not a supported backend.**
   `platforms/windows_ucrt64.py`, the `is_msys2`/`is_ucrt64`/`msystem` fields,
   `windows_ucrt64_supported` registry overrides, the `./` sh.exe wrapping in

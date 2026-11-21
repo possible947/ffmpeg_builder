@@ -1,7 +1,72 @@
 # Windows FFmpeg cross-build strategy
 
-**Status:** G1 **PASS**; G2.1–G2.8 **PASS**; G3 **PASS**; G4 **PASS**.
-G5 hardware-matrix validation and subsequent packaging have not started.
+**Status:** G1 **PASS**; G2.1–G2.8 **PASS**; G3 **PASS**; G4 **PASS**;
+G5 **PASS** on the recorded physical target. G6 packaging has not started.
+
+### G5 — accepted, consumer-oriented hardware validation
+
+The production Windows FFmpeg build has executed CUDA, NVENC, CUVID, CUDA
+libvmaf, Vulkan Video, Vulkan/libplacebo and OpenCL tests on the recorded
+target. The maintained scope is current and planned cross-platform consumer
+pipelines, not every platform-specific FFmpeg API. D3D11VA, D3D12VA and DXVA2
+are **OUT_OF_SCOPE** and do not block G5.
+
+On Windows 11 build 26200 with an NVIDIA TITAN V (driver 581.57),
+`python scripts/run_build.py --g5` passed H.264 and HEVC NVENC and CUVID
+encode/decode, CUDA scaling, CUDA libvmaf, Vulkan scaling and libplacebo,
+H.264/HEVC Vulkan Video encode/decode, and OpenCL filtering on the GPU and
+Intel OpenCL CPU. The TITAN V explicitly rejected NVIDIA and Vulkan AV1
+encode/decode (**UNSUPPORTED**); QSV and AMF GPU hardware was **ABSENT**.
+The acceptance is for these recorded operations and device, not all codecs,
+profiles or machines. Earlier physical-target evidence is preserved.
+
+The final run is recorded in `g5-runs/4acd9fa7d6934f418e29902372cc5d14.json`
+under the identity-specific workspace. Repeating the normal path reused it in
+`g5-runs/42b8efcb95f14d909c61853ddf050485.json` after matching the test
+contract, build and Windows runtime identities, G4 artifacts and staged DLL
+hashes. Both runs rechecked G4 and all 706 previously accepted dependency
+files; a fresh physical runtime probe was also rechecked.
+
+Earlier D3D12 H.264 B-frame encoding and cropped HEVC self-decoding failed.
+P-only H.264 and 320x256 HEVC roundtrips passed; an isolated coded-dimensions
+change passed the cropped HEVC test but was not integrated. These findings
+remain informational, not consumer acceptance results.
+
+Neural filtering is planned, not implemented or required by the accepted
+production contract. No production neural backend is selected. An ONNX Runtime
+investigation was exploratory only; it established neither a dependency nor a
+neural acceptance requirement. Unspecified future filter chains are deferred.
+
+An exploratory run of the production binary completed `nlmeans_vulkan` followed
+by `libplacebo`, and `nlmeans_opencl` and `boxblur_opencl` on the TITAN V.
+This supplemental evidence is not yet incorporated into the repeatable G5
+acceptance path. A separate CUDA bilateral-filter run produced frames, but its
+device-selection assertion did not pass and it is not accepted as a G5 result.
+
+### Permanent capability and testing policy
+
+FFmpeg capability requirements are consumer-driven: compilation or feature
+listing alone does not make an API a project requirement. Hardware codec paths
+actually used by consumers are production requirements. Broad cross-platform
+CUDA, Vulkan/libplacebo and OpenCL compute/filter coverage is intentionally
+required for current and planned consumers; CUDA-enabled libvmaf is an explicit
+production requirement for an existing quality-metrics consumer.
+
+Platform-specific APIs are optional unless a consumer explicitly depends on
+them. Windows D3D11VA, D3D12VA and DXVA2 therefore do not block by default.
+Meaningful runtime work on the selected physical device is required: listing
+an encoder, decoder, filter or hwaccel is not acceptance. Reports distinguish
+**PASS**, **FAIL**, **ABSENT**, **UNSUPPORTED**, **OUT_OF_SCOPE** and
+**DEFERRED**; only a failure of an applicable consumer-required production
+capability blocks acceptance. An inability to establish identity or evidence
+also prevents claiming a pass; it is not a hardware failure.
+
+Neural support is planned. ONNX, cuDNN, DirectML or another neural runtime
+must not become a required FFmpeg dependency before a consumer architecture
+explicitly selects it. Its build, runtime, dependencies and acceptance belong to
+dedicated feature development, not a retroactive expansion of G5. G5 verifies
+correctness and runtime operation, not benchmarking. G6 packaging/release is
+separate from hardware capability acceptance.
 
 ### G4 final — configured Windows FFmpeg
 
@@ -30,8 +95,8 @@ successfully after the FFmpeg install. The acceptance stages the required
 LLVM-MinGW `libc++.dll`, `libunwind.dll`, `libwinpthread-1.dll` and
 `libomp.dll`; Windows/UCRT, `OpenCL.dll`, `vulkan-1.dll`, vendor ICDs and
 NVIDIA driver libraries are external runtime prerequisites. `VSScript.dll` is
-an external prerequisite when VapourSynth is used. G5's hardware matrix and
-release packaging remain separate work.
+an external prerequisite when VapourSynth is used. G5 hardware acceptance and
+G6 release packaging are separate gates.
 
 ### G4 Wave 9 — physical-Windows OpenCL interface
 
@@ -756,8 +821,8 @@ prerequisites and PTX, G2.6 validates isolated target headers and link
 interfaces, and G0A.5 is a separate early Windows feature slice. Those earlier
 results alone did not establish the production Windows CUDA path. Wave 8
 subsequently accepted libvmaf CUDA and its Windows runtime path, and final G4
-accepted the configured Windows FFmpeg stack. G1–G4 are now **PASS**; G5
-hardware-matrix validation and packaging remain future work.
+accepted the configured Windows FFmpeg stack. The current G5 and packaging
+status is recorded at the start of this document.
 The module-level mapping is in
 [DeveloperReadme.md](DeveloperReadme.md#reusing-the-native-cudavulkan-work-for-wsl-mingw).
 
@@ -869,10 +934,9 @@ The module-level mapping is in
   material isolation, diagnostic-only drift, and G1-only legacy rejection
   were checked without altering maintainer state. This is preparation/identity
   acceptance, not a Windows cross-build.
-- G5/G7 still require their hardware-matrix and package/runtime validation;
-  the configured component stack and G4 software runtime acceptance passed.
-  Record unavailable or unsupported hardware as **not runtime-validated**, not
-  as a pass.
+- The configured component stack and G4 software runtime acceptance passed.
+  G5 capability and G6 package/runtime status is recorded at the start of
+  this document. Do not report absent or unsupported hardware as a pass.
 
 ## 6. Build identity and reuse policy
 
@@ -1154,7 +1218,7 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
 
 ### G3 — `linux-cross-mingw` backend and platform strategy
 
-- **Status:** G1 **PASS**; G2 **PASS**; G3 **PASS**; G4 **PASS**; G5 not started.
+- **Status:** G1 **PASS**; G2 **PASS**; G3 **PASS**; G4 **PASS**; G5 **PASS**.
 - **Pass 1 completed:** production strategy selection; typed host/target tool
   projections; identity-workspace `prefix/`, `build/`, `generated/`,
   `packages/`, and `diagnostics/`; safe G2.6 target-input reuse; explicit
@@ -1233,30 +1297,31 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
 - **Reuse:** G0A.1 ABI/runtime and G0A.5 target build techniques as test
   designs, not build artifacts.
 
-### G5 — required hardware-feature matrix
+### G5 — consumer hardware-feature matrix
 
-- **Scope / code:** Implement required CUDA/NVIDIA, Vulkan/libplacebo,
-  OpenCL, D3D11VA/DXVA2/D3D12VA, QSV/oneVPL, AMF and configured neural
-  backend support in component registry/builders and FFmpeg configuration.
-  Maintain separate assertions for each encoder, decoder, hwaccel, filter,
-  codec/profile and configured capability.
+- **Scope / code:** Validate production CUDA/NVIDIA, Vulkan/libplacebo and
+  supported Vulkan Video and OpenCL capabilities used by consumers.
+  QSV/oneVPL and AMF are relevant when their hardware is present.
+  Windows-specific D3D11VA, D3D12VA and DXVA2 are out of scope unless
+  a consumer requires them. Neural support and unspecified future filter
+  chains are deferred. Maintain independent results for relevant features.
 - **Tests:** Build-presence assertions independent of hardware; per-device
   runtime tests only for hardware present and feature-supported; verify
   selected device and actual hardware execution, not software fallback.
-  Report `passed`, `failed`, `not runtime-validated (absent)`, and
-  `not runtime-validated (unsupported)` distinctly. Do not count unavailable
-  hardware as a pass and do not require absent hardware to validate.
+  Report `PASS`, `FAIL`, `ABSENT`, `UNSUPPORTED`, `OUT_OF_SCOPE` and
+  `DEFERRED` distinctly.
+  Do not count unavailable hardware as a pass or out-of-scope APIs as failures.
 - **Inputs/artifacts:** G1 device/runtime probe, G2 headers/SDK prerequisites,
   feature config, explicit expected matrix and suitable test media; acceptance
   report tied to runtime identity.
-- **Pass:** All configured build features are independently present; all
-  host-applicable runtime tests pass; absent/unsupported hardware remains
-  explicitly unvalidated.
+- **Pass:** Each applicable consumer-required production capability performs
+  meaningful runtime work; absent/unsupported hardware is classified explicitly.
 - **Non-goals:** Do not silently drop configured capabilities or report an
   unsupported capability as a successful runtime test.
 - **Reuse:** G0A.3 CUDA/PTX/JIT, G0A.4 Vulkan/OpenCL loaders, G0A.5 FFmpeg
-  NVIDIA/CUDA/Vulkan/OpenCL/libplacebo execution techniques. Rebuild and run
-  production acceptance tests; never reuse PoC binaries.
+  NVIDIA/CUDA/Vulkan/OpenCL/libplacebo execution techniques. Test the accepted
+  production binaries, never PoC binaries. Reuse completed G5 evidence only
+  after contract, G4 artifacts, runtime identity and staged DLLs match.
 
 ### G6 — Windows packaging and runtime policy
 
@@ -1310,8 +1375,8 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
 |---|---|---|
 | G3 | Compatibility-workaround classification. | Scope `_GNU_SOURCE` workaround narrowly. CPU tuning policy is the ordered `-march=native -mtune=native` pair, interpreted by LLVM-MinGW and not reconstructed from G1. |
 | G4 | Remaining full software component cross-build issues and full-stack source/build closure. | Resolve builder/registry/provisioning gaps component-by-component with target-isolation tests. |
-| G5 | Neural-network backend/API and complete D3D/QSV/AMF feature support. | Select required backend/API and prove target build/runtime; only an unavoidable MSVC-only ABI limitation can reopen Variant 2. |
-| G5 | Hardware capabilities absent or unsupported on the tested TITAN V host, including untested codec/profile combinations. | Retain build-presence assertions; record runtime acceptance as not validated where appropriate. |
+| Future feature | Neural processing and unspecified consumer interoperability. | Select requirements through consumer architecture and develop/accept separately; not required for G5. |
+| Future coverage | Hardware absent or unsupported on TITAN V and untested codec/profile combinations. | Retain their explicit classifications; validate when relevant hardware and consumer requirements exist. |
 | G6 | Final runtime DLL closure and redistribution policy for all production dependencies. | Inspect built package; include LLVM-MinGW/C++ runtime DLLs where required and document external Windows/driver prerequisites. |
 
 No separate feasibility risk remains for LLVM-MinGW/UCRT smoke execution,
@@ -1350,8 +1415,8 @@ project-owned artifact and never a Windows target component.
    acceptance.
 4. **G4 — PASS:** Cross-build the full configured software dependency stack; verify
    PE/COFF, no Linux leakage, runtime and resume.
-5. **G5:** Build-assert every configured hardware feature and run only
-   host-applicable runtime tests, retaining unsupported/absent statuses.
+5. **G5 — PASS:** Validate consumer-relevant production hardware features,
+   retaining absent, unsupported, out-of-scope and deferred statuses.
 6. **G6:** Build and validate the Windows bundle with explicit DLL and external
    system/driver runtime policy.
 7. **G7:** Run full regressions and acceptance; update user/developer docs and

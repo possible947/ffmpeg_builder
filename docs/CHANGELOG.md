@@ -1,3 +1,11 @@
+### Accepted — G5 hardware acceptance
+
+- Production FFmpeg hardware tests cover consumer-relevant cross-platform
+  functionality; Windows-only D3D APIs and their earlier test failures are
+  out of scope. Neural support is planned and ONNX Runtime investigation was
+  exploratory only. Physical-target runtime acceptance and same-identity
+  evidence reuse passed; G6 has not started.
+
 ### Accepted — G4 final Windows FFmpeg integration
 
 - Built FFmpeg 9.0 against all 45 configured, accepted Windows target inputs
@@ -11,7 +19,7 @@
   prior dependency hashes passed. The configured GPL/nonfree build is
   unredistributable. Runtime acceptance stages LLVM-MinGW libc++, libunwind,
   winpthread and libomp; system and vendor runtimes remain external.
-- G4 is complete. G5 hardware-matrix validation and packaging have not started.
+- G4 was complete at this acceptance point; G5 and packaging had not started.
 
 ### Accepted — G4 Wave 9 Windows OpenCL interface
 

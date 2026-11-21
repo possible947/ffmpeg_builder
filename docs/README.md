@@ -1,6 +1,6 @@
 # FFmpeg Builder 3.0
 
-Interactive Python-based build system for FFmpeg 8.1 (default) and 9.0 on macOS and Linux. Windows builds follow the **WSL-Mingw** route (WSL2 Ubuntu → LLVM-MinGW/UCRT cross toolchain); G1–G4 passed on the accepted physical target, while G5 and packaging have not started — see [Windows (WSL-Mingw)](#windows-wsl-mingw).
+Interactive Python-based build system for FFmpeg 8.1 (default) and 9.0 on macOS and Linux. Windows builds follow the **WSL-Mingw** route (WSL2 Ubuntu → LLVM-MinGW/UCRT cross toolchain); G1–G5 passed on the accepted physical target and G6 packaging has not started — see [Windows (WSL-Mingw)](#windows-wsl-mingw).
 
 FFmpeg Builder replaces the traditional bash `build-ffmpeg` script with a modern, interactive interface featuring real-time progress tracking, configuration management, platform-aware hardware acceleration detection, and resumable builds.
 
@@ -133,12 +133,12 @@ Or use the environment check script:
 
 ## Windows (WSL-Mingw)
 
-> **Status: G1–G4 PASS; G5 and packaging not started.** Production FFmpeg 9.0
+> **Status: G1–G5 PASS; G6 packaging not started.** Production FFmpeg 9.0
 > integrated the configured Windows target stack, and `ffmpeg.exe` and
 > `ffprobe.exe` passed startup, software H.264 encode/decode and probing on the
 > physical Windows target. CUDA/NVENC/NVDEC/CUVID, Vulkan/libplacebo, OpenCL
-> and CUDA-enabled libvmaf were configured; this is not an exhaustive hardware
-> validation. Intel QSV/oneVPL and AMD AMF were not selected because the
+> and CUDA-enabled libvmaf passed consumer-oriented hardware validation on the
+> recorded target, not an exhaustive hardware validation. Intel QSV/oneVPL and AMD AMF were not selected because the
 > corresponding GPUs were absent. The accepted GPL/nonfree configuration is
 > **not redistributable**. Resume is guarded by target-and-input identity.
 > The previous MSYS2 route is unsupported legacy code. See

@@ -219,6 +219,34 @@ def test_main_g4_final_routes_to_fixed_cross_target(monkeypatch):
     }
 
 
+def test_main_g5_routes_without_g4_and_rejects_conflicting_options(monkeypatch):
+    import pytest
+
+    class FakeApp:
+        def __init__(self):
+            self.config_manager = SimpleNamespace(get=lambda: _config())
+
+        def _sync_workspace(self, config):
+            pass
+
+    class FakeDetector:
+        def __init__(self, config):
+            pass
+
+        def detect_all(self):
+            return (None, None, None)
+
+    monkeypatch.setattr(run_build, "FFmpegBuilderApp", FakeApp)
+    monkeypatch.setattr(run_build, "PlatformDetector", FakeDetector)
+    monkeypatch.setattr(run_build, "run_g5", lambda app, config: 17)
+    monkeypatch.setattr(run_build, "run_g4_final", lambda *args: pytest.fail("G4 invoked"))
+    assert run_build.main(["--g5"]) == 17
+    with pytest.raises(SystemExit, match="mutually exclusive"):
+        run_build.main(["--g5", "--g4-final"])
+    with pytest.raises(SystemExit, match="cannot be combined with --dry-run"):
+        run_build.main(["--g5", "--dry-run"])
+
+
 def test_main_rejects_g4_wave6_dry_run_and_multiple_waves():
     import pytest
 
