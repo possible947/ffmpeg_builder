@@ -1,3 +1,15 @@
+### Accepted — G4 Wave 7 Vulkan chain
+
+- Reused the verified Vulkan target headers and import interface, installed
+  their matching registry, and built glslang with checksum-pinned SPIRV-Tools
+  and SPIRV-Headers through the project source policy. Fast-float and static
+  libplacebo were built in dependency order with Vulkan and glslang enabled.
+- Accepted target COFF archives and static pkg-config closure. A physical
+  Windows consumer created a Vulkan device, compiled and dispatched a shader,
+  and verified the resulting pixels. All four components were revalidated and
+  reused; 574 prior manifest-recorded files retained their hashes.
+- Wave 8 and the full Windows FFmpeg build have not started.
+
 ### Accepted — G4 Wave 6 rav1e
 
 - Built rav1e 0.8.1 offline with the project Rust gnullvm target, LLVM-MinGW,
@@ -6,7 +18,7 @@
 - Accepted the C header, pkg-config metadata and 614-member Windows COFF
   archive. The target PE C-interface lifecycle passed on Windows with
   `libunwind.dll`; same-identity reuse and 571 prior file hashes passed.
-- Wave 7 and the full Windows FFmpeg build have not started.
+- At that acceptance point Wave 7 and the full Windows FFmpeg build had not started.
 
 ### Accepted — G4 Wave 5C libjxl and VapourSynth
 

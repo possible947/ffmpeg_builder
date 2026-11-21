@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import re
 import shutil
+import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ...build_types import BuildError
 from ...state import ComponentStatus
 from .vulkan_headers import _digest, invalidate_vulkan_resume, vulkan_headers_valid
+from .cross_install import promote_staged
 
 if TYPE_CHECKING:
     from ...builder import FFmpegBuilder
@@ -250,6 +252,7 @@ def build_libplacebo(builder: FFmpegBuilder, component: Component, source_dir: P
         ]
     if cross is not None and component.build_role.value == "target":
         meson_args = ["--cross-file", str(cross.meson_cross_file), *meson_args]
+        env["PATH"] = str(cross.target_tools.prefix / "bin") + ":" + env.get("PATH", "")
         shader_tool = cross.target_interfaces.host_shader_tools.get("shader_compiler")
         if shader_tool:
             env["GLSLANG_VALIDATOR"] = shader_tool
@@ -276,15 +279,37 @@ def build_libplacebo(builder: FFmpegBuilder, component: Component, source_dir: P
         env,
     )
 
-    builder._run_step(
-        component,
-        ComponentStatus.INSTALLING,
-        "ninja install",
-        "Install failed",
-        ["ninja", "-C", "build", "install"],
-        "install",
-        source_dir,
-        env,
-    )
-
-    builder._patch_libplacebo_pc()
+    if cross is not None and component.build_role.value == "target":
+        with tempfile.TemporaryDirectory(
+            prefix="placebo-install-", dir=cross.paths.generated_files_root
+        ) as tmp:
+            stage = Path(tmp)
+            builder._run_step(
+                component,
+                ComponentStatus.INSTALLING,
+                "ninja staged install",
+                "Install failed",
+                ["ninja", "-C", "build", "install"],
+                "install",
+                source_dir,
+                dict(env, DESTDIR=str(stage)),
+            )
+            staged = stage / builder.target_prefix.relative_to("/")
+            promote_staged(component.name, staged, builder.target_prefix, builder)
+        builder._patch_libplacebo_pc()
+        pc = target_prefix / "lib" / "pkgconfig" / "libplacebo.pc"
+        text = pc.read_text(encoding="utf-8")
+        text += "Libs.private: -lc++ -lunwind\n"
+        pc.write_text(text, encoding="utf-8")
+    else:
+        builder._run_step(
+            component,
+            ComponentStatus.INSTALLING,
+            "ninja install",
+            "Install failed",
+            ["ninja", "-C", "build", "install"],
+            "install",
+            source_dir,
+            env,
+        )
+        builder._patch_libplacebo_pc()

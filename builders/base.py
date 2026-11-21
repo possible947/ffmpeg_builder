@@ -601,7 +601,16 @@ def install_headers_only(
         if src.exists():
             for item in src.iterdir():
                 dest_item = dest / item.name
-                shutil.copy2(item, dest_item)
+                cross = context.builder.platform_context.cross_environment
+                if cross is not None and component.build_role.value == "target":
+                    with item.open("rb") as source, dest_item.open("xb") as target:
+                        created = getattr(context.builder, "_wave7_created_outputs", None)
+                        if created is not None:
+                            created.append(dest_item)
+                        shutil.copyfileobj(source, target)
+                    shutil.copystat(item, dest_item)
+                else:
+                    shutil.copy2(item, dest_item)
 
     elif component.name == "amf":
         dest = context.builder._component_prefix(component) / "include" / "AMF"

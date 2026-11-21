@@ -125,11 +125,13 @@ def select_components(
     return matches
 
 
-def validate_prior_manifests(workspace: Path, prefix: Path, identity: str) -> int:
+def validate_prior_manifests(
+    workspace: Path, prefix: Path, identity: str, current_wave: str = "g4-wave6-acceptance.json"
+) -> int:
     """Verify prior-wave hashes without treating this wave's manifest as prior."""
     paths: set[str] = set()
     for path in sorted(workspace.glob("g4-wave*-acceptance.json")):
-        if path.name in ("g4-wave6-acceptance.json", "g4-wave2-openmp-acceptance.json"):
+        if path.name in (current_wave, "g4-wave2-openmp-acceptance.json"):
             continue
         try:
             manifest = json.loads(path.read_text(encoding="utf-8"))

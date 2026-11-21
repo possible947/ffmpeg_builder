@@ -1,7 +1,31 @@
 # Windows FFmpeg cross-build strategy
 
 **Status:** G1 **PASS**; G2.1–G2.8 **PASS**; G3 **PASS**; G4 **in progress**
-(Waves 0–6 complete). Wave 7 and the full Windows FFmpeg build have not started.
+(Waves 0–7 complete). Wave 8 and the full Windows FFmpeg build have not started.
+
+### G4 Wave 7 — Vulkan, glslang and libplacebo
+
+The bounded `python scripts/run_build.py --g4-wave7` production path reuses
+the G2 Vulkan-Headers 1.4.357.0 target inputs and import library, installs the
+matching registry and target `vulkan.pc`, then builds glslang 16.5.0 and
+fast-float 8.2.10 before libplacebo 7.360.1. glslang's upstream
+`known_good.json` pins SPIRV-Tools
+`b707790a898e44038547df54580022fc1cf89c3d` and SPIRV-Headers
+`29981f65241605e08b0ede4cfeb999fe3b723c6a`. Their checksum-pinned archives
+use the normal project downloader and must be present in the local source cache
+for an offline build. The optimizer remains enabled; host Python and
+LLVM-MinGW's host-executable dlltool are used for generation, while target
+libraries use the generated LLVM-MinGW toolchain and native tuning.
+
+The target prefix contains Vulkan headers and loader import library, static
+glslang and SPIRV-Tools COFF archives, fast-float headers, and static
+libplacebo with Vulkan and glslang enabled. Static pkg-config closure includes
+Vulkan, glslang, SPIRV-Tools, libc++ and libunwind. The external Windows
+`vulkan-1.dll` and ICD remain runtime prerequisites; the consumer also imports
+LLVM-MinGW `libc++.dll` and `libunwind.dll`. A physical-Windows target consumer
+created a Vulkan device, compiled and dispatched a shader and verified its
+pixels. All four components passed same-identity revalidation and reuse; 574
+prior manifest-recorded files retained their hashes. Wave 8 has not started.
 
 ### G4 Wave 6 — rav1e
 
@@ -21,7 +45,7 @@ members including Windows import objects. Static metadata carries Windows
 system libraries and `-lunwind`; the PE consumer imports LLVM-MinGW
 `libunwind.dll` and Windows system/API-set DLLs. A physical-Windows C API
 lifecycle smoke passed. Same-identity revalidation and reuse passed, and 571
-previously accepted files retained their hashes. Wave 7 has not started.
+previously accepted files retained their hashes. At that point Wave 7 had not started.
 
 ### G4 Wave 5C — libjxl and VapourSynth
 
@@ -1058,7 +1082,7 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
 ### G3 — `linux-cross-mingw` backend and platform strategy
 
 - **Status:** G1 **PASS**; G2 **PASS**; G3 **PASS**; G4 **in progress**
-  (Waves 0–6 complete; Wave 7 not started).
+  (Waves 0–7 complete; Wave 8 not started).
 - **Pass 1 completed:** production strategy selection; typed host/target tool
   projections; identity-workspace `prefix/`, `build/`, `generated/`,
   `packages/`, and `diagnostics/`; safe G2.6 target-input reuse; explicit
