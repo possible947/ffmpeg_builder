@@ -63,7 +63,7 @@ def build_ffmpeg(builder: FFmpegBuilder, component: Component, source_dir: Path)
         else:
             extra_libs += " -lstdc++"
 
-    if "libjxl" in built_components:
+    if "libjxl" in built_components and cross is None:
         # libjxl_threads.a uses std::thread and omits the C++ runtime from
         # its static pkg-config metadata.
         # lcms2 is a private dependency of libjxl not listed in Libs:.

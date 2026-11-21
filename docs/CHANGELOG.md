@@ -1,3 +1,14 @@
+### Accepted — G4 Wave 5C libjxl and VapourSynth
+
+- Built libjxl 0.12.0 with pinned Brotli and Highway sources, accepted target
+  lcms2, native tuning and the generated LLVM-MinGW toolchain. Static target
+  metadata, 180 COFF archive members, a PE link and the Windows lifecycle
+  smoke passed. `DESTDIR` staging prevents Brotli manpage leakage.
+- Accepted the R78 headers using FFmpeg 9.0's target preprocessing contract;
+  `VSScript.dll` remains an external runtime prerequisite. Both components
+  passed same-identity reuse, and all 487 prior manifest files retained hashes.
+- Wave 6 and the full Windows FFmpeg build have not started.
+
 ### Accepted — G4 Wave 5B libzmq
 
 - Built checksum-verified libzmq 4.3.5 offline using the shared Autotools
@@ -8,7 +19,8 @@
   metadata. Static C consumer links establish libc++, pthread, IP Helper and
   Winsock requirements; unused OpenMP and legacy `-lstdc++` metadata are absent.
   Windows inproc messaging and same-identity reuse passed. libc++, libunwind and
-  winpthread DLLs are classified for G6; Wave 5C and Windows FFmpeg are not built.
+  winpthread DLLs are classified for G6; at that point Wave 5C and Windows
+  FFmpeg were not built.
 
 ### Accepted — G4 Wave 5A crypto and network dependencies
 

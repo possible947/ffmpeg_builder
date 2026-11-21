@@ -792,6 +792,21 @@
   build_system: custom
   archive_filename: libjxl-{version}.tar.gz
   custom_build_fn: build_libjxl
+  depends_on:
+  - lcms2
+  target_link_metadata:
+    private_transitive_link_requirements:
+    - -lc++
+    - -lunwind
+    runtime_dependencies:
+    - name: libc++.dll
+      classification: toolchain-runtime-dll
+      source_identity: llvm-mingw-20261104
+    - name: libunwind.dll
+      classification: toolchain-runtime-dll
+      source_identity: llvm-mingw-20261104
+    provenance:
+    - LLVM-MinGW libjxl static target consumer and Windows runtime probe
   ffmpeg_configure_flag: --enable-libjxl
   extra_libs: -llcms2
 - name: libwebp
@@ -853,6 +868,13 @@
   category: other_lib
   build_system: headers_only
   ffmpeg_configure_flag: --enable-vapoursynth
+  target_link_metadata:
+    runtime_dependencies:
+    - name: VSScript.dll
+      classification: external-runtime-prerequisite
+      source_identity: VapourSynth R78
+    provenance:
+    - FFmpeg 9.0 dynamically loads VSScript.dll
 - name: nv-codec
   # Pinned to 13.0.19.1 (not the newer 13.1.x) because FFmpeg 8.1's nvenc.c/nvenc.h
   # were written against NVENC SDK 13.0 feature checks (nvenc.h:104). SDK 13.1

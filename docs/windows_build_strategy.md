@@ -1,8 +1,43 @@
 # Windows FFmpeg cross-build strategy
 
 **Status:** G1 **PASS**; G2.1–G2.8 **PASS**; G3 **PASS**; G4 **in progress**
-(Waves 0–5B complete). Wave 5C has not started; the full Windows FFmpeg build
-is not complete.
+(Waves 0–5C complete). Wave 6 and the full Windows FFmpeg build have not started.
+
+### G4 Wave 5C — libjxl and VapourSynth
+
+The registered libjxl 0.12.0 archive contains empty Brotli and Highway
+submodule directories. Its `deps.sh` pins Brotli
+`028fb5a23661f123017c060daa546b55cf4bde29` and Highway
+`457c891775a7397bdb0376bb1031e6e027af1c48`. A bounded investigation fetched
+only those upstream revisions and configured and built libjxl in an isolated
+directory using the existing LLVM-MinGW CMake toolchain, native tuning, target
+lcms2, static output and upstream Highway dispatch. The production cross
+builder now provisions those checksum-verified sources through the project
+downloader, uses the generated LLVM-MinGW toolchain, and reuses accepted target
+lcms2. The accepted static closure contains libjxl, libjxl_cms,
+libjxl_threads, Highway and Brotli libraries. Their 180 archive members are
+Windows x86-64 COFF. Target pkg-config metadata supplies lcms2, Brotli, Highway,
+libc++ and libunwind; no archive references OpenMP or pthread symbols.
+The decoder/encoder/thread-runner PE consumer and its physical-Windows
+lifecycle smoke passed. libc++.dll and libunwind.dll are G6 runtime candidates.
+
+The isolated install exposed an upstream Brotli install rule with absolute
+manpage destinations: overriding CMake's install prefix alone did not isolate
+those files. The four written manpages were removed; none was recorded in
+prior acceptance manifests, but their previous unmanifested state was not
+captured. All 487 files recorded in prior component acceptance manifests
+retained their hashes. The production install uses `DESTDIR` and promotes only
+the selected target headers, static libraries and metadata, so Brotli's
+absolute manpage destinations remain in staging.
+
+FFmpeg 9.0's VapourSynth configure check preprocesses `VSScript4.h` and
+`VapourSynth4.h`, and its Windows demuxer dynamically loads `VSScript.dll` and
+resolves `getVSScriptAPI`. An isolated target preprocessing probe succeeded.
+The DLL is an external VapourSynth runtime prerequisite, not a target import
+library produced by this project. The installed R78 interface and the pinned
+FFmpeg preprocessing contract were accepted without a link library. Both
+components have acceptance manifests and passed same-identity reuse; no FFmpeg
+build was performed.
 
 ### G4 Wave 5B — libzmq
 
@@ -23,8 +58,8 @@ libunwind, pthread, IP Helper and Winsock; the legacy MSYS repair is not used.
 Negative links established libc++, pthread, IP Helper and Winsock requirements.
 The physical Windows inproc PAIR message smoke and same-identity revalidation
 and reuse passed. `libc++.dll`, `libunwind.dll` and `libwinpthread-1.dll` are
-classified for G6; Windows system DLLs remain system-owned. Wave 5C and Windows
-FFmpeg have not been built.
+classified for G6; Windows system DLLs remain system-owned. At that acceptance
+point Wave 5C and Windows FFmpeg had not been built.
 
 ### G4 Wave 5A — zlib, OpenSSL and SRT
 
@@ -606,7 +641,7 @@ establishes a production Windows libvmaf CUDA build, its fatbin/runtime path,
 or a Windows cross-build. G2.7 protects resume identity for these inputs, and
 G2.8 accepted the complete offline G2 closure and live prerequisite path. At
 that acceptance milestone G3 had not started; current status is G1/G2/G3
-**PASS**, with G4 **in progress** (Waves 0–5B complete). G3 validates cross-build contracts without
+**PASS**, with G4 **in progress** (Waves 0–5C complete). G3 validates cross-build contracts without
 claiming a full Windows component-stack build.
 The module-level mapping is in
 [DeveloperReadme.md](DeveloperReadme.md#reusing-the-native-cudavulkan-work-for-wsl-mingw).
@@ -1003,7 +1038,7 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
 ### G3 — `linux-cross-mingw` backend and platform strategy
 
 - **Status:** G1 **PASS**; G2 **PASS**; G3 **PASS**; G4 **in progress**
-  (Waves 0–5B complete; Wave 5C not started).
+  (Waves 0–5C complete; Wave 6 not started).
 - **Pass 1 completed:** production strategy selection; typed host/target tool
   projections; identity-workspace `prefix/`, `build/`, `generated/`,
   `packages/`, and `diagnostics/`; safe G2.6 target-input reuse; explicit

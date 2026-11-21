@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import stat
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
@@ -479,6 +480,43 @@ def install_headers_only(
         dest = context.builder._component_prefix(component) / "include" / "vapoursynth"
         dest.mkdir(parents=True, exist_ok=True)
         src = source_dir / "include"
+        cross = context.builder.platform_context.cross_environment
+        if cross is not None and component.build_role.value == "target":
+            for name in ("VSScript4.h", "VapourSynth4.h"):
+                if not (src / name).is_file():
+                    raise BuildError(component.name, f"Missing source header: {name}")
+            for item in src.rglob("*"):
+                if item.is_file():
+                    dest_item = dest / item.relative_to(src)
+                    dest_item.parent.mkdir(parents=True, exist_ok=True)
+                    with item.open("rb") as source, dest_item.open("xb") as target:
+                        created = getattr(context.builder, "_wave5c_created_outputs", None)
+                        if created is not None:
+                            created.append(dest_item)
+                        shutil.copyfileobj(source, target)
+                    shutil.copystat(item, dest_item)
+            result = subprocess.run(
+                [
+                    str(cross.target_tools.cc),
+                    "-E",
+                    "-x",
+                    "c",
+                    "-I",
+                    str(dest.parent),
+                    "-",
+                ],
+                input="#include <vapoursynth/VSScript4.h>\n#include <vapoursynth/VapourSynth4.h>\n",
+                env=context.builder.get_build_env(component),
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+            if result.returncode:
+                raise BuildError(
+                    component.name, f"Target header probe failed: {result.stderr[-3000:]}"
+                )
+            return
         if src.exists():
             for item in src.iterdir():
                 dest_item = dest / item.name
