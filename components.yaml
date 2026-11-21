@@ -956,6 +956,26 @@
   archive_filename: vmaf-{version}.tar.gz
   archive_dirname: libvmaf
   custom_build_fn: build_libvmaf
+  target_link_metadata:
+    private_transitive_link_requirements:
+    - -lpthread
+    - -lc++
+    - -lunwind
+    runtime_dependencies:
+    - name: nvcuda.dll
+      classification: external-runtime-prerequisite
+      source_identity: NVIDIA Windows driver
+    - name: libc++.dll
+      classification: toolchain-runtime-dll
+      source_identity: llvm-mingw-20261104
+    - name: libunwind.dll
+      classification: toolchain-runtime-dll
+      source_identity: llvm-mingw-20261104
+    - name: libwinpthread-1.dll
+      classification: toolchain-runtime-dll
+      source_identity: llvm-mingw-20261104
+    provenance:
+    - LLVM-MinGW libvmaf CUDA static consumer link and Windows CUDA motion probe
   ffmpeg_configure_flag: --enable-libvmaf
 - name: srt
   sha256: 2c4980c2c4cfd142d21b829d939dc51db9c6628af5967fff62fd7290769569c7

@@ -1,7 +1,27 @@
 # Windows FFmpeg cross-build strategy
 
 **Status:** G1 **PASS**; G2.1–G2.8 **PASS**; G3 **PASS**; G4 **in progress**
-(Waves 0–7 complete). Wave 8 and the full Windows FFmpeg build have not started.
+(Waves 0–8 complete). Wave 9 and the full Windows FFmpeg build have not started.
+
+### G4 Wave 8 — CUDA and libvmaf
+
+The bounded `python scripts/run_build.py --g4-wave8` production path reuses
+the G2 checksum-verified nv-codec target headers before building registered
+libvmaf 3.2.0-8fc71e30. The Windows target build uses LLVM-MinGW, native
+CPU tuning, and static pkg-config metadata including libc++ and libunwind.
+The selected Linux CUDA 12.4 NVCC and bin2c and project GCC 12.5 host compiler
+generate device fatbins and C arrays; LLVM-MinGW compiles those arrays and
+the library as Windows COFF. Upstream's architecture set is retained alongside
+the selected compute_70 target. The CUDA driver declarations remain separate
+from the selected NVENC headers when the latter need an older version.
+
+The installed target library and public headers passed a physical-Windows
+consumer that loaded the NVIDIA driver and ran the motion, ADM and VIF CUDA
+extractors; same-identity revalidation and reuse passed, with 674 prior
+manifest-recorded files unchanged. The external Windows `nvcuda.dll` and
+compatible driver/GPU, plus LLVM-MinGW's libc++, libunwind and winpthread DLLs,
+remain runtime requirements. Wave 9 and the full Windows FFmpeg build have not
+started.
 
 ### G4 Wave 7 — Vulkan, glslang and libplacebo
 
@@ -25,7 +45,8 @@ Vulkan, glslang, SPIRV-Tools, libc++ and libunwind. The external Windows
 LLVM-MinGW `libc++.dll` and `libunwind.dll`. A physical-Windows target consumer
 created a Vulkan device, compiled and dispatched a shader and verified its
 pixels. All four components passed same-identity revalidation and reuse; 574
-prior manifest-recorded files retained their hashes. Wave 8 has not started.
+prior manifest-recorded files retained their hashes. At that point Wave 8 had
+not started.
 
 ### G4 Wave 6 — rav1e
 
@@ -685,7 +706,7 @@ establishes a production Windows libvmaf CUDA build, its fatbin/runtime path,
 or a Windows cross-build. G2.7 protects resume identity for these inputs, and
 G2.8 accepted the complete offline G2 closure and live prerequisite path. At
 that acceptance milestone G3 had not started; current status is G1/G2/G3
-**PASS**, with G4 **in progress** (Waves 0–5C complete). G3 validates cross-build contracts without
+**PASS**. G3 validates cross-build contracts without
 claiming a full Windows component-stack build.
 The module-level mapping is in
 [DeveloperReadme.md](DeveloperReadme.md#reusing-the-native-cudavulkan-work-for-wsl-mingw).
@@ -714,7 +735,7 @@ The module-level mapping is in
   object. Also validate or adapt libvmaf's `add_languages('cuda')` and Meson
   compiler sanity checks for this host/target split; do not assume Linux NVCC
   can generate Windows host objects. This flow and its Windows runtime
-  behavior remain unverified.
+  behavior were unverified at G3; Wave 8 subsequently accepted this flow.
 - libvmaf's current upstream Meson file adds its own `-gencode` options in
   addition to the selected architecture. Inspect and validate the **actual**
   effective NVCC commands and all requested architectures against the
@@ -1082,7 +1103,7 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
 ### G3 — `linux-cross-mingw` backend and platform strategy
 
 - **Status:** G1 **PASS**; G2 **PASS**; G3 **PASS**; G4 **in progress**
-  (Waves 0–7 complete; Wave 8 not started).
+  (Waves 0–8 complete; Wave 9 not started).
 - **Pass 1 completed:** production strategy selection; typed host/target tool
   projections; identity-workspace `prefix/`, `build/`, `generated/`,
   `packages/`, and `diagnostics/`; safe G2.6 target-input reuse; explicit
@@ -1109,8 +1130,8 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
   Vulkan/OpenCL target interfaces; shared build-system projections; CUDA
   fatbin/bin2c/generated-C COFF and PE acceptance; Rust staticlib/C harness;
   positive/negative C++ runtime metadata; and a generic mixed-role generator
-  pipeline. CUDA-enabled FFmpeg/libvmaf recipes remain fail-closed until their
-  component adapters are implemented and accepted in G4. No full component
+  pipeline. At G3 acceptance, CUDA-enabled FFmpeg/libvmaf recipes remained
+  fail-closed pending their G4 adapters. No full component
   stack or production FFmpeg cross-build was run.
 - **Legacy and production boundary:** reached MSYS-specific FFmpeg path
   conversion is restricted to the legacy UCRT64 route; `linux-cross-mingw`

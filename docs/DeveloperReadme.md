@@ -11,7 +11,7 @@ with deployed gcc12 12.5.0 and 9.0 with the system GCC — 58/58 components
 each, smoke-tested). WSL-Mingw G1/G2 preparation and offline-closure
 acceptance are complete; G3 has established and validated the
 `linux-cross-mingw` cross-environment and shared build contracts. G3 is PASS;
-G4 Waves 0–7 are complete. Wave 1 accepted seven Windows target dependencies;
+G4 Waves 0–8 are complete. Wave 1 accepted seven Windows target dependencies;
 Wave 2 accepted eleven more through production Autotools and CMake paths with
 the mandatory primary profile (`native_build=true`, `openmp=true`), and Wave
 3A accepted six LV2 dependencies through Meson. Wave 3B reused target libogg
@@ -43,8 +43,11 @@ physical-Windows smoke and same-identity reuse. Wave 7 accepted the existing
 Vulkan target inputs and matching registry, glslang with its pinned SPIR-V
 optimizer sources, fast-float and Vulkan-enabled static libplacebo. A Windows
 consumer compiled and dispatched a shader and verified pixels; target metadata,
-COFF outputs and same-identity reuse passed. Wave 8 and the full Windows
-FFmpeg build have not started. The complete configured dependency stack remains in
+COFF outputs and same-identity reuse passed. Wave 8 reused G2 nv-codec target
+headers and accepted CUDA-enabled static libvmaf with host NVCC/bin2c and
+LLVM-MinGW target compilation; a Windows consumer ran its CUDA motion, ADM
+and VIF extractors, and reuse passed. Wave 9 and the full Windows FFmpeg build
+have not started. The complete configured dependency stack remains in
 progress. The
 compatibility/portable profile is `native_build=false`,
 `openmp=false`; it is for portable releases/diagnostics and cannot substitute

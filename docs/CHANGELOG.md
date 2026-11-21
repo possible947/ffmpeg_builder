@@ -1,3 +1,12 @@
+### Accepted — G4 Wave 8 CUDA libvmaf
+
+- Reused G2 nv-codec target headers and built static libvmaf with host NVCC,
+  GCC and bin2c generating device code for LLVM-MinGW target compilation.
+  Windows target metadata records the C++ runtime and NVIDIA driver needs.
+- A Windows consumer ran the CUDA motion, ADM and VIF extractors; target COFF,
+  static linking, same-identity reuse and 674 prior file hashes passed.
+- Wave 9 and the full Windows FFmpeg build have not started.
+
 ### Accepted — G4 Wave 7 Vulkan chain
 
 - Reused the verified Vulkan target headers and import interface, installed
@@ -8,7 +17,7 @@
   Windows consumer created a Vulkan device, compiled and dispatched a shader,
   and verified the resulting pixels. All four components were revalidated and
   reused; 574 prior manifest-recorded files retained their hashes.
-- Wave 8 and the full Windows FFmpeg build have not started.
+- At that acceptance point Wave 8 and the full Windows FFmpeg build had not started.
 
 ### Accepted — G4 Wave 6 rav1e
 

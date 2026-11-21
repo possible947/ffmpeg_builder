@@ -350,6 +350,6 @@ def test_host_archive_is_rejected(tmp_path, monkeypatch):
 
 def test_current_windows_strategy_status_is_consistent():
     text = Path("docs/windows_build_strategy.md").read_text()
-    assert "Waves 0–5C complete" in text and "Wave 6" in text
+    assert "Waves 0–8 complete" in text and "Wave 9" in text
     assert "Wave 0 complete; Wave 1 not started" not in text
     assert "G4 component adapters and full-stack builds have not started" not in text
