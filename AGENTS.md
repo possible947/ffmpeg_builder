@@ -14,7 +14,7 @@
 - Tests: `pytest tests/` (135 tests, ~4 s; config/state/components/builder-split/downloader surface). Do NOT run bare `pytest` at the root: it also collects `workspace/packages/` (extracted third-party sources, gitignored) and crashes on their test programs. Single test: `pytest tests/test_state.py::test_name`.
 - Lint/typecheck: dev tools are pinned in `requirements-dev.txt` (CI installs exactly these; bump a pin only deliberately, then re-run `black .` and `python scripts/check_mypy_baseline.py --update` and commit the results together). `black --check .` must pass. mypy is checked with `python scripts/check_mypy_baseline.py` — a frozen baseline (`mypy_baseline.txt`, 34 errors / 26 unique after normalisation; missing `tqdm`/`yaml` stubs, untyped defs): new errors fail, fixed errors stay green until the baseline is refreshed. Never run mypy on `.` — it crawls `workspace/`.
 - CI: `.github/workflows/ci.yml` runs pytest + `black --check .` + the mypy baseline on push to `master` and on PRs (ubuntu, Python 3.12, pinned tools). No pre-commit. A full FFmpeg build is a long, hardware-dependent manual process (~20–60 min, ~10 GB); verify code changes with unit tests.
-- On this Windows machine, tests run under the MSYS2 venv: `C:\msys64\usr\bin\bash.exe -lc "cd /e/Projects/ffmpeg_builder && source ./.venv-msys2-ucrt64/bin/activate && python -m pytest tests/ -q"`.
+- WSL-Mingw tests run in the WSL Python environment; the previous MSYS2 test environment is historical.
 
 ## Conventions
 
@@ -23,7 +23,7 @@
 - Pass `detail="..."` on every status transition (via `mark_component_status`) so the live dashboard shows the running command/progress; `detail` is transient and not persisted.
 - Raise build failures as `BuildError(component, message, log_file)` (`build_types.py`) so the UI error handler can show component + log context.
 - Builds are offline-first: archives resolve from `third_party/sources`; network fetching is opt-in via `allow_network_downloads`.
-- `windows-msys2-ucrt64` and `linux-wsl2` are distinct backends with separate component-eligibility rules; do not generalize native Linux/Windows assumptions onto them.
+- `linux-cross-mingw` targets Windows from WSL and is distinct from native Linux/`linux-wsl2`; select target capabilities from physical Windows evidence. The former MSYS2 route is unsupported legacy code.
 
 ## Gotchas
 
@@ -31,15 +31,17 @@
 - On component failure, inspect `workspace/logs/<component>_<step>.log` and the resume state in `workspace/build_state.json`.
 - Root `build_config.yaml` is gitignored and environment-specific; do not rely on repository-tracked defaults from that file.
 
-### Windows MSYS2 UCRT64: incomplete environment
+### Historical Windows MSYS2 UCRT64: incomplete environment
+
+The following describes the superseded MSYS2 route, not current Windows setup guidance.
 
 **Symptom**: a cmake-based component (e.g. `svtav1`) fails immediately with return code `3221225781` (0xC0000135, `STATUS_DLL_NOT_FOUND`) and empty stdout/stderr logs — `cmake` was not found or could not load its DLLs.
 
 **Root cause**: an old setup script ran `pacman -Sy` (DB sync only) before `pacman -S`, which does not guarantee on-disk packages match the synced DB; dependency resolution can silently skip packages after a partial update.
 
-**Fix**: run `setup_windows_msys2_ucrt64.ps1` after every MSYS2 environment rebuild. It runs `pacman -Syu --noconfirm` first, then `pacman -S --needed --noconfirm` for project packages, and verifies all critical tools (`gcc`, `cmake`, `ninja`, `meson`, `nasm`, `python`, `pkg-config`) are present, throwing if any is missing.
+**Historical fix**: `setup_windows_msys2_ucrt64.ps1` ran `pacman -Syu --noconfirm` first, then `pacman -S --needed --noconfirm` for project packages, and verified critical tools.
 
-**Manual recovery**: in an MSYS2 UCRT64 shell:
+**Historical manual recovery**: in an MSYS2 UCRT64 shell:
 ```bash
 pacman -Syu          # full system upgrade (may require restarting the shell once)
 pacman -S --needed mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja \
@@ -47,11 +49,11 @@ pacman -S --needed mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja \
 which cmake ninja meson nasm  # verify
 ```
 
-### Windows MSYS2 UCRT64: sh.exe wrapping rules
+### Historical Windows MSYS2 UCRT64: sh.exe wrapping rules
 
 Only commands beginning with `./` are wrapped through `sh.exe` in `executor.py:71-84`; `./x.py` scripts are run via `sys.executable` directly (sh.exe cannot use shebangs on Windows). cmake, ninja, make, pkg-config, and other `mingw-w64-ucrt-x86_64-*` tools are native Windows PE binaries and must be called directly via `subprocess.run()` — wrapping them through `sh.exe` causes `cannot execute binary file` (exit 126).
 
 ## Docs
 
-- `docs/DeveloperReadme.md` is the authoritative architecture doc (module responsibilities, data flow, extension points); not linked from the root README.
+- `docs/DeveloperReadme.md` is the authoritative architecture doc (module responsibilities, data flow, extension points).
 - `docs/CHANGELOG.md` tracks applied remediation for high/medium review findings and is the authoritative status source for fix history.

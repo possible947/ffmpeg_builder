@@ -1,5 +1,10 @@
 # FFmpeg 9.0 Integration — Developer Readme
 
+This is the historical FFmpeg 9.0 integration plan and its phase-era baseline.
+For current results, including G4 Windows acceptance, see
+[`windows_build_strategy.md`](windows_build_strategy.md) and
+[`DeveloperReadme.md`](DeveloperReadme.md).
+
 ## 1) Goal
 
 Add **FFmpeg 9.0** build support to `ffmpeg_builder` while preserving FFmpeg 8.1 as the default configuration and refreshing component versions to current stable releases where practical.
@@ -265,7 +270,7 @@ Notes for the version-refresh batches (Phase B):
 2. macOS validation completed on 2026-08-31: the default non-GPL FFmpeg 9.0 build completed all 49 selected components (37 source components and 12 system components) with no failures or skips. The generated `ffmpeg`, `ffprobe`, and `ffplay` binaries report FFmpeg 9.0.
 3. Remaining backend validation before stable 2.0:
   - Linux
-  - Windows via WSL-Mingw (`linux-cross-mingw`; planned, see `windows_build_strategy.md`)
+  - At that phase, Windows via WSL-Mingw remained to be validated; G4 has since passed on the recorded physical target (see `windows_build_strategy.md`).
 
 ---
 

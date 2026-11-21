@@ -1,11 +1,12 @@
 # Testing Plan — Build System Modernization
 
-This document defines how the toolchain-modernization phases are validated. It is
-maintained alongside `docs/CHANGELOG.md`; each phase adds its own checklist here.
+This document records the toolchain-modernization validation plan and its
+phase-era checklists. For current results see `docs/CHANGELOG.md` and
+`docs/windows_build_strategy.md`.
 
 ## Constraints
 
-- The development container used for these changes has **no Python interpreter**,
+- The historical development container used for these changes had **no Python interpreter**,
   so `pytest`, `black`, and the mypy baseline cannot be run there. Code is written
   to be black-clean (line length 100) and mypy-clean by inspection, and the
   automated suite is run on the target machines below.
@@ -19,9 +20,9 @@ maintained alongside `docs/CHANGELOG.md`; each phase adds its own checklist here
    the FFmpeg 9.0 path.
 3. **Linux + GCC 12 via WSL** — validates the deployed/lower-profile path for
    FFmpeg 8.1 on a modern host.
-4. **Windows (WSL-Mingw)** — planned with the `linux-cross-mingw` backend; acceptance
-   is defined in `windows_build_strategy.md` (G1–G7). The former MSYS2 route is
-   no longer a validation target.
+4. **Windows (WSL-Mingw)** — `linux-cross-mingw` G1–G4 passed on the recorded
+   physical target; G5 hardware validation and packaging remain future work.
+   See `windows_build_strategy.md`. The former MSYS2 route is not a validation target.
 
 ## Automated tests (run on the target machine)
 
@@ -182,7 +183,7 @@ Portability:
       host-compiler docs rewritten to the store tiers.
 - [ ] CI green (pytest + black + mypy baseline).
 
-### Phase 6 — Windows (WSL-Mingw, deferred)
-- [ ] Windows validation follows the `linux-cross-mingw` gates in
-  `windows_build_strategy.md`; the former `windows-msys2-ucrt64` profile is no
-  longer a validation target.
+### Phase 6 — Windows (WSL-Mingw)
+- [x] G1–G4 production integration and physical-Windows software acceptance
+  passed for the recorded target; see `windows_build_strategy.md`.
+- [ ] G5 hardware-matrix validation and packaging remain separate future work.

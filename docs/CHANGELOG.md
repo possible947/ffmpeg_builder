@@ -234,14 +234,13 @@
   selected host bin2c conversion, LLVM-MinGW generated-C COFF compilation,
   and PE32+ linking without Linux object/runtime leakage. Audited libvmaf
   3.2.0's explicit gencode list and Meson CUDA-language assumptions; full
-  component adaptation remains fail-closed for G4.
+  component adaptation was fail-closed pending G4 at that time.
 - Added/validated generic transitive target-link/runtime metadata, positive
   and negative libc++/libunwind link cases, Vulkan/OpenCL target import
   interfaces, and the host-generator-to-target mixed-role pipeline. Reached
   MSYS-specific behavior remains isolated to the legacy backend.
-- Final G3 acceptance and the regression/quality suite pass. G1/G2/G3 are
-  PASS; G4 has not started. No complete Windows dependency stack or FFmpeg
-  cross-build is claimed.
+- At final G3 acceptance, G1/G2/G3 passed and G4 had not started; no complete
+  Windows dependency stack or FFmpeg cross-build was claimed at that point.
 
 ### Corrective — G3 WSL-Mingw CPU tuning policy
 
@@ -267,8 +266,8 @@
   preparation execute isolated compiler/resource/archive, PE/COFF/UCRT,
   pkg-config, CMake, Meson, and Autotools acceptance probes before stopping.
 - Real acceptance fixtures and focused regression tests passed. No component
-  build or full Windows FFmpeg cross-build was run or claimed. G3 pass 2 and
-  G4 remain not started.
+  build or full Windows FFmpeg cross-build was run or claimed at that point.
+  G3 pass 2 and G4 had not yet started.
 
 ### Accepted — G2.8 final offline closure and live prerequisite acceptance
 
@@ -572,7 +571,8 @@
   `target_backend: linux-cross-mingw`, and a guard blocking unsafe state/artifact
   reuse (TUI and `scripts/run_build.py`). `state.py` gained `identity`/`acceptance`,
   `inspect()` and a trust gate. Native flows are unchanged. The WSL-Mingw build
-  backend (G3) and runtime acceptance (G5) are not implemented. See
+  backend (G3) and runtime acceptance (G5) were not implemented at the G1
+  acceptance point. See
   `docs/windows_build_strategy.md` (G1 implementation notes).
 
 ### Changed — Windows documentation direction: WSL-Mingw replaces MSYS2-UCRT64 (2026-11-10)
@@ -588,7 +588,7 @@
   parity and deprecation requirements were dropped from the G1-G7 plan.
 - CUDA SDK and Vulkan SDK are documented as external prerequisites of the prepared
   WSL environment, not project-managed dependencies.
-- **Not implemented yet:** the `linux-cross-mingw` backend (gates G1-G7). **Legacy MSYS2
+- **At this decision point not yet implemented:** the `linux-cross-mingw` backend (gates G1-G7). **Legacy MSYS2
   code (platform strategy, executor sh-wrapping, bootstrap scripts, registry overrides,
   tests) has not been removed** and is tracked as future migration work.
 - All older entries below that mention MSYS2/UCRT64 are historical records of the

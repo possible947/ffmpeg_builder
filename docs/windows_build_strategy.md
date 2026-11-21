@@ -367,11 +367,11 @@ prerequisite, not a ToolchainStore-managed artifact: the cross Cargo path
 requires the pinned 0.10.25 executable and fails closed if missing or
 mismatched, without invoking `cargo install`.
 
-The cross dry-run now reports G4 Wave-0 roles, host-tool satisfaction,
+The cross dry-run reports G4 Wave-0 roles, host-tool satisfaction,
 conditional components, target inputs, and target-build selection after G1/G2
-authorization and G3 acceptance. It stops before any component build. The
-current target build selection is not an assertion that the later component
-builders are already cross-ready.
+authorization and G3 acceptance. It stops before any component build; the
+normal production route continues to final G4 integration against the
+previously accepted component stack.
 
 **Naming.** The user-facing Windows build route is **WSL-Mingw**: Windows host
 → WSL2 Ubuntu build environment → LLVM-MinGW/UCRT cross toolchain → Windows
@@ -395,7 +395,7 @@ not a portability claim. Status labels are `[VERIFIED <gate>]`,
 
 | Decision | Status and evidence | Implementation consequence | Caveat |
 |---|---|---|---|
-| Variant 1, WSL Linux to Windows with LLVM-MinGW/UCRT, is selected for implementation. | [VERIFIED G0-G0A.5] Each early-PoC gate completed on the host below; FFmpeg 9.0 integrated the required early NVIDIA/CUDA/Vulkan/OpenCL paths. | Implement `linux-cross-mingw`; do not rerun feasibility per component. | Full dependency stack, hardware matrix, and package are not complete. |
+| Variant 1, WSL Linux to Windows with LLVM-MinGW/UCRT, is selected. | [VERIFIED G0-G0A.5, G4] Early PoCs and production FFmpeg 9.0 integration passed on the recorded host. | Use `linux-cross-mingw`; do not rerun feasibility per component. | The configured stack passed G4; the hardware matrix and package remain future work. |
 | The physical Windows machine running WSL is the target; WSL is the controlled build environment. | [REQUIREMENT] Maintainer decision; [VERIFIED G0] Windows interop executed the PoCs. | Probe Windows target state separately from Linux build-host tools. Optimize for this host, not arbitrary Windows machines. | A material host change can require rebuild and new acceptance. |
 | LLVM-MinGW UCRT is the initial cross toolchain. | [VERIFIED G0-G0A.5] LLVM-MinGW 20261104, Clang/LLD 23.1.5, Windows PE execution and actual UCRT loading. | Pin and validate toolchain identity, target triple, and runtime. | Does not establish compatibility with every library or toolchain revision. |
 | C++ and Rust communicate through a C ABI. | [VERIFIED G0A.1] The mixed C/C++/Rust tests passed in both linking directions and in one executable. | Use fixed-layout C interfaces and caller-owned buffers; contain exceptions and panics. | No arbitrary C++/Rust ABI or cross-boundary unwinding is supported. |
@@ -524,8 +524,8 @@ not as a presumed way to complete Variant 1.
 ### 3.3 Repository facts to account for [REPO]
 
 The repository has native Linux/WSL strategies, a **legacy** MSYS2-UCRT64
-strategy, and the G3 pass-1 `linux-cross-mingw` environment foundation. It is
-not yet a production component backend. The legacy code (`platforms/windows_ucrt64.py`,
+strategy, and the production `linux-cross-mingw` component and FFmpeg path
+accepted through G4. The legacy code (`platforms/windows_ucrt64.py`,
 UCRT64-specific branches in `builder.py`,
 `executor.py` sh-wrapping, `scripts/setup_windows_msys2_ucrt64.ps1`, registry
 `windows_ucrt64_supported` overrides, and related tests) is migration/removal
@@ -538,10 +538,10 @@ identity before reuse and select an identity-specific workspace. A state reset
 alone does not isolate an existing prefix.
 
 The existing CUDA resolver/store has validated the selected CUDA 12.4 / GCC
-12.5 PTX combination for the tested Windows target, and native Linux now shares
-a checked CUDA profile between libvmaf and FFmpeg. These do not implement the
-Windows component backend; see §5.7. Extend declarative component and toolchain
-metadata rather than scattering component-specific policy.
+12.5 PTX combination for the tested Windows target, and native Linux shares
+a checked CUDA profile between libvmaf and FFmpeg. The Windows adapters and
+integration were subsequently accepted in G4; see §5.7. Extend declarative
+component and toolchain metadata rather than scattering component-specific policy.
 
 ## 4. Build-host and target ownership
 
@@ -751,15 +751,13 @@ and `h264_nvenc`. An isolated native CUDA build also executed `scale_cuda` and
 with the available driver, not a physical older driver. See
 `docs/CHANGELOG.md` for the scoped results.
 
-These are **not Windows cross-build results**. G2.4/G2.5 validate WSL host
+These native results are **not Windows cross-build results**. G2.4/G2.5 validate WSL host
 prerequisites and PTX, G2.6 validates isolated target headers and link
-interfaces, and G0A.5 is a separate early Windows feature slice. None
-establishes a production Windows libvmaf CUDA build, its fatbin/runtime path,
-or a Windows cross-build. G2.7 protects resume identity for these inputs, and
-G2.8 accepted the complete offline G2 closure and live prerequisite path. At
-that acceptance milestone G3 had not started; current status is G1/G2/G3
-**PASS**. G3 validates cross-build contracts without
-claiming a full Windows component-stack build.
+interfaces, and G0A.5 is a separate early Windows feature slice. Those earlier
+results alone did not establish the production Windows CUDA path. Wave 8
+subsequently accepted libvmaf CUDA and its Windows runtime path, and final G4
+accepted the configured Windows FFmpeg stack. G1–G4 are now **PASS**; G5
+hardware-matrix validation and packaging remain future work.
 The module-level mapping is in
 [DeveloperReadme.md](DeveloperReadme.md#reusing-the-native-cudavulkan-work-for-wsl-mingw).
 
@@ -871,7 +869,8 @@ The module-level mapping is in
   material isolation, diagnostic-only drift, and G1-only legacy rejection
   were checked without altering maintainer state. This is preparation/identity
   acceptance, not a Windows cross-build.
-- G5/G7 still require full component builds and package/runtime validation.
+- G5/G7 still require their hardware-matrix and package/runtime validation;
+  the configured component stack and G4 software runtime acceptance passed.
   Record unavailable or unsupported hardware as **not runtime-validated**, not
   as a pass.
 
@@ -979,10 +978,9 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
   `state.py`, `builder.py` and workspace selection.
 - **Status:** [IMPLEMENTED — G1] `windows_probe.py` (+ `windows_probe_script.py`),
   `build_identity.py` and `target_guard.py` implement the probe, overrides,
-  semantic identity and reuse guard; see "G1 implementation notes" below. The
-  `linux-cross-mingw` route continues through G3 pass-1 cross-environment
-  construction and acceptance; builder-wide pass-2 integration remains
-  pending, and runtime acceptance is G5.
+  semantic identity and reuse guard; see "G1 implementation notes" below. G3
+  pass 2 and G4 production integration have since passed. The G5 hardware
+  validation matrix remains separate from G4 software runtime acceptance.
 - **Probe contract:** Windows version/build; CPU model/signature plus effective
   ISA and OS-enabled state; GPU inventory; NVIDIA model, compute capability,
   driver, and NVENC/NVDEC/API information needed for selection/acceptance;
@@ -1093,15 +1091,17 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
   supplies its own fatbin/gencode list and enables Meson's CUDA language with
   NVCC, which may introduce NVCC host-object/compiler checks; the accepted
   production contract therefore uses only the proven fatbin → bin2c → target-C
-  split and does not treat NVCC as the Windows host compiler. Full libvmaf
-  adaptation and CUDA-enabled component builds remain fail-closed for G4.
+  split and does not treat NVCC as the Windows host compiler. At G3 acceptance,
+  full libvmaf adaptation and CUDA-enabled component builds remained
+  fail-closed pending G4; Wave 8 subsequently accepted them.
   Project-managed Rust/Cargo produced a Windows staticlib consumed by an
   LLVM-MinGW C harness; Cargo build scripts remain host-native. Positive and
   negative C++ transitive-link probes confirmed libc++/libunwind requirements.
   G3 acceptance also covers the host-generator/MIXED pipeline, target Vulkan
   and OpenCL imports, target path-contamination checks, and reached legacy
-  branch isolation. TUI and headless routes validate this contract and stop
-  intentionally before the G4 component graph.
+  branch isolation. At G3 acceptance, TUI and headless routes stopped before
+  the G4 component graph; they now continue to G4 final integration with the
+  previously accepted component stack.
   Live preparation passed with the working store's LLVM-MinGW 20261104,
   Rust 1.99.0 plus Windows target std, and GCC 12.5.0. The fresh Windows probe
   reported TITAN V compute capability 7.0; CUDA 12.4.99 produced validated
@@ -1187,14 +1187,14 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
 - **Legacy and production boundary:** reached MSYS-specific FFmpeg path
   conversion is restricted to the legacy UCRT64 route; `linux-cross-mingw`
   uses no MSYS shell/path semantics. TUI and normal headless builds run
-  identity-scoped G3 acceptance and stop before component selection/building;
-  cross `--dry-run` also reports G4 Wave-0 selection but performs no builds.
+  identity-scoped G3 acceptance and continue to G4 integration with the
+  previously accepted component stack; cross `--dry-run` performs no builds.
 - **Final acceptance:** selected CUDA/NVCC/GCC/bin2c, Rust/Cargo, C/C++/COFF
   and PE, Autotools, CMake, Meson, target-only pkg-config, Vulkan/OpenCL
   interfaces, target contamination guards, and native regression suite pass.
   Schema-2 identity remains unchanged; CPU tuning remains exactly
-  `-march=native -mtune=native` with compiler acceptance only. G4 has not
-  started.
+  `-march=native -mtune=native` with compiler acceptance only. At G3
+  acceptance G4 had not started; it has since passed.
 - **Link requirements:** Model libc++/libunwind and other static C++ runtime
   needs transitively in target metadata/link composition. Handle Vulkan and
   OpenCL target interfaces only where the actual dependency requires them.

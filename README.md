@@ -2,8 +2,8 @@
 
 Interactive Python-based build system for FFmpeg 8.1 (default) and 9.0 on
 macOS and Linux. Windows builds follow the **WSL-Mingw** route (WSL2 Ubuntu →
-LLVM-MinGW/UCRT cross toolchain). G1, G2, and G3 are PASS; G4 component
-cross-build support has not started — see
+LLVM-MinGW/UCRT cross toolchain). G1–G4 are PASS on the accepted physical
+Windows target; G5 and packaging have not started — see
 [Windows (WSL-Mingw)](#windows-wsl-mingw).
 
 FFmpeg Builder replaces the traditional bash `build-ffmpeg` script with a modern, interactive interface featuring real-time progress tracking, configuration management, platform-aware hardware acceleration detection, and resumable builds.
@@ -35,7 +35,7 @@ guide.
 - **~60 Components** — All codecs, libraries, and tools built from source in correct dependency order
 - **macOS Support** — Macports clang detection, OpenMP, VideoToolbox, glibtool handling
 - **Linux Support** — GCC/Clang detection, C11/C++17 standards, host-tuned (`-march=native -mtune=native -fopenmp`) builds
-- **Windows (WSL-Mingw) — G1/G2/G3 PASS; G4 in progress** — G4 Waves 0–2 are accepted, including 18 real Windows-target dependencies; Wave 3 and FFmpeg integration remain incomplete
+- **Windows (WSL-Mingw) — G1–G4 PASS** — FFmpeg 9.0 and the configured target dependency stack passed production integration and physical-Windows software smoke tests; hardware-matrix validation and packaging remain future work
 
 ## Requirements
 
@@ -150,30 +150,22 @@ Or use the environment check script:
 ### System Requirements
 
 - **Python** >= 3.12 (required for secure `tar` extraction, PEP 706; runs on Python 3.12–3.14)
-- **OS**: macOS (11.0+), Linux (x86_64 / arm64); Windows via WSL2 Ubuntu (WSL-Mingw, in development)
+- **OS**: macOS (11.0+), Linux (x86_64 / arm64); Windows via WSL2 Ubuntu (WSL-Mingw, accepted on the recorded target)
 - **Disk Space**: ~10 GB for sources and build artifacts
 - **Recommended RAM**: 32+ GiB (full builds with parallel compilation)
 
 ## Windows (WSL-Mingw)
 
-> **Status: G1/G2/G3 PASS; G4 Waves 0–2 complete, G4 in progress.** The production
-> `linux-cross-mingw` strategy, isolated target environment, role-scoped
-> builder contracts, CUDA fatbin/bin2c/COFF probe, Rust/Cargo target probe,
-> transitive link metadata, and integrated configure/link acceptance pass.
-> Wave 1 built zlib, libogg, opus, libpng, FreeType2, dav1d, and vid_stab for
-> the Windows target with COFF, pkg-config, link-smoke, prefix, and same-identity
-> reuse acceptance. Wave 2 also accepted gettext, pcre, xvidcore, opencore,
-> lame, fdk_aac, soxr, libtiff, lcms2, libwebp, and libsdl with mandatory
-> OpenMP enabled and `libomp.dll` confirmed on physical Windows. Wave 3 and
-> FFmpeg integration have not started; there is no supported end-to-end
-> Windows FFmpeg build workflow today. Early feasibility experiments succeeded on one specific
-> host (see [`docs/windows_build_strategy.md`](docs/windows_build_strategy.md));
-> the complete configured dependency stack is not yet built.
-> WSL-Mingw resume is guarded by a full semantic target-and-input
-> identity; changed or legacy input identity is never silently adopted. The
-> previous MSYS2-based Windows build path was replaced by this route and is no longer documented
-> or supported; any MSYS2 code still in the repository is legacy and is
-> being removed/migrated.
+> **Status: G1–G4 PASS; G5 and packaging not started.** Production FFmpeg 9.0
+> integrated the configured Windows target stack, and `ffmpeg.exe` and
+> `ffprobe.exe` passed startup, software H.264 encode/decode and probing on the
+> physical Windows target. CUDA/NVENC/NVDEC/CUVID, Vulkan/libplacebo, OpenCL
+> and CUDA-enabled libvmaf were configured; this is not an exhaustive hardware
+> validation. Intel QSV/oneVPL and AMD AMF were not selected because the
+> corresponding GPUs were absent. The accepted GPL/nonfree configuration is
+> **not redistributable**. Resume is guarded by target-and-input identity.
+> The previous MSYS2 route is unsupported legacy code. See
+> [`docs/windows_build_strategy.md`](docs/windows_build_strategy.md) for evidence.
 
 Supported Windows build route:
 
@@ -204,9 +196,9 @@ require rebuilding.
 The WSL2 Ubuntu environment must provide the host tools needed by the
 configured components, such as a C/C++ build environment, CMake, Meson, Ninja,
 pkg-config, NASM/Yasm, Perl and Python, plus any other host tool a configured
-component requires. Project-managed inputs (LLVM-MinGW, Rust and its Windows
-target standard library, component sources) are provisioned by the project's
-toolchain store, not by the user.
+component requires. LLVM-MinGW, Rust and its Windows target standard library
+are provisioned by the toolchain store. Component sources are obtained from
+the local source mirror or, when enabled, verified network downloads.
 
 ### CUDA SDK prerequisite
 
@@ -250,20 +242,21 @@ resolves `VULKAN_SDK`; an invalid explicit root fails rather than falling back
 to the environment or `PATH`. These are externally managed WSL host
 prerequisites, not project-managed Windows target libraries.
 
-G2.4/G2.5 prerequisite preparation, G2.6 target-input staging, G2.7 semantic
-identity, and G2.8 offline-closure acceptance have passed on the validated
-host. G1/G2/G3 are closed; G3 acceptance does not build components or FFmpeg.
-G4 Waves 0 and 1 are complete. Wave 2's eleven-component production build
-passed with the primary profile (`native_build=true`, `openmp=true`), including
-physical-Windows `libomp.dll` runtime acceptance and same-identity reuse. G4
-remains in progress; Wave 3 and FFmpeg integration have not started.
+The normal cross route and `python scripts/run_build.py --g4-final` require
+the previously accepted component wave states and manifests for the selected
+identity; they do not automatically build a fresh dependency stack. Cross
+`--dry-run` reports selection without building. See the strategy document for
+wave commands, acceptance and reuse details.
 
 ### Windows runtime prerequisites
 
 GPU drivers and runtimes belong to Windows itself: the NVIDIA driver and CUDA
 driver runtime, the Windows Vulkan loader and vendor ICD, the Windows OpenCL
 dispatcher and vendor implementations, and the Windows UCRT/system runtime.
-Do not copy Windows system or driver DLLs into WSL.
+`VSScript.dll` is external when using VapourSynth. G4 acceptance stages the
+required LLVM-MinGW `libc++.dll`, `libunwind.dll`, `libwinpthread-1.dll` and
+`libomp.dll` temporarily for Windows execution; it does not create a release
+package. Do not copy Windows system or driver DLLs into WSL.
 
 Architecture, gates and verified results: [`docs/windows_build_strategy.md`](docs/windows_build_strategy.md).
 Implementation notes: [`docs/DeveloperReadme.md`](docs/DeveloperReadme.md).
@@ -519,8 +512,8 @@ macos:
 ```
 
 There is no supported `windows:` configuration block. Selecting
-`linux-cross-mingw` prepares and validates the G3 pass-1 environment, then
-stops before component builds; it is not an end-to-end Windows build backend.
+`linux-cross-mingw` routes the normal build to final G4 integration against
+the previously accepted, identity-matched component stack.
 
 Supported `ffmpeg_version` values are `8.1` (the default) and `9.0`. Each version
 uses a separately verified source archive checksum. Add its archive to the local
@@ -576,7 +569,7 @@ libsdl, freetype, vapoursynth, libvmaf, srt (GPL), libzmq, giflib
 
 ### Hardware Acceleration
 
-vulkan-headers, glslang, fast-float (libplacebo dependency), libplacebo (always built, Vulkan GPU processing opt-in via `enable_libplacebo_vulkan`), nv-codec (Linux), amf (Linux), opencl-headers (Linux), opencl-icd-loader (Linux), onevpl (Linux)
+vulkan-headers, glslang, fast-float, libplacebo, nv-codec, amf, opencl-headers, opencl-icd-loader, onevpl. Eligibility depends on backend, configuration and target capabilities: the accepted Windows target uses nv-codec, Vulkan/libplacebo and OpenCL interfaces; the OpenCL loader is external on Windows. AMF and oneVPL were not selected on that target.
 
 ### Target
 
@@ -597,19 +590,19 @@ The builder automatically detects available hardware acceleration and configures
 | **OpenCL** | Linux/macOS | Runtime+dev readiness model: pkg-config (`OpenCL`/`opencl`) or headers (including `/opt/rocm` and `/usr/local/cuda`) plus ICD loader and vendor ICD files; macOS uses `OpenCL.framework` |
 | **VideoToolbox** | macOS | Always available |
 
-Windows CUDA/NVENC, Vulkan, and OpenCL component builds remain future work.
-G3 validates reusable CUDA fatbin-to-COFF construction and target interfaces,
-but does not adapt or build Windows components; see
-`docs/windows_build_strategy.md`.
+The table describes native detection. For `linux-cross-mingw`, capabilities
+come from physical Windows target evidence, not WSL hardware detection.
+The accepted configuration includes CUDA/NVENC/NVDEC/CUVID, Vulkan/libplacebo,
+OpenCL and CUDA libvmaf; see `docs/windows_build_strategy.md`.
 
 Build backends are explicit: `linux-native` and `linux-wsl2` are distinct modes with different component eligibility rules (`linux-wsl2` builds Linux binaries for WSL itself, not Windows binaries).
 
 ### CUDA Notes
 
 - CUDA kernel compilation requires a CUDA Toolkit; NVENC/NVDEC can also be detected through the installed NVIDIA driver without NVCC.
-- On WSL2, OpenCL is not available through the paravirtualized driver
+- Native Linux builds in WSL2 cannot rely on OpenCL through the paravirtualized NVIDIA driver; cross builds use the physical Windows OpenCL runtime instead.
 - NVENC/NVDEC use the selected nv-codec headers independently of NVCC. CUDA kernels use `--enable-cuda-nvcc` only with a verified profile and nonfree permission; unverified CUDA LLVM is disabled.
-- `enable_libvmaf_cuda: true` enables the libvmaf CUDA path on `linux-native` or `linux-wsl2` only when the shared CUDA profile passes its probes.
+- On `linux-native` or `linux-wsl2`, `enable_libvmaf_cuda: true` enables the CUDA path when the shared CUDA profile passes its probes. The Windows cross path uses its separately validated host/target CUDA contract.
 - For `libvmaf` CUDA builds with `openmp: true`, the builder forwards OpenMP to NVCC host compilation via `NVCC_PREPEND_FLAGS=-Xcompiler=-fopenmp` and removes raw `-fopenmp` from inherited compile/link flags to avoid `nvcc fatal: Unknown option '-fopenmp'`
 - Compute capability priority is config → `CUDA_COMPUTE_CAPABILITY` → `nvidia-smi` detection (minimum across detected GPUs). If none is available, `auto` disables CUDA compilation and `required` fails.
 - FFmpeg receives the selected NVCC, host compiler, compatibility flags, and `compute_XX`/`sm_XX` architecture. The chosen Toolkit supplies include/lib paths and libvmaf's `bin2c`.
@@ -626,7 +619,7 @@ Build backends are explicit: `linux-native` and `linux-wsl2` are distinct modes 
 
 ### Checking built features
 
-For a CUDA-enabled build with libplacebo Vulkan enabled, inspect the installed
+For a native CUDA-enabled build with libplacebo Vulkan enabled, inspect the installed
 binary and configure logs (replace `workspace_81` with `workspace_90` for
 FFmpeg 9.0):
 
@@ -650,7 +643,7 @@ execution on a particular GPU or driver.
 - Enables FFmpeg's `libplacebo` filter (`N->V`) only when `enable_libplacebo_vulkan: true`; a software-only libplacebo build remains available for other consumers
 - Built with: `-Dopengl=disabled -Dd3d11=disabled -Dshaderc=disabled -Dlibdovi=disabled -Dlcms=disabled`
 - Requires Python `jinja2` for GLSL preprocessing; installed with project dependencies (`pip install -e .`) or via distro package `python3-jinja2`
-- Depends on `fast-float` v6.1.6 headers (GitHub release tarballs omit this git submodule; the builder provides it as a separate `HEADERS_ONLY` component)
+- Depends on `fast-float` v8.2.10 headers (GitHub release tarballs omit this git submodule; the builder provides it as a separate `HEADERS_ONLY` component)
 - Version: 7.360.1
 
 ### Intel QSV Notes
@@ -660,7 +653,7 @@ execution on a particular GPU or driver.
 
 ## Build Output
 
-After a successful build, version-specific binaries are located in:
+After a successful native build, version-specific binaries are located in:
 
 ```
 workspace_<version>/bin/ffmpeg      # e.g., workspace_81/bin/ffmpeg or workspace_90/bin/ffmpeg
@@ -668,7 +661,13 @@ workspace_<version>/bin/ffprobe
 workspace_<version>/bin/ffplay
 ```
 
-If `make_release: true`, an additional portable release folder is generated:
+For the accepted Windows cross build, binaries are at
+`workspace_90/targets/linux-cross-mingw-<identity>/bin/ffmpeg.exe` and
+`ffprobe.exe`; target headers, libraries and metadata are in that identity's
+`prefix/`. Acceptance temporarily stages the required LLVM-MinGW DLLs; system
+and vendor runtimes remain external. Windows release packaging has not started.
+
+For native builds, if `make_release: true`, an additional release folder is generated:
 
 ```
 workspace_<version>/release/
@@ -676,15 +675,17 @@ workspace_<version>/release/
 
 The release folder contains:
 
-- `ffmpeg`, `ffprobe`, `ffplay` (or `.exe` on Windows)
+- `ffmpeg`, `ffprobe`, `ffplay`
 - recursively collected non-system runtime libraries in the same `release` directory
 - `manifest.json` with included and missing dependencies
 
-Build logs are stored in:
+Native build logs are stored in:
 
 ```
 workspace_<version>/logs/<component>_<step>.log
 ```
+
+For Windows cross builds, logs are under the identity-specific target directory.
 
 ## Verified Environments
 
@@ -802,7 +803,7 @@ The project's default `-std=c11` CFLAGS leave `__USE_MISC` unset under glibc, br
 
 ### libvmaf CUDA path fails with missing `ffnvcodec` headers or `CudaFunctions has no member`
 
-This project pins `nv-codec-headers` to the oldest release compatible with FFmpeg 8.1's NVENC support, which can be too old for libvmaf's CUDA feature extractors. The builder now builds `nv-codec-headers` ahead of `libvmaf` when needed, defaults to a patch release (`13.0.19.1`) that adds the required CUDA driver symbols without breaking FFmpeg 8.1 NVENC compatibility, falls back to CPU-only `libvmaf` if an incompatible version is ever selected, and symlinks the headers into libvmaf's expected include path for its `.fatbin` build step. See `docs/DeveloperReadme.md` → "libvmaf + nv-codec-headers CUDA compatibility" for details.
+For native builds, the builder keeps libvmaf's CUDA driver headers separate from driver-compatible NVENC headers when needed. The Windows cross path uses its verified target inputs and fails rather than silently dropping requested CUDA functionality. See `docs/DeveloperReadme.md` → "libvmaf + nv-codec-headers CUDA compatibility" for details.
 
 ### (Resolved) libvmaf uncontrolled memory growth on GCC 15/16
 
@@ -816,7 +817,7 @@ Two independent causes on modern GCC toolchains: its bundled test suite always b
 
 - Ensure CUDA toolkit is installed (not just the driver)
 - Check that `nvcc` is in PATH or at `/usr/local/cuda/bin/nvcc`
-- On WSL2, CUDA is available but OpenCL is not
+- For native Linux in WSL2, the NVIDIA paravirtualized driver does not provide OpenCL; the cross backend probes Windows instead.
 
 ### OpenCL not detected
 
@@ -824,7 +825,7 @@ Two independent causes on modern GCC toolchains: its bundled test suite always b
 - Ensure vendor ICD exists: `ls /etc/OpenCL/vendors/*.icd`
 - ROCm installs are supported from non-standard paths (for example `/opt/rocm/include/CL/cl.h`, `/opt/rocm/lib*/libOpenCL.so*`)
 - CUDA SDK installs are also scanned for OpenCL headers (for example `/usr/local/cuda/include/CL/cl.h`)
-- On WSL2, OpenCL is not available through the paravirtualized driver
+- For native Linux in WSL2, OpenCL is not available through the NVIDIA paravirtualized driver; Windows cross builds use Windows OpenCL evidence.
 - On native Linux with NVIDIA: `sudo apt install nvidia-opencl-icd-<driver-version>`
 
 ### Missing Python dependencies

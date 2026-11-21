@@ -528,11 +528,10 @@ Store behaviour (all profiles, not just LLVM-MinGW):
   and left its parent environment unchanged.
 
   Both `scripts/run_build.py`'s headless `run_build()` and the TUI
-  `_run_build()` path reach the same successful preparation result, continue
-  through identity-local G3 environment generation and real configure/link
-  acceptance, then stop before components. The cross `--dry-run` additionally
-  reports Wave-0 selection. This does not claim that either path can yet build
-  a Windows target.
+  `_run_build()` path reach the same preparation and identity-local G3
+  acceptance. They now continue to final G4 integration when the component
+  waves have already been accepted for that identity. Cross `--dry-run`
+  reports Wave-0 selection without building.
 
 Isolated offline provisioning (does not touch the normal store):
 
@@ -877,18 +876,14 @@ Built with the `rich` library. Static screens use `Table`, `Panel`, and `Prompt`
 
 ## Platform-Specific Notes
 
-### Windows (WSL-Mingw) — implementation direction
+### Windows (WSL-Mingw) — current implementation
 
 The Windows build route is **WSL-Mingw**: a Windows host runs a WSL2 Ubuntu
 build environment, which uses the LLVM-MinGW/UCRT cross toolchain to produce
 a Windows FFmpeg target. **WSL-Mingw** is the user-facing name; the backend
-identifier is **`linux-cross-mingw`**. G1, G2, and G3 are PASS; G4 Waves 0–4A
-are accepted, including eleven Wave-2 target dependencies cross-built and
-validated with the required primary OpenMP profile and six Wave-3A LV2
-dependencies built through Meson, followed by the Ogg/Vorbis/Theora chain.
-Wave 4C, the full component stack, and
-FFmpeg integration remain **in progress**. The gates
-G1–G7, verified early-PoC results and open issues are in
+identifier is **`linux-cross-mingw`**. G1–G4 are PASS on the recorded
+physical target; G5 hardware-matrix validation and release packaging have not
+started. The gate history, verified results and open issues are in
 [`windows_build_strategy.md`](windows_build_strategy.md), which is the
 authoritative plan. The previous MSYS2-based Windows build path was replaced
 by this route.
@@ -924,8 +919,10 @@ Implementer rules:
 - **G3 pass-1 execution boundary:** application preparation materializes the
   G2.6 prefix, generates the target-only pkg-config wrapper, CMake toolchain,
   Meson cross file and Autotools projection, and runs isolated configure/link
-  acceptance. It then stops before component building. Do not claim a complete
-  Windows FFmpeg build until G4–G7 acceptance.
+  acceptance. The G3 test itself does not build components; the current normal
+  cross route continues to G4 final integration with the already accepted
+  component stack. G4 software acceptance is distinct from G5 hardware tests
+  and subsequent packaging.
 - **Windows runtime probing goes through Windows interop** (fresh probe of CPU
   features, GPU, drivers, Vulkan/OpenCL runtimes), never through WSL's Linux
   view. Drivers/runtimes (NVIDIA driver, Windows Vulkan loader/ICD, OpenCL
@@ -1024,18 +1021,20 @@ Windows probes, external CUDA 12.4.99 using the clean-store GCC 12.5.0 ccbin
 and `compute_70` PTX, and external Vulkan shader/SPIR-V tools. The schema-2
 identity digest/key were stable and the second preparation resumed the same
 isolated workspace. External SDK/runtime trees remain outside project-owned
-provenance and target inputs. No Windows FFmpeg cross-build was performed.
+provenance and target inputs. No Windows FFmpeg cross-build was performed at
+that G2.8 acceptance point; G4 has since passed.
 
 #### Reusing the native CUDA/Vulkan work for WSL-Mingw
 
-Commit `447b555` provides reusable build-input mechanisms, not a completed
-Windows component build. Native FFmpeg 8.1 and 9.0 builds used the shared CUDA
-profile and matched Vulkan headers/XML; the separate Windows G0A.5 PoC and
-G2.4/G2.5 preparation do not validate Windows libvmaf CUDA or a complete
-Windows build/resume workflow. The authoritative gate requirements and acceptance cases are in
+Commit `447b555` provided reusable build-input mechanisms, not by itself a
+completed Windows component build. Native FFmpeg 8.1 and 9.0 builds used the
+shared CUDA profile and matched Vulkan headers/XML; the separate Windows
+G0A.5 PoC and G2.4/G2.5 preparation did not validate Windows libvmaf CUDA or a
+complete Windows build/resume workflow. Wave 8 and final G4 have since accepted
+those paths on the recorded target. The authoritative requirements and evidence are in
 [`windows_build_strategy.md`](windows_build_strategy.md), §5.7.
 
-| Area | Existing mechanism | Windows adaptation still required |
+| Area | Existing mechanism | Windows contract |
 |------|--------------------|-----------------------------------|
 | CUDA selection | `FFmpegBuilderApp.prepare_target()` uses `resolve_wsl_mingw_cuda_inputs()` and `validate_cuda_ptx_compatibility()`; `ResolvedCudaBuildHostInputs.common_flags()` separates common flags from PTX output options. | Preserve explicit SDK selection and store-managed `-ccbin`; use the config/environment architecture override or fresh Windows target data, not WSL GPU state. Ignore the ambient `CUDA_NVCC_CCBIN` and do not use the native system-GCC fallback. |
 | Output modes | Native `validate_cuda_output_modes()` checks Linux host-object and fatbin generation; `builders/graphics/vmaf.py` uses the selected NVCC and `bin2c`. | PTX success alone is not fatbin acceptance. Test Meson's CUDA compiler check and the libvmaf fatbin → host `bin2c` → target C compilation path; never link a Linux object into Windows. Check all upstream and injected `-gencode` flags, not only the selected baseline. |
@@ -1047,11 +1046,12 @@ Windows build/resume workflow. The authoritative gate requirements and acceptanc
 Current cross preparation enables the CUDA prerequisite when
 `cuda_build_mode: required`, or in `auto` when libvmaf CUDA is requested; in
 either case the selected SDK/PTX prerequisite is required. `disabled` skips
-it. Independent NVENC/NVDEC eligibility is a required future policy, not yet
-an implemented Windows feature matrix. A passed PTX probe or
-`libvmaf_cuda_supported` flag is not proof of a Windows fatbin build. G3–G5
-must preserve explicitly required features, validate nonfree consent, and
-report build presence separately from on-device runtime acceptance.
+it. The accepted G4 configuration includes NVENC/NVDEC; broader independent
+eligibility and the hardware feature matrix remain future validation work. A
+passed PTX probe or `libvmaf_cuda_supported` flag alone is not proof of a
+Windows fatbin build; Wave 8's build and runtime acceptance supply that
+evidence for the recorded target. Preserve explicitly required features,
+validate nonfree consent, and distinguish build presence from on-device runtime acceptance.
 
 Legacy MSYS2 behavior is retained here only so that implementers recognize
 the code to be removed. Its former setup, troubleshooting and path-format
@@ -1451,7 +1451,7 @@ detected (auto-skips otherwise). Run with `pytest tests/test_platform_detect.py 
 
 ## Known Limitations
 
-- **WSL2 OpenCL**: Not available through the paravirtualized NVIDIA driver. The builder correctly detects this and excludes OpenCL components.
+- **WSL2 OpenCL**: Native Linux in WSL cannot rely on OpenCL through the paravirtualized NVIDIA driver. The Windows cross backend instead uses physical-Windows capability evidence and its external OpenCL runtime.
 - **macOS CI**: No automated testing on macOS; platform-specific code paths (macports clang, glibtool, VideoToolbox) require manual verification.
 - **Component versions**: Versions are defined in `components.yaml` (externalized from Python). A future improvement could fetch latest versions from an API or config file.
 - **No dependency graph**: Components are built in a fixed order defined in `components.yaml`. There is no automatic topological sort based on `depends_on`.
