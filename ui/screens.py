@@ -1,24 +1,27 @@
 """UI screens using rich library."""
 
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
 from rich.table import Table
+from rich.text import Text
 
-from ..components import Component
-from ..config import BuildConfig, SUPPORTED_FFMPEG_VERSIONS
-from ..ffmpeg_policy import FfmpegPolicy
+from ..components import Component, ComponentSelection
+from ..config import BuildConfig, SUPPORTED_FFMPEG_VERSIONS, TARGET_BACKEND_CROSS_MINGW
+from ..cross_environment import TARGET_TRIPLE
+from ..ffmpeg_policy import FFMPEG_BUILD_VARIANTS, FfmpegPolicy
 from ..state import BuildState, ComponentStatus
 from ..system_report import SystemReport
 from ..toolchain_registry import ComponentToolchainPlan, ToolchainRegistry
-from ..toolchain_store import InstalledToolchain, ToolchainStore
+from ..toolchain_store import STATUS_COMPATIBLE, InstalledToolchain, ToolchainStore
+from ..windows_probe import WindowsTargetState
 
 _START_KEYS: List[tuple] = [
-    ("b", "Start new build", "Build all components from scratch (resets previous state)"),
-    ("r", "Resume previous build", "Continue from the last interrupted build"),
+    ("b", "Start build", "Start a native build or build/reuse the matching Windows target"),
+    ("r", "Resume previous build", "Continue a saved build for the selected variant"),
     ("c", "Edit configuration", "Change build flags, jobs, async downloads"),
     ("w", "Cleanup workspace", "Remove state, sources, and build artifacts"),
     ("i", "Component info", "List all components (buildable + skipped)"),
@@ -110,6 +113,13 @@ class SystemReportScreen(UIScreen):
         state: Optional[BuildState] = None,
         buildable_count: Optional[int] = None,
         ffmpeg_policy: Optional[FfmpegPolicy] = None,
+        *,
+        previous_workspace: Optional[Path] = None,
+        windows_target: Optional[WindowsTargetState] = None,
+        target_probe_error: str = "",
+        missing_host_tools: Sequence[str] = (),
+        cross_environment: Any = None,
+        preparation: Any = None,
     ) -> str:
         """Show system report screen.
 
@@ -130,7 +140,8 @@ class SystemReportScreen(UIScreen):
         )
         self.console.print()
 
-        hw_table = Table(title="Hardware", show_header=False)
+        cross = config.target_backend == TARGET_BACKEND_CROSS_MINGW
+        hw_table = Table(title="Build Host Hardware" if cross else "Hardware", show_header=False)
         hw_table.add_column("Property", style="cyan")
         hw_table.add_column("Value")
         hw_table.add_row("CPU", report.system_info.cpu_model)
@@ -140,7 +151,7 @@ class SystemReportScreen(UIScreen):
             hw_table.add_row("GPU", ", ".join(report.system_info.gpu_info))
         self.console.print(hw_table)
 
-        sw_table = Table(title="Software", show_header=False)
+        sw_table = Table(title="Build Host Software" if cross else "Software", show_header=False)
         sw_table.add_column("Property", style="cyan")
         sw_table.add_column("Value")
         os_display = report.system_info.os_name
@@ -158,7 +169,10 @@ class SystemReportScreen(UIScreen):
         sw_table.add_row("Build Platform", runtime_mode)
         sw_table.add_row("Build Backend", backend_mode)
         sw_table.add_row("Architecture", report.system_info.architecture)
-        sw_table.add_row("Compiler", f"{compiler['compiler']} {compiler['version']}")
+        sw_table.add_row(
+            "Host compiler" if cross else "Compiler",
+            f"{compiler['compiler']} {compiler['version']}",
+        )
         self.console.print(sw_table)
 
         available = sum(1 for t in report.tools.values() if t.available)
@@ -167,10 +181,115 @@ class SystemReportScreen(UIScreen):
         if missing:
             names = sorted(name for name, t in report.tools.items() if not t.available)
             tools_summary += f" · missing: {', '.join(names)}"
-        tools_table = Table(title="Available Tools", show_header=False)
+        tools_table = Table(title="Host Tools" if cross else "Available Tools", show_header=False)
         tools_table.add_column("Property", style="cyan")
         tools_table.add_column("Value")
-        tools_table.add_row("Summary", tools_summary)
+        if cross:
+            tools_table.add_row(
+                "Required host tools",
+                f"missing: {', '.join(missing_host_tools)}" if missing_host_tools else "available",
+            )
+            tools_table.add_row("Target toolchains", "See [t] for status and [p] to prepare")
+            tools_table.add_row("External SDKs", "Validated during build preparation")
+            tools_table.add_row(
+                "CUDA host tools",
+                (
+                    f"NVCC {preparation.cuda.nvcc_path}; ccbin {preparation.cuda.ccbin_path}"
+                    if preparation is not None and preparation.cuda is not None
+                    else "Linux NVCC/toolkit and ccbin validated during preparation"
+                ),
+            )
+            tools_table.add_row(
+                "Vulkan host tools",
+                (
+                    f"WSL SDK {preparation.vulkan.effective_sdk_root}"
+                    if preparation is not None and preparation.vulkan is not None
+                    else "WSL SDK tools validated during preparation"
+                ),
+            )
+        else:
+            tools_table.add_row("Summary", tools_summary)
+            self._add_native_hardware_status(tools_table, report)
+        self.console.print(tools_table)
+
+        config_table = Table(title="Build Configuration", show_header=False)
+        config_table.add_column("Property", style="cyan")
+        config_table.add_column("Value")
+        config_table.add_row("FFmpeg Version", config.ffmpeg_version)
+        if cross:
+            config_table.add_row("Target Backend", config.target_backend)
+            compiler_label = f"LLVM-MinGW ({TARGET_TRIPLE}); resolved during preparation"
+            if preparation is not None:
+                profile = preparation.project_toolchains.get("llvm-mingw", {})
+                compiler_label = f"LLVM-MinGW {profile.get('version', '')} ({TARGET_TRIPLE})"
+            config_table.add_row("Target compiler", compiler_label)
+            if cross_environment is not None:
+                config_table.add_row(
+                    "Target workspace", str(cross_environment.paths.workspace_root)
+                )
+                config_table.add_row("Target prefix", str(cross_environment.paths.target_prefix))
+            if windows_target is not None:
+                os_info = windows_target.os
+                target_label = os_info.product_name or "Windows"
+                config_table.add_row(
+                    "Windows Target", f"{target_label} {os_info.version} ({os_info.architecture})"
+                )
+                config_table.add_row(
+                    "Windows NVIDIA/CUDA",
+                    windows_target.nvidia.state.value,
+                )
+                nvidia_devices = getattr(windows_target.nvidia, "devices", ())
+                if nvidia_devices:
+                    config_table.add_row(
+                        "Windows NVIDIA devices",
+                        ", ".join(
+                            f"{device.name} (driver {device.driver_version}, "
+                            f"compute {device.compute_capability or 'unknown'})"
+                            for device in nvidia_devices
+                        ),
+                    )
+                config_table.add_row(
+                    "Windows Vulkan runtime/device", windows_target.vulkan.state.value
+                )
+                vulkan_devices = getattr(windows_target.vulkan, "devices", ())
+                if vulkan_devices:
+                    config_table.add_row(
+                        "Windows Vulkan devices",
+                        ", ".join(device.name for device in vulkan_devices),
+                    )
+                config_table.add_row("Windows OpenCL runtime", windows_target.opencl.state.value)
+            else:
+                config_table.add_row("Windows Target", "unavailable/not probed")
+                if target_probe_error:
+                    config_table.add_row("Probe reason", target_probe_error)
+            interface = "not prepared"
+            if cross_environment is not None:
+                inputs = cross_environment.target_interfaces
+                interface = (
+                    "prepared"
+                    if inputs.opencl_headers.is_dir() and inputs.opencl_import_library.is_file()
+                    else "not prepared"
+                )
+            config_table.add_row("OpenCL target build interface", interface)
+            config_table.add_row("WSL OpenCL", "Host diagnostic only; not required for Windows")
+        if ffmpeg_policy is not None:
+            policy_summary = (
+                "allowed"
+                if ffmpeg_policy.selected_version_allowed
+                else f"blocked: {ffmpeg_policy.blocked_reason}"
+            )
+            config_table.add_row("FFmpeg Policy", policy_summary)
+            if ffmpeg_policy.notes:
+                config_table.add_row("Policy Notes", " ".join(ffmpeg_policy.notes))
+        self._add_build_configuration(config_table, report, config, buildable_count)
+        self.console.print(config_table)
+
+        if state:
+            self._show_previous_build(state, previous_workspace)
+
+        return self._ask_action(cross, state is not None)
+
+    def _add_native_hardware_status(self, tools_table: Table, report: SystemReport) -> None:
         hwaccel = report.get_hardware_acceleration_status()
         if hwaccel:
             accel = ", ".join(name for name, ok in hwaccel.items() if ok)
@@ -227,21 +346,14 @@ class SystemReportScreen(UIScreen):
         )
         if not vulkan_diag["available"] and vulkan_diag["reason"]:
             tools_table.add_row("Vulkan reason", vulkan_diag["reason"])
-        self.console.print(tools_table)
 
-        config_table = Table(title="Build Configuration", show_header=False)
-        config_table.add_column("Property", style="cyan")
-        config_table.add_column("Value")
-        config_table.add_row("FFmpeg Version", config.ffmpeg_version)
-        if ffmpeg_policy is not None:
-            policy_summary = (
-                "allowed"
-                if ffmpeg_policy.selected_version_allowed
-                else f"blocked: {ffmpeg_policy.blocked_reason}"
-            )
-            config_table.add_row("FFmpeg Policy", policy_summary)
-            if ffmpeg_policy.notes:
-                config_table.add_row("Policy Notes", " ".join(ffmpeg_policy.notes))
+    def _add_build_configuration(
+        self,
+        config_table: Table,
+        report: SystemReport,
+        config: BuildConfig,
+        buildable_count: Optional[int],
+    ) -> None:
         config_table.add_row("GPL Enabled", "Yes" if config.gpl_enabled else "No")
         config_table.add_row("Make Release", "Yes" if config.make_release else "No")
         config_table.add_row("Native Build", "Yes" if config.native_build else "No")
@@ -268,23 +380,28 @@ class SystemReportScreen(UIScreen):
             config_table.add_row(
                 "Components", f"{buildable_count} buildable · press [i] for full list"
             )
-        self.console.print(config_table)
 
-        if state:
-            completed = sum(
-                1
-                for c in state.components.values()
-                if c.status in (ComponentStatus.COMPLETED, ComponentStatus.SYSTEM)
+    def _show_previous_build(self, state: BuildState, workspace: Optional[Path]) -> None:
+        completed = sum(
+            1
+            for c in state.components.values()
+            if c.status in (ComponentStatus.COMPLETED, ComponentStatus.SYSTEM)
+        )
+        total = state.total_steps or len(state.components)
+        state_table = Table(title="Previous Build", show_header=False)
+        state_table.add_column("Property", style="cyan")
+        state_table.add_column("Value")
+        state_table.add_row("Build ID", state.build_id)
+        state_table.add_row("Started", state.started_at)
+        state_table.add_row("Progress", f"{completed}/{total} components")
+        if workspace is not None:
+            state_table.add_row("Last recorded", str(workspace))
+            state_table.add_row(
+                "Reuse", "Checked against the current target identity at build time"
             )
-            total = state.total_steps or len(state.components)
-            state_table = Table(title="Previous Build", show_header=False)
-            state_table.add_column("Property", style="cyan")
-            state_table.add_column("Value")
-            state_table.add_row("Build ID", state.build_id)
-            state_table.add_row("Started", state.started_at)
-            state_table.add_row("Progress", f"{completed}/{total} components")
-            self.console.print(state_table)
+        self.console.print(state_table)
 
+    def _ask_action(self, cross: bool, has_state: bool) -> str:
         self.console.print()
         actions_table = Table(
             title="Actions (press key, then Enter)",
@@ -296,10 +413,22 @@ class SystemReportScreen(UIScreen):
         actions_table.add_column("Action", style="cyan", no_wrap=True, width=24)
         actions_table.add_column("Description")
         actions_table.add_row(
-            "b", "Start new build", "Build all components from scratch (resets previous state)"
+            "b",
+            "Start build" if cross else "Start new build",
+            (
+                "Build or validate and reuse matching Windows artifacts"
+                if cross
+                else "Build all components from scratch (resets previous state)"
+            ),
         )
         actions_table.add_row(
-            "r", "Resume previous build", "Continue from the last interrupted build"
+            "r",
+            "Resume previous build",
+            (
+                "Continue the matching Windows target build, if available"
+                if cross
+                else "Continue from the last interrupted build"
+            ),
         )
         actions_table.add_row(
             "c", "Edit configuration", "Change build flags, jobs, async downloads"
@@ -317,7 +446,7 @@ class SystemReportScreen(UIScreen):
         self.console.print(actions_table)
 
         choices = ["b", "c", "w", "i", "t", "p", "h", "q"]
-        if state:
+        if has_state:
             choices.insert(1, "r")
         choice = Prompt.ask("Choice", choices=choices)
 
@@ -376,7 +505,13 @@ class HelpScreen(UIScreen):
 class ToolchainPlanScreen(UIScreen):
     """Read-only view of the resolved toolchain per component."""
 
-    def show(self, plan: List[ComponentToolchainPlan]) -> None:
+    def show(
+        self,
+        plan: List[ComponentToolchainPlan],
+        required: Optional[Dict[str, Tuple[str, str]]] = None,
+        *,
+        prerequisite_note: str = "",
+    ) -> None:
         """Show the resolved toolchain plan.
 
         Args:
@@ -402,6 +537,16 @@ class ToolchainPlanScreen(UIScreen):
                 _format_cuda(entry),
             )
         self.console.print(table)
+        if required:
+            profiles = Table(title="Required target profiles")
+            profiles.add_column("Profile")
+            profiles.add_column("Store status")
+            profiles.add_column("Reason")
+            for name, (status, reason) in required.items():
+                profiles.add_row(name, status, reason)
+            self.console.print(profiles)
+        if prerequisite_note:
+            self.console.print(prerequisite_note, markup=False)
         self.console.print()
         self.console.print("[dim]Read-only: no toolchain is deployed in this phase.[/dim]")
         Prompt.ask("Press Enter to return")
@@ -415,6 +560,8 @@ class ToolchainStoreScreen(UIScreen):
         store: ToolchainStore,
         registry: ToolchainRegistry,
         recommended: Optional[List[Tuple[str, str]]] = None,
+        *,
+        prerequisite_note: str = "",
     ) -> None:
         """Show the toolchain store and handle acquire/remove/clean actions.
 
@@ -436,7 +583,13 @@ class ToolchainStoreScreen(UIScreen):
             self.console.print()
 
             installed = {item.profile: item for item in store.list_installed()}
-            suggested = {name for name, _reason in recommended or []}
+            status_by_name = {name: store.installed_status(registry, name) for name in installed}
+            pending = [
+                (name, reason)
+                for name, reason in recommended or []
+                if status_by_name.get(name, ("", ""))[0] != STATUS_COMPATIBLE
+            ]
+            suggested = {name for name, _reason in pending}
             table = Table(title="Profiles", show_header=True, header_style="bold cyan")
             table.add_column("Profile", style="cyan", no_wrap=True)
             table.add_column("Version", no_wrap=True)
@@ -454,10 +607,14 @@ class ToolchainStoreScreen(UIScreen):
                 entry = installed.get(name)
                 if entry is None:
                     status = "not installed"
-                elif entry.verified:
-                    status = f"installed ({entry.variant})"
                 else:
-                    status = f"FAILED verification ({entry.variant})"
+                    disposition, reason = status_by_name[name]
+                    if disposition == STATUS_COMPATIBLE:
+                        status = f"installed ({entry.variant})"
+                    elif not entry.verified:
+                        status = f"FAILED verification ({entry.variant}): {reason}"
+                    else:
+                        status = f"{disposition}: {reason}"
                 table.add_row(
                     name,
                     profile.version or "-",
@@ -470,7 +627,10 @@ class ToolchainStoreScreen(UIScreen):
             self.console.print()
 
             self._print_notes(registry)
-            self._print_recommendations(recommended, installed)
+            if prerequisite_note:
+                self.console.print(prerequisite_note, markup=False)
+            if pending or not prerequisite_note:
+                self._print_recommendations(pending)
             self._print_key_reference()
 
             choice = Prompt.ask("Choice", choices=["p", "a", "r", "c", "q"])
@@ -482,7 +642,7 @@ class ToolchainStoreScreen(UIScreen):
                 Prompt.ask("Press Enter to continue")
                 continue
             if choice == "p":
-                self._acquire_recommended(store, registry, recommended, installed)
+                self._acquire_recommended(store, registry, pending)
                 continue
             self._handle_single_action(store, registry, installed, choice)
 
@@ -516,11 +676,9 @@ class ToolchainStoreScreen(UIScreen):
 
     def _print_recommendations(
         self,
-        recommended: Optional[List[Tuple[str, str]]],
-        installed: Dict[str, InstalledToolchain],
+        pending: List[Tuple[str, str]],
     ) -> None:
         """Render the system-analysis recommendation list, if any."""
-        pending = [entry for entry in recommended or [] if entry[0] not in installed]
         if pending:
             table = Table(
                 title="Recommended (from system analysis)",
@@ -538,8 +696,7 @@ class ToolchainStoreScreen(UIScreen):
             return
 
         self.console.print(
-            "[green]System analysis: nothing to deploy for the current FFmpeg "
-            "version — the detected toolchain is in range.[/green]"
+            "[green]System analysis: nothing to deploy for the current build.[/green]"
         )
         self.console.print()
 
@@ -547,11 +704,9 @@ class ToolchainStoreScreen(UIScreen):
         self,
         store: ToolchainStore,
         registry: ToolchainRegistry,
-        recommended: Optional[List[Tuple[str, str]]],
-        installed: Dict[str, InstalledToolchain],
+        pending: List[Tuple[str, str]],
     ) -> None:
         """Acquire every recommended profile in dependency order."""
-        pending = [entry for entry in recommended or [] if entry[0] not in installed]
         if not pending:
             self.console.print("[yellow]No recommended profiles to acquire.[/yellow]")
             Prompt.ask("Press Enter to continue")
@@ -655,11 +810,36 @@ class InfoScreen(UIScreen):
         buildable: List[Component],
         all_components: Optional[List[Component]] = None,
         toolchain_reasons: Optional[Dict[str, str]] = None,
+        *,
+        selection: Optional[ComponentSelection] = None,
     ) -> None:
         """Show paged component information."""
-        selected: Set[str] = {component.name for component in buildable}
+        selected = {component.name: component for component in buildable}
         components = all_components or buildable
         reasons = toolchain_reasons or {}
+        target_notes: Dict[str, str] = {}
+        if selection is not None:
+            target_notes.update(
+                (c.name, "selected target component") for c in selection.target_components_to_build
+            )
+            target_notes.update((c.name, "target input") for c in selection.target_inputs)
+            target_notes.update((c.name, "mixed component") for c in selection.mixed_components)
+            target_notes.update(
+                (c.name, "not supported by target") for c in selection.skipped_by_backend
+            )
+            target_notes.update(
+                (c.name, "disabled by configuration") for c in selection.skipped_by_feature
+            )
+            target_notes.update(
+                (c.name, "conditional on target capabilities")
+                for c in selection.conditional_components
+            )
+            satisfied = set(selection.system_satisfied_host_requirements)
+            for host_tool in selection.host_tools:
+                available = (host_tool.system_tool_name or host_tool.name) in satisfied
+                target_notes[host_tool.name] = (
+                    "host tool: available" if available else "host tool: missing"
+                )
         page = 0
         page_size = max(8, self.console.size.height - 10)
         while True:
@@ -675,10 +855,14 @@ class InfoScreen(UIScreen):
             start = page * page_size
             end = min(len(components), start + page_size)
             for index, component in enumerate(components[start:end], start + 1):
+                component = selected.get(component.name, component)
                 notes = []
-                if component.system_component:
+                target_note = target_notes.get(component.name)
+                if component.system_component and not target_note:
                     notes.append("system")
-                if component.name not in selected:
+                if target_note:
+                    notes.append(target_note)
+                elif component.name not in selected:
                     reason = reasons.get(component.name)
                     notes.append(f"toolchain: {reason}" if reason else "not selected")
                 table.add_row(
@@ -736,16 +920,20 @@ class ConfigScreen(UIScreen):
         )
         if not version_choices:
             raise ValueError("No FFmpeg versions available for the current policy.")
-        version_default = (
-            config.ffmpeg_version
-            if config.ffmpeg_version in version_choices
-            else version_choices[0]
+        current = next(
+            (
+                label
+                for label, variant in FFMPEG_BUILD_VARIANTS.items()
+                if variant == (config.ffmpeg_version, config.target_backend)
+            ),
+            None,
         )
-        config.ffmpeg_version = Prompt.ask(
+        variant = Prompt.ask(
             "FFmpeg version",
             choices=version_choices,
-            default=version_default,
+            default=current if current in version_choices else version_choices[0],
         )
+        config.ffmpeg_version, config.target_backend = FFMPEG_BUILD_VARIANTS[variant]
         config.gpl_enabled = Confirm.ask(
             "Enable GPL and non-free codecs?", default=config.gpl_enabled
         )
@@ -824,12 +1012,81 @@ class ConfigScreen(UIScreen):
 class FinalReportScreen(UIScreen):
     """Final build report screen."""
 
+    def show_windows(
+        self,
+        state: BuildState,
+        workspace: Path,
+        success: bool,
+        error_message: Optional[str] = None,
+        *,
+        release: bool = False,
+    ) -> None:
+        """Report Windows target outputs without offering a host installation."""
+        self.console.clear()
+        self.console.print(
+            "[bold green]Windows Build Completed Successfully![/bold green]"
+            if success
+            else "[bold red]Windows Build Failed[/bold red]"
+        )
+        table = Table(title="Component Summary")
+        table.add_column("Status")
+        table.add_column("Count")
+        for status in (
+            ComponentStatus.COMPLETED,
+            ComponentStatus.SYSTEM,
+            ComponentStatus.FAILED,
+            ComponentStatus.SKIPPED,
+        ):
+            count = sum(c.status == status for c in state.components.values())
+            table.add_row(status.value, str(count))
+        self.console.print(table)
+        self.console.print("Completed/system components may include validated reuse.")
+        if isinstance(state.identity, dict):
+            fingerprint = state.identity.get("fingerprints", {}).get("build")
+            if isinstance(fingerprint, str):
+                self.console.print(f"Target build key: {fingerprint[:16]}")
+        if success:
+            bin_dir = workspace / "bin"
+            self.console.print(f"Windows binaries: {bin_dir}", soft_wrap=True, highlight=False)
+            for name in ("ffmpeg.exe", "ffprobe.exe", "ffplay.exe"):
+                path = bin_dir / name
+                if path.is_file():
+                    self.console.print(f"{name}: {path}", soft_wrap=True, highlight=False)
+                elif name != "ffplay.exe":
+                    self.console.print(f"{name}: not built")
+            if release and (workspace / "release").is_dir():
+                self.console.print(
+                    f"Windows release bundle: {workspace / 'release'}",
+                    soft_wrap=True,
+                    highlight=False,
+                )
+        else:
+            if error_message:
+                self.console.print(
+                    Panel(Text(error_message), title="Error Details", border_style="red")
+                )
+            for name, component in state.components.items():
+                if component.status == ComponentStatus.FAILED:
+                    self.console.print(
+                        f"Failed component: {name}: {component.error_message or 'Unknown error'}"
+                    )
+                    if component.log_file:
+                        self.console.print(
+                            f"Log: {component.log_file}", soft_wrap=True, highlight=False
+                        )
+            self.console.print(
+                f"State and workspace preserved: {workspace}. " "Correct the cause and use Resume."
+            )
+
     def show(
         self,
         state: BuildState,
         workspace: Path,
         success: bool,
         error_message: Optional[str] = None,
+        *,
+        target_backend: str = "native",
+        release: bool = False,
     ) -> None:
         """Show final build report.
 
@@ -839,6 +1096,10 @@ class FinalReportScreen(UIScreen):
             success: Whether build succeeded.
             error_message: Error message if failed.
         """
+        if target_backend == TARGET_BACKEND_CROSS_MINGW:
+            self.show_windows(state, workspace, success, error_message, release=release)
+            return
+
         self.console.clear()
 
         if success:

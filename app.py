@@ -3,12 +3,13 @@
 import os
 import platform as _platform
 import shutil
+import stat
 import sys
 import tempfile
 from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace, TracebackType
-from typing import Any, Callable, Dict, List, Optional, Tuple, Type
+from types import SimpleNamespace
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from rich.console import Console
 from rich.live import Live
@@ -24,6 +25,7 @@ from .builder import FFmpegBuilder
 from .components import Component, ComponentRegistry, ComponentSelection
 from .cross_environment import (
     CrossEnvironment,
+    missing_cross_host_tools,
     run_cross_environment_acceptance,
 )
 from .build_identity import (
@@ -39,10 +41,13 @@ from .cuda_prerequisites import (
     cuda_nv_codec_identity,
     cuda_profile_identity,
     invalidate_cuda_resume,
+    require_cuda_host_profile,
+    resolve_cuda_sdk,
     resolve_wsl_mingw_cuda_inputs,
     validate_cuda_output_modes,
     validate_cuda_ptx_compatibility,
     validate_required_cuda_components,
+    wsl_mingw_cuda_requested,
 )
 from .ffmpeg_policy import (
     FfmpegPolicy,
@@ -53,8 +58,9 @@ from .platform_detect import PlatformDetector
 from .platforms.context import PlatformContext
 from .platforms.linux_cross_mingw import LinuxCrossMingwPlatform
 from .platforms.resolver import PlatformStrategyResolver
-from .state import ComponentStatus, StateManager
+from .state import BuildState, ComponentStatus, StateManager
 from .target_guard import (
+    TARGETS_DIRNAME,
     IdentityError,
     TargetSession,
     baseline_from_state,
@@ -80,7 +86,7 @@ from .wsl_mingw_preparation import (
     resolve_wsl_mingw_project_toolchains,
 )
 from .target_inputs import materialize_target_inputs, validate_target_inputs_manifest
-from .ui.dashboard import BuildDashboard
+from .ui.dashboard import BuildDashboard, MessageStream
 from .ui.error_handler import ErrorHandler
 from .ui.screens import (
     ConfigScreen,
@@ -119,17 +125,7 @@ class FFmpegBuilderApp:
         self.config_manager = ConfigManager(config_path or PROJECT_ROOT / "build_config.yaml")
         config = self.config_manager.load()
         self._sync_workspace(config)
-
-        self.platform_detector = PlatformDetector(config=config)
-        self.system_info, self.platform_info, self.tools = self.platform_detector.detect_all()
-
-        report_gen = SystemReportGenerator(
-            self.system_info,
-            self.platform_info,
-            self.tools,
-            config=config,
-        )
-        self.system_report = report_gen.generate()
+        self._detect_environment(config)
 
         self.registry = ComponentRegistry()
 
@@ -151,6 +147,16 @@ class FFmpegBuilderApp:
         self.base_workspace = self.workspace
         self.packages = self.workspace / "packages"
         self.state_manager = StateManager(self.workspace / "build_state.json")
+
+    def _detect_environment(self, config: BuildConfig) -> None:
+        """Discard resolved inputs and detect the host for the selected backend."""
+        self._detected_backend = config.target_backend
+        self.windows_target_state = None
+        self.wsl_mingw_preparation = None
+        self.cross_environment = None
+        self.platform_detector = PlatformDetector(config=config)
+        self.system_info, self.platform_info, self.tools = self.platform_detector.detect_all()
+        self._refresh_system_report(config)
 
     @staticmethod
     def _is_cross_mingw(config: BuildConfig) -> bool:
@@ -228,6 +234,8 @@ class FFmpegBuilderApp:
         ``IdentityError`` when prerequisites or reuse are unsafe, leaving saved
         state and artifacts untouched.
         """
+        if reason := config.cross_version_block_reason():
+            raise BuildError("WSL-Mingw target", reason, category=CATEGORY_TARGET_DATA)
         if (
             config.enable_hardware_acceleration
             and config.cuda_build_mode == "required"
@@ -272,15 +280,7 @@ class FFmpegBuilderApp:
                 config.ffmpeg_version, registry, store
             )
             cuda_inputs: Optional[ResolvedCudaBuildHostInputs] = None
-            cuda_enabled = (
-                config.enable_hardware_acceleration
-                and config.cuda_build_mode != "disabled"
-                and (
-                    config.cuda_build_mode == "required"
-                    or (config.enable_libvmaf and config.enable_libvmaf_cuda)
-                )
-            )
-            if cuda_enabled:
+            if wsl_mingw_cuda_requested(config):
                 cuda_inputs = resolve_wsl_mingw_cuda_inputs(config, registry, store, required=True)
                 if cuda_inputs is None:
                     raise BuildError(
@@ -712,6 +712,28 @@ class FFmpegBuilderApp:
         )
         self.system_report = report_gen.generate()
 
+    def _previous_build(self, config: BuildConfig) -> Tuple[Optional[BuildState], Optional[Path]]:
+        if not self._is_cross_mingw(config):
+            return self.state_manager.load(), None
+        # History is display-only. G7 recomputes the identity before trusting any state.
+        latest: Optional[Tuple[int, Path, BuildState]] = None
+        pattern = f"{TARGET_BACKEND_CROSS_MINGW}-*/build_state.json"
+        for path in (self.base_workspace / TARGETS_DIRNAME).glob(pattern):
+            try:
+                updated = path.stat().st_mtime_ns
+            except OSError:
+                continue
+            state = StateManager(path).inspect().state
+            if (
+                state is not None
+                and isinstance(state.config, dict)
+                and state.config.get("ffmpeg_version") == config.ffmpeg_version
+                and state.config.get("target_backend") == config.target_backend
+                and (latest is None or (updated, path) > latest[:2])
+            ):
+                latest = (updated, path, state)
+        return (latest[2], latest[1].parent) if latest is not None else (None, None)
+
     def run(self) -> int:
         """Run the application.
 
@@ -719,13 +741,38 @@ class FFmpegBuilderApp:
             Exit code.
         """
         try:
+            preview_target = True
+            target_probe_error = ""
             while True:
                 config = self.config_manager.get()
                 self._sync_workspace(config)
+                cross = self._is_cross_mingw(config)
+                if config.target_backend != self._detected_backend:
+                    self._detect_environment(config)
+                    preview_target = True
                 policy = self._build_policy(config)
+                if preview_target:
+                    target_probe_error = ""
+                    if cross and policy.selected_version_allowed:
+                        try:
+                            self.windows_target_state = None
+                            with self.console.status("Probing Windows target..."):
+                                self._probe_windows_target(config)
+                        except BuildError as exc:
+                            target_probe_error = str(exc)
+                    preview_target = False
                 self._refresh_system_report(config)
-                state = self.state_manager.load()
-                components = self._get_buildable_components(config)
+                state, previous_workspace = self._previous_build(config)
+                selection = (
+                    self._get_component_selection(config)
+                    if cross and policy.selected_version_allowed
+                    else None
+                )
+                components = (
+                    selection.production_components
+                    if selection is not None
+                    else [] if cross else self._get_buildable_components(config)
+                )
 
                 action = self.system_screen.show(
                     self.system_report,
@@ -733,40 +780,51 @@ class FFmpegBuilderApp:
                     state,
                     len(components),
                     policy,
+                    previous_workspace=previous_workspace,
+                    windows_target=self.windows_target_state,
+                    target_probe_error=target_probe_error,
+                    cross_environment=self.cross_environment,
+                    preparation=self.wsl_mingw_preparation,
+                    missing_host_tools=(
+                        sorted(
+                            set(selection.missing_recipe_tools) | set(missing_cross_host_tools())
+                        )
+                        if selection is not None
+                        else ()
+                    ),
                 )
 
-                if action == "build":
+                if action in ("build", "resume"):
                     if not policy.selected_version_allowed:
                         self.console.print(
-                            f"[red]Build blocked by FFmpeg policy:[/red] {policy.blocked_reason}"
+                            f"[red]{action.capitalize()} blocked by FFmpeg policy:[/red] "
+                            f"{policy.blocked_reason}"
                         )
-                        continue
-                    self._run_build(config, resume=False)
-                elif action == "resume":
-                    if state or self._is_cross_mingw(config):
-                        if not policy.selected_version_allowed:
-                            self.console.print(
-                                f"[red]Resume blocked by FFmpeg policy:[/red] {policy.blocked_reason}"
-                            )
-                            continue
-                        self._run_build(config, resume=True)
-                    else:
+                    elif action == "resume" and state is None:
                         self.console.print("[red]No previous build to resume.[/red]")
-                        continue
+                    else:
+                        self._run_build(config, resume=action == "resume")
                 elif action == "config":
-                    config = self.config_screen.show(config, policy.available_versions)
-                    self.config_manager.save(config)
+                    if policy.available_variants:
+                        updated = self.config_screen.show(config, policy.available_variants)
+                        self.config_manager.save(updated)
+                        if cross and self._is_cross_mingw(updated):
+                            self._detect_environment(updated)
+                        preview_target = True
+                    else:
+                        self.console.print("[red]No FFmpeg versions available.[/red]")
                 elif action == "cleanup":
-                    self._cleanup()
+                    self._cleanup(remove_legacy=not cross)
                 elif action == "info":
                     self.info_screen.show(
                         components,
                         self.registry.get_all(),
                         toolchain_reasons=self._component_toolchain_reasons(config),
+                        selection=selection,
                     )
                     continue
                 elif action == "toolchain":
-                    self._show_toolchain_plan(config)
+                    self._show_toolchain_plan(config, components)
                     continue
                 elif action == "store":
                     self._show_toolchain_store(config)
@@ -841,20 +899,12 @@ class FFmpegBuilderApp:
         state = self.windows_target_state
         if state is None:
             return None
-        cuda_enabled = (
-            config.enable_hardware_acceleration
-            and config.cuda_build_mode != "disabled"
-            and (
-                config.cuda_build_mode == "required"
-                or (config.enable_libvmaf and config.enable_libvmaf_cuda)
-            )
-        )
         nvidia_api = next((value for value in state.nvidia.api.values() if value), None)
         opencl_present = (
             config.enable_hardware_acceleration and state.opencl.state == FeatureState.PRESENT
         )
         return SimpleNamespace(
-            cuda_available=cuda_enabled,
+            cuda_available=wsl_mingw_cuda_requested(config),
             nvenc_api_version=nvidia_api if config.enable_hardware_acceleration else None,
             vulkan_available=config.enable_hardware_acceleration
             and config.enable_libplacebo_vulkan,
@@ -895,9 +945,12 @@ class FFmpegBuilderApp:
         installed = self._installed_toolchains(config)
         versions = self._system_tool_versions()
         platform = self.platform_detector.get_platform_name()
+        cross = self._is_cross_mingw(config)
 
         def _check(component: Component) -> bool:
-            if component.name == "rav1e":
+            # CrossEnvironment supplies the backend toolchain; native compiler
+            # range/fallback rules do not gate Windows target components.
+            if component.name == "rav1e" or (cross and component.toolchain in ("", "n/a")):
                 return True
             assignment = toolchain_registry.resolve_component_toolchain(
                 component.toolchain, config.ffmpeg_version, platform, versions
@@ -960,7 +1013,9 @@ class FFmpegBuilderApp:
         platform = self.platform_detector.get_platform_name()
         reasons: Dict[str, str] = {}
         for component in self.registry.get_all():
-            if component.name == "rav1e":
+            if component.name == "rav1e" or (
+                self._is_cross_mingw(config) and component.toolchain in ("", "n/a")
+            ):
                 continue
             assignment = toolchain_registry.resolve_component_toolchain(
                 component.toolchain, config.ffmpeg_version, platform, versions
@@ -992,22 +1047,63 @@ class FFmpegBuilderApp:
         """Map detected system tool names to version strings for range checks."""
         return detected_system_tool_versions(self.platform_info, self.tools)
 
-    def _show_toolchain_plan(self, config: BuildConfig) -> None:
+    def _toolchain_cuda_version(
+        self, config: BuildConfig, registry: ToolchainRegistry
+    ) -> Tuple[Optional[str], str]:
+        if not self._is_cross_mingw(config):
+            return self.platform_info.cuda_version, ""
+        if config.cross_version_block_reason() or not wsl_mingw_cuda_requested(config):
+            return None, ""
+        try:
+            sdk = resolve_cuda_sdk(config)
+            if sdk is not None:
+                version = str(sdk.effective_values["cuda_version"])
+                require_cuda_host_profile(registry, version)
+                return version, ""
+        except BuildError as exc:
+            return None, str(exc)
+        return None, ""
+
+    def _show_toolchain_plan(self, config: BuildConfig, components: List[Component]) -> None:
         """Show the read-only resolved-toolchain plan for the current config."""
         try:
             toolchain_registry = ToolchainRegistry()
         except (OSError, ValueError) as exc:
             self.console.print(f"[red]Toolchain registry unavailable: {exc}[/red]")
             return
-        components = self._get_buildable_components(config)
+        backend = self._toolchain_backend(config)
+        platform = self.platform_detector.get_platform_name()
+        cuda_version, prerequisite_note = self._toolchain_cuda_version(config, toolchain_registry)
         plan = toolchain_registry.plan_component_toolchains(
             components,
             config.ffmpeg_version,
-            self.platform_detector.get_platform_name(),
+            platform,
             self._system_tool_versions(),
-            cuda_version=self.platform_info.cuda_version,
+            cuda_version=cuda_version,
+            backend=backend,
         )
-        self.toolchain_screen.show(plan)
+        required = {}
+        if backend is not None and not config.cross_version_block_reason():
+            store = self._toolchain_store(config)
+            profiles = toolchain_registry.required_toolchains_for(
+                config.ffmpeg_version, platform, backend
+            )
+            cuda_profile = (
+                toolchain_registry.toolchain_for_cuda(cuda_version) if cuda_version else None
+            )
+            if cuda_profile is not None:
+                profiles.append(cuda_profile)
+            required = {name: store.installed_status(toolchain_registry, name) for name in profiles}
+        self.toolchain_screen.show(plan, required, prerequisite_note=prerequisite_note)
+
+    def _toolchain_store(self, config: BuildConfig) -> ToolchainStore:
+        return ToolchainStore(
+            resolve_store_root(PROJECT_ROOT),
+            workspace=self.base_workspace,
+            source_archives_dir=PROJECT_ROOT / config.source_archives_dir,
+            allow_network_downloads=config.allow_network_downloads,
+            backend=self._toolchain_backend(config),
+        )
 
     def _show_toolchain_store(self, config: BuildConfig) -> None:
         """Show the persistent toolchain store (acquire/remove/list)."""
@@ -1016,27 +1112,19 @@ class FFmpegBuilderApp:
         except (OSError, ValueError) as exc:
             self.console.print(f"[red]Toolchain registry unavailable: {exc}[/red]")
             return
-        store = ToolchainStore(
-            resolve_store_root(PROJECT_ROOT),
-            workspace=self.workspace,
-            source_archives_dir=PROJECT_ROOT / config.source_archives_dir,
-            allow_network_downloads=config.allow_network_downloads,
-            backend=self._toolchain_backend(config),
-        )
+        store = self._toolchain_store(config)
+        cuda_version, prerequisite_note = self._toolchain_cuda_version(config, toolchain_registry)
         recommended = toolchain_registry.recommend_profiles(
             config.ffmpeg_version,
             self.platform_detector.get_platform_name(),
             self._system_tool_versions(),
             components=self.registry.get_all(),
-            installed=[item.profile for item in store.list_installed()],
-            cuda_version=self.platform_info.cuda_version,
-            backend=(
-                TARGET_BACKEND_CROSS_MINGW
-                if config.target_backend == TARGET_BACKEND_CROSS_MINGW
-                else None
-            ),
+            cuda_version=cuda_version,
+            backend=self._toolchain_backend(config),
         )
-        self.store_screen.show(store, toolchain_registry, recommended=recommended)
+        self.store_screen.show(
+            store, toolchain_registry, recommended=recommended, prerequisite_note=prerequisite_note
+        )
 
     def _component_toolchain_env(
         self, config: BuildConfig, components: List[Component]
@@ -1075,20 +1163,120 @@ class FFmpegBuilderApp:
             resume: Whether to resume from previous state.
         """
         if FFmpegBuilderApp._is_cross_mingw(config):
-            from .g4_final import run_g4_final
+            from .cross_build import run_cross_build
 
-            result = run_g4_final(self, config)
-            if result == 2:
-                self.console.print(
-                    "[red]Build preparation blocked by identity guard or prerequisites.[/red]"
+            dashboard: Optional[BuildDashboard] = None
+            cross_live: Optional[Live] = None
+            listener_manager: Optional[StateManager] = None
+            previous_listener = None
+            errors: List[str] = []
+            streams: List[Any] = []
+            preparation = self.console.status("Preparing Windows target...")
+            self.console.print("Preparing Windows target...")
+
+            def on_message(message: str) -> None:
+                if message.startswith(("FAIL:", "BLOCKED", "  log:")):
+                    errors.append(message)
+                if dashboard is not None:
+                    dashboard.log(message)
+                    if not self.console.is_terminal:
+                        self.console.print(message, markup=False)
+                else:
+                    preparation.update(message)
+                    if not self.console.is_terminal:
+                        self.console.print(message, markup=False)
+
+            def on_plan(components: List[Component]) -> None:
+                nonlocal dashboard, cross_live, listener_manager, previous_listener
+                preparation.stop()
+                dashboard = BuildDashboard(
+                    self.console,
+                    config.ffmpeg_version,
+                    self.platform_detector.get_num_jobs(config.num_jobs),
+                    config.download_workers if config.async_downloads else 0,
+                    status_only=True,
                 )
-            elif result:
-                self.console.print("[red]G4 FFmpeg integration failed.[/red]")
-            elif config.make_release:
-                from .g6 import run_g6
+                dashboard.set_components(components)
+                listener_manager = self.state_manager
+                previous_listener = listener_manager.status_listener
+                for name, component_state in listener_manager.get().components.items():
+                    dashboard.update_status(name, component_state.status, component_state.version)
 
-                if run_g6(self, config):
-                    self.console.print("[red]G6 Windows packaging acceptance failed.[/red]")
+                def on_status(
+                    name: str,
+                    status: ComponentStatus,
+                    version: Optional[str],
+                    error_message: Optional[str],
+                    detail: Optional[str],
+                ) -> None:
+                    assert dashboard is not None
+                    dashboard.update_status(name, status, version, detail or "")
+                    dashboard.log(f"{name} {status.value}")
+                    if previous_listener is not None:
+                        previous_listener(name, status, version, error_message, detail)
+
+                listener_manager.status_listener = on_status
+                if self.console.is_terminal:
+                    # Stray prints (validators, warnings) become dashboard messages;
+                    # Rich's own redirect would draw them above the full-height frame.
+                    streams[:] = [sys.stdout, sys.stderr]
+                    sys.stdout = MessageStream(streams[0], on_message)
+                    sys.stderr = MessageStream(streams[1], on_message)
+                    cross_live = Live(
+                        dashboard,
+                        console=self.console,
+                        refresh_per_second=8,
+                        screen=True,
+                        redirect_stdout=False,
+                        redirect_stderr=False,
+                    )
+                    cross_live.start()
+                else:
+                    self.console.print(dashboard)
+
+            def on_component_detail(name: str, detail: str) -> None:
+                if dashboard is not None:
+                    component_state = self.state_manager.get().components.get(name)
+                    if component_state is not None:
+                        dashboard.update_status(
+                            name, component_state.status, component_state.version, detail
+                        )
+
+            try:
+                preparation.start()
+                result = run_cross_build(
+                    self,
+                    config,
+                    resume=resume,
+                    on_plan=on_plan,
+                    on_message=on_message,
+                    on_component_detail=on_component_detail,
+                )
+            finally:
+                try:
+                    preparation.stop()
+                    if streams:
+                        for stream in (sys.stdout, sys.stderr):
+                            if isinstance(stream, MessageStream):
+                                stream.flush()
+                finally:
+                    try:
+                        if streams:
+                            sys.stdout, sys.stderr = streams
+                        if listener_manager is not None:
+                            listener_manager.status_listener = previous_listener
+                    finally:
+                        if cross_live is not None:
+                            cross_live.stop()
+
+            self.final_screen.show(
+                self.state_manager.get(),
+                self.workspace,
+                result == 0,
+                "\n".join(errors) or ("Windows build failed." if result else None),
+                target_backend=config.target_backend,
+                release=config.make_release,
+            )
             return
         try:
             session = self.prepare_target(config, resume)
@@ -1290,39 +1478,35 @@ class FFmpegBuilderApp:
             except BuildError as e:
                 self.console.print(f"[red]Release bundle failed: {e}[/red]")
 
-    def _cleanup(self) -> None:
+    def _cleanup(self, *, remove_legacy: bool = True) -> None:
         """Cleanup workspace and packages."""
-        import shutil
-        import stat
-
-        def _rmtree(path: Path) -> None:
-            def _on_error(
-                func: Callable[..., Any],
-                fpath: str,
-                exc_info: Tuple[Type[BaseException], BaseException, TracebackType],
-            ) -> None:
-                try:
-                    os.chmod(fpath, stat.S_IWRITE)
-                    func(fpath)
-                except Exception:
-                    pass
-
-            shutil.rmtree(path, onerror=_on_error)
-
-        self.state_manager.reset()
-        self.console.print("[green]Reset build state[/green]")
         self.workspace = self.base_workspace
         self.packages = self.workspace / "packages"
 
         legacy_workspace = PROJECT_ROOT / "workspace"
-        if legacy_workspace.exists():
-            _rmtree(legacy_workspace)
-            self.console.print(f"[green]Removed legacy {legacy_workspace}[/green]")
+        paths = (legacy_workspace, self.workspace) if remove_legacy else (self.workspace,)
+        for path in dict.fromkeys(paths):
+            if path.is_symlink():
+                self.console.print(f"[red]Cleanup refused a symlinked workspace:[/red] {path}")
+            elif path.exists():
+                failures: List[str] = []
 
-        if self.workspace.exists():
-            _rmtree(self.workspace)
-            self.console.print(f"[green]Removed {self.workspace}[/green]")
+                def _on_error(func: Callable[..., Any], fpath: str, _exc_info: Any) -> None:
+                    # Keep removing after read-only entries, as before.
+                    try:
+                        os.chmod(os.path.dirname(fpath), stat.S_IRWXU)
+                        if not os.path.islink(fpath):
+                            os.chmod(fpath, stat.S_IRWXU)
+                        func(fpath)
+                    except OSError as exc:
+                        failures.append(f"{fpath}: {exc}")
 
-        if self.packages.exists():
-            _rmtree(self.packages)
-            self.console.print(f"[green]Removed {self.packages}[/green]")
+                shutil.rmtree(path, onerror=_on_error)
+                if failures:
+                    self.console.print(
+                        f"[red]Cleanup incomplete for {path}:[/red] {failures[0]}"
+                        + (f" (+{len(failures) - 1} more)" if len(failures) > 1 else "")
+                    )
+                else:
+                    self.console.print(f"[green]Removed {path}[/green]")
+        self.state_manager = StateManager(self.workspace / "build_state.json")

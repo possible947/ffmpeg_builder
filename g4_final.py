@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Optional
 
 from .build_types import BuildError, SkipComponent
 from .builder import FFmpegBuilder
@@ -169,7 +169,12 @@ def _validate_config(
             raise BuildError("ffmpeg", f"Configured FFmpeg component missing: {name}")
 
 
-def _windows_smoke(environment: Any, binaries: list[Path], version: str) -> dict[str, list[str]]:
+def _windows_smoke(
+    environment: Any,
+    binaries: list[Path],
+    version: str,
+    on_message: Optional[Callable[[str], None]] = None,
+) -> dict[str, list[str]]:
     validator = Wave2TargetValidator(environment, "")
     imports: set[str] = set()
     for binary in binaries:
@@ -232,7 +237,11 @@ def _windows_smoke(environment: Any, binaries: list[Path], version: str) -> dict
                 f"Windows acceptance failed ({result.returncode}): "
                 f"{result.stdout!r} {result.stderr!r}",
             )
-        print(result.stdout.decode(errors="replace").strip(), flush=True)
+        output = result.stdout.decode(errors="replace").strip()
+        if on_message:
+            on_message(output)
+        else:
+            print(output, flush=True)
     return {"imports": sorted(imports), "toolchain_dlls": sorted(copied)}
 
 
@@ -243,8 +252,16 @@ def run_g4_final(
     production: bool = False,
     session: Any = None,
     environment: Any = None,
+    on_message: Optional[Callable[[str], None]] = None,
 ) -> int:
     """Build and accept FFmpeg only after all selected G4 inputs are accepted."""
+
+    def message(text: str) -> None:
+        if on_message:
+            on_message(text)
+        else:
+            print(text, flush=True)
+
     if config.target_backend != TARGET_BACKEND_CROSS_MINGW:
         raise BuildError("G4", "Final acceptance requires the linux-cross-mingw backend.")
     try:
@@ -252,7 +269,7 @@ def run_g4_final(
         session.stamp(app.state_manager)
         environment = environment or app.prepare_cross_environment(config, session)
     except BuildError as exc:
-        print(f"BLOCKED by identity guard or cross-environment preparation: {exc}", flush=True)
+        message(f"BLOCKED by identity guard or cross-environment preparation: {exc}")
         return 2
     builder = None
     component = None
@@ -280,13 +297,14 @@ def run_g4_final(
         prior_count = validate_prior_manifests(
             session.workspace, environment.paths.target_prefix, session.identity.build_key, ""
         )
-        print(f"G4: verified {prior_count} accepted dependency files", flush=True)
+        message(f"G4: verified {prior_count} accepted dependency files")
         builder = FFmpegBuilder(
             config,
             app.workspace,
             app.packages,
             app.state_manager,
             app.platform_detector,
+            on_log=on_message,
             toolchain_env=app._component_toolchain_env(config, [component]),
             cross_environment=environment,
         )
@@ -369,7 +387,12 @@ def run_g4_final(
             cuda and config.enable_libvmaf_cuda and config.enable_libvmaf,
             config.enable_hardware_acceleration,
         )
-        runtime = _windows_smoke(environment, binaries, component.version)
+        runtime = _windows_smoke(
+            environment,
+            binaries,
+            component.version,
+            **({"on_message": on_message} if on_message else {}),
+        )
         if (
             validate_prior_manifests(
                 session.workspace, environment.paths.target_prefix, session.identity.build_key, ""
@@ -400,7 +423,7 @@ def run_g4_final(
             component.version,
             detail="G4 FFmpeg Windows acceptance passed",
         )
-        print(f"PASS: G4 FFmpeg {'reused' if reused else 'built'}; runtime={runtime}", flush=True)
+        message(f"PASS: G4 FFmpeg {'reused' if reused else 'built'}; runtime={runtime}")
         return 0
     except (
         BuildError,
@@ -418,7 +441,9 @@ def run_g4_final(
                 str(exc),
                 detail="G4 FFmpeg acceptance failed",
             )
-        print(f"FAIL: G4 FFmpeg integration: {exc}", flush=True)
+        message(f"FAIL: G4 FFmpeg integration: {exc}")
+        if isinstance(exc, BuildError) and exc.log_file and on_message:
+            message(f"  log: {exc.log_file}")
         return 1
     finally:
         if builder is not None:

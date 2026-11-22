@@ -585,10 +585,13 @@ def test_config_validates_target_backend():
 
 
 def test_headless_and_tui_entry_points_are_blocked_by_guard(tmp_path, monkeypatch, capsys):
+    import io
     import importlib.util
 
     import ffmpeg_builder.app as app_module
     from ffmpeg_builder.config import BuildConfig
+    from ffmpeg_builder.ui.screens import FinalReportScreen
+    from rich.console import Console
 
     root = Path(app_module.__file__).resolve().parent
     spec = importlib.util.spec_from_file_location("run_build_g1", root / "scripts" / "run_build.py")
@@ -610,22 +613,27 @@ def test_headless_and_tui_entry_points_are_blocked_by_guard(tmp_path, monkeypatc
         return prepare_windows_target(tmp_path, identity, resume)
 
     fake.prepare_target = prepare
-    config = BuildConfig(target_backend="linux-cross-mingw")
+    config = BuildConfig(ffmpeg_version="9.0", target_backend="linux-cross-mingw")
     assert run_build.run_build(fake, config, resume=False, no_release=True) == 2
     assert "identity guard" in capsys.readouterr().out
     assert not (tmp_path / "build_state.json").exists()
     assert (ws / "stale.o").exists()
 
     # TUI: the guard error is printed, the build is not started and nothing is reset.
-    printed = []
+    console = Console(file=io.StringIO(), width=120)
     tui = SimpleNamespace(
-        console=SimpleNamespace(print=lambda *a, **k: printed.append(str(a[0]) if a else "")),
         _get_buildable_components=lambda config: [],
         prepare_target=prepare,
-        state_manager=SimpleNamespace(reset=lambda: pytest.fail("reset before guard")),
+        state_manager=StateManager(tmp_path / "build_state.json"),
+        console=console,
+        final_screen=FinalReportScreen(console),
+        workspace=tmp_path,
     )
+    monkeypatch.setattr(tui.state_manager, "reset", lambda: pytest.fail("reset before guard"))
     app_module.FFmpegBuilderApp._run_build(tui, config, resume=False)
-    assert any("identity guard" in line for line in printed)
+    assert "identity guard" in console.file.getvalue()
+    assert not (tmp_path / "build_state.json").exists()
+    assert (ws / "stale.o").exists()
 
 
 def test_cuda_preparation_reuses_single_g1_probe_for_ptx_validation(tmp_path, monkeypatch):
@@ -730,6 +738,7 @@ def test_cuda_preparation_reuses_single_g1_probe_for_ptx_validation(tmp_path, mo
         lambda *args: _test_material_inputs(),
     )
     config = BuildConfig(
+        ffmpeg_version="9.0",
         target_backend=TARGET_BACKEND_CROSS_MINGW,
         enable_libvmaf=True,
         enable_libvmaf_cuda=True,
@@ -896,6 +905,7 @@ def test_vulkan_preparation_keeps_host_sdk_separate_from_windows_runtime(tmp_pat
         lambda *args: _test_material_inputs(),
     )
     config = BuildConfig(
+        ffmpeg_version="9.0",
         target_backend=TARGET_BACKEND_CROSS_MINGW,
         enable_libvmaf_cuda=False,
         enable_libplacebo_vulkan=True,

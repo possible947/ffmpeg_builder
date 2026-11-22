@@ -21,6 +21,7 @@ from .config import BuildConfig
 from .external_prerequisites import (
     ExternalPrerequisiteValidation,
     RESOLUTION_CONFIG,
+    ResolvedExternalPrerequisite,
     resolve_external_prerequisite,
 )
 from .toolchain_registry import ToolchainRegistry
@@ -155,6 +156,54 @@ def _toolchain_error(code: str, message: str) -> BuildError:
     )
 
 
+def wsl_mingw_cuda_requested(config: BuildConfig) -> bool:
+    return (
+        config.enable_hardware_acceleration
+        and config.cuda_build_mode != "disabled"
+        and (
+            config.cuda_build_mode == "required"
+            or (config.enable_libvmaf and config.enable_libvmaf_cuda)
+        )
+    )
+
+
+def resolve_cuda_sdk(
+    config: BuildConfig,
+    *,
+    required: bool = True,
+    environment: Optional[Mapping[str, str]] = None,
+) -> Optional[ResolvedExternalPrerequisite]:
+    """Validate the configured NVCC without requiring the managed host compiler."""
+    return resolve_external_prerequisite(
+        "cuda",
+        config.external_prerequisite_paths.get("cuda"),
+        required=required,
+        validator=_validate_cuda_root,
+        environment=environment,
+        environment_variables=CUDA_ENVIRONMENT_VARIABLES,
+    )
+
+
+def require_cuda_host_profile(
+    registry: ToolchainRegistry, version: str, *, context: str = ""
+) -> str:
+    """Resolve the managed NVCC host compiler profile, without installing it."""
+    context = context or f"CUDA {version}"
+    profile_name = registry.toolchain_for_cuda(version)
+    if profile_name is None:
+        raise _toolchain_error(
+            "cuda_host_mapping_missing",
+            f"{context} has no project-managed host compiler mapping in toolchains.yaml; "
+            "add a compatible CUDA-to-toolchain mapping.",
+        )
+    if registry.get_profile(profile_name) is None:
+        raise _toolchain_error(
+            "cuda_host_profile_missing",
+            f"{context} maps to undeclared toolchain profile {profile_name!r}.",
+        )
+    return profile_name
+
+
 def resolve_wsl_mingw_cuda_inputs(
     config: BuildConfig,
     registry: ToolchainRegistry,
@@ -166,20 +215,12 @@ def resolve_wsl_mingw_cuda_inputs(
     host_override_source: str = "CUDA_NVCC_CCBIN",
 ) -> Optional[ResolvedCudaBuildHostInputs]:
     """Resolve CUDA and its host compiler, with optional native-only override."""
-    external = resolve_external_prerequisite(
-        "cuda",
-        config.external_prerequisite_paths.get("cuda"),
-        required=required,
-        validator=_validate_cuda_root,
-        environment=environment,
-        environment_variables=CUDA_ENVIRONMENT_VARIABLES,
-    )
+    external = resolve_cuda_sdk(config, required=required, environment=environment)
     if external is None:
         return None
 
     version = str(external.effective_values["cuda_version"])
     nvcc_path = external.host_tools["nvcc"]
-    profile_name = registry.toolchain_for_cuda(version)
     context = (
         f"CUDA {version} at {external.root}, NVCC {nvcc_path} (resolved from "
         f"{external.diagnostic_metadata['environment_variable'] or RESOLUTION_CONFIG})"
@@ -217,18 +258,7 @@ def resolve_wsl_mingw_cuda_inputs(
             ),
             nvcc_version=str(external.effective_values["nvcc_version"]),
         )
-    if profile_name is None:
-        raise _toolchain_error(
-            "cuda_host_mapping_missing",
-            f"{context} has no project-managed host compiler mapping in toolchains.yaml; "
-            "add a compatible CUDA-to-toolchain mapping.",
-        )
-    if registry.get_profile(profile_name) is None:
-        raise _toolchain_error(
-            "cuda_host_profile_missing",
-            f"{context} maps to undeclared toolchain profile {profile_name!r}.",
-        )
-
+    profile_name = require_cuda_host_profile(registry, version, context=context)
     status, reason = store.installed_status(registry, profile_name)
     if status != STATUS_COMPATIBLE:
         if status == STATUS_ABSENT:

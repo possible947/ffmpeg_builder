@@ -2,9 +2,11 @@
 
 import io
 
+import pytest
 from rich.console import Console
 
-from ffmpeg_builder.config import BuildConfig
+from ffmpeg_builder.config import BuildConfig, ConfigManager
+from ffmpeg_builder.ffmpeg_policy import FFMPEG_BUILD_VARIANTS
 from ffmpeg_builder.toolchain_registry import (
     ComponentToolchainPlan,
     ToolchainAssignment,
@@ -65,7 +67,7 @@ def _patch_prompts(monkeypatch, jobs_answers, workers_answers, version_answers=N
             return next(jobs_answers)
         if "download workers" in text:
             return next(workers_answers)
-        return ""  # "Press Enter to continue"
+        return kwargs.get("default", "")
 
     monkeypatch.setattr(screens.Confirm, "ask", staticmethod(fake_confirm_ask))
     monkeypatch.setattr(screens.Prompt, "ask", staticmethod(fake_prompt_ask))
@@ -107,6 +109,53 @@ def test_config_screen_updates_ffmpeg_version(monkeypatch):
     result = screen.show(config)
 
     assert result.ffmpeg_version == "9.0"
+
+
+@pytest.mark.parametrize(
+    ("alias", "version", "backend"),
+    [
+        ("8.1", "8.1", "native"),
+        ("9.0", "9.0", "native"),
+        ("9.0-windows", "9.0", "linux-cross-mingw"),
+    ],
+)
+def test_config_screen_persists_variant_as_version_and_backend(
+    alias, version, backend, tmp_path, monkeypatch
+):
+    screen = ConfigScreen(Console(file=io.StringIO()))
+    config = BuildConfig(ffmpeg_version="9.0", target_backend="linux-cross-mingw")
+    _patch_prompts(monkeypatch, iter(["auto"]), iter(["2"]), iter([alias]))
+
+    result = screen.show(config, list(FFMPEG_BUILD_VARIANTS))
+    manager = ConfigManager(tmp_path / "build_config.yaml")
+    manager.save(result)
+    saved = manager.load()
+
+    assert (saved.ffmpeg_version, saved.target_backend) == (version, backend)
+    assert "9.0-windows" not in manager.config_path.read_text()
+
+
+def test_config_screen_reprompts_on_unsupported_windows_alias(monkeypatch):
+    console = Console(file=io.StringIO())
+    screen = ConfigScreen(console)
+    real_ask = screens.Prompt.ask
+    _patch_prompts(monkeypatch, iter(["auto"]), iter(["2"]))
+    fake_ask = screens.Prompt.ask
+
+    def ask(prompt, **kwargs):
+        if prompt == "FFmpeg version":
+            assert kwargs["default"] == "9.0-windows"
+            return real_ask(
+                prompt, console=console, stream=io.StringIO("8.1-windows\n\n"), **kwargs
+            )
+        return fake_ask(prompt, **kwargs)
+
+    monkeypatch.setattr(screens.Prompt, "ask", staticmethod(ask))
+    config = BuildConfig(ffmpeg_version="9.0", target_backend="linux-cross-mingw")
+    result = screen.show(config, list(FFMPEG_BUILD_VARIANTS))
+
+    assert "Please select one of the available options" in console.file.getvalue()
+    assert result.target_backend == "linux-cross-mingw"
 
 
 def test_config_screen_hides_blocked_ffmpeg_versions(monkeypatch):
@@ -361,6 +410,51 @@ def test_toolchain_store_prepares_recommended_in_order(monkeypatch, tmp_path):
     assert store.installed("gcc12") is not None
     output = console.file.getvalue()
     assert output.index("Installed gmp") < output.index("Installed gcc12")
+
+
+def test_toolchain_store_reacquires_recommended_but_unverified_profile(monkeypatch, tmp_path):
+    registry = _store_registry(tmp_path, {"gcc12": _local_profile(tmp_path, "gcc12")})
+    store = _store(tmp_path)
+    store.acquire(registry, "gcc12")
+    store.mark_unverified("gcc12")
+    console = Console(file=io.StringIO(), width=120)
+    answers = iter(["p", "", "q"])
+    monkeypatch.setattr(screens.Prompt, "ask", staticmethod(lambda *args, **kwargs: next(answers)))
+
+    ToolchainStoreScreen(console).show(store, registry, recommended=[("gcc12", "required")])
+
+    assert store.installed("gcc12", registry) is not None
+    assert "FAILED verification" in console.file.getvalue()
+
+
+def test_toolchain_store_reports_previously_verified_profile_as_stale(monkeypatch, tmp_path):
+    from dataclasses import replace
+
+    registry = _store_registry(tmp_path, {"gcc12": _local_profile(tmp_path, "gcc12")})
+    store = _store(tmp_path)
+    store.acquire(registry, "gcc12")
+    registry.profiles["gcc12"] = replace(registry.profiles["gcc12"], version="2.0")
+    console = Console(file=io.StringIO(), width=120)
+    monkeypatch.setattr(screens.Prompt, "ask", staticmethod(lambda *args, **kwargs: "q"))
+
+    ToolchainStoreScreen(console).show(store, registry, recommended=[("gcc12", "required")])
+
+    assert "stale:" in console.file.getvalue()
+    assert "installed (local)" not in console.file.getvalue()
+
+
+def test_toolchain_store_recommends_removed_profile_again_without_reopening(monkeypatch, tmp_path):
+    registry = _store_registry(tmp_path, {"gcc12": _local_profile(tmp_path, "gcc12")})
+    store = _store(tmp_path)
+    store.acquire(registry, "gcc12")
+    console = Console(file=io.StringIO(), width=120)
+    answers = iter(["r", "gcc12", "", "p", "", "q"])
+    monkeypatch.setattr(screens.Prompt, "ask", staticmethod(lambda *args, **kwargs: next(answers)))
+
+    ToolchainStoreScreen(console).show(store, registry, recommended=[("gcc12", "required")])
+
+    assert "Removed: gcc12" in console.file.getvalue()
+    assert store.installed("gcc12", registry) is not None
 
 
 def test_toolchain_store_selection_accepts_list_number(monkeypatch, tmp_path):

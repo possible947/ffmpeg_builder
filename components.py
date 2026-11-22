@@ -253,6 +253,12 @@ class ComponentSelection:
     target_inputs: List[Component] = field(default_factory=list)
     skipped_by_feature: List[Component] = field(default_factory=list)
     skipped_by_backend: List[Component] = field(default_factory=list)
+    missing_recipe_tools: List[str] = field(default_factory=list)
+
+    @property
+    def production_components(self) -> List[Component]:
+        """Inputs and build steps consumed by the normal Windows workflow."""
+        return self.target_inputs + self.target_components_to_build + self.mixed_components
 
 
 class ComponentRegistry:
@@ -810,9 +816,6 @@ class ComponentRegistry:
             for component in host_tools
             if not tool_available(component.system_tool_name or component.name)
         }
-        required_tools = {tool for component in candidates for tool in component.requires_tools}
-        missing_host_tools.update(tool for tool in required_tools if not tool_available(tool))
-
         conditional = [
             component
             for component in candidates
@@ -832,6 +835,14 @@ class ComponentRegistry:
         target_components_to_build = [
             component for component in target_components if component.name not in conditional_names
         ]
+        required_tools = {
+            tool
+            for component in target_inputs + target_components_to_build + mixed_components
+            for tool in component.requires_tools
+        }
+        # The Windows profile supplies these through CrossEnvironment, not host PATH.
+        required_tools.difference_update(("cargo", "rustc"))
+        missing_recipe_tools = {tool for tool in required_tools if not tool_available(tool)}
         # Mixed recipes require explicit host/target dispatch and are not
         # silently folded into the target-only build sequence.
         return ComponentSelection(
@@ -839,12 +850,13 @@ class ComponentRegistry:
             target_components=target_components,
             mixed_components=mixed_components,
             system_satisfied_host_requirements=system_satisfied,
-            missing_host_tools=sorted(missing_host_tools),
+            missing_host_tools=sorted(missing_host_tools | missing_recipe_tools),
             target_components_to_build=target_components_to_build,
             conditional_components=conditional,
             target_inputs=target_inputs,
             skipped_by_feature=skipped_by_feature,
             skipped_by_backend=skipped_by_backend,
+            missing_recipe_tools=sorted(missing_recipe_tools),
         )
 
     @staticmethod

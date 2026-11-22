@@ -9,7 +9,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Optional, Sequence
 
 from .build_types import BuildError, SkipComponent
 from .builder import FFmpegBuilder
@@ -84,7 +84,14 @@ def dependency_order(components: Sequence[Component]) -> list[Component]:
 
 
 def run_cross_build(
-    app: Any, config: BuildConfig, *, resume: bool = False, no_release: bool = False
+    app: Any,
+    config: BuildConfig,
+    *,
+    resume: bool = False,
+    no_release: bool = False,
+    on_plan: Optional[Callable[[list[Component]], None]] = None,
+    on_message: Optional[Callable[[str], None]] = None,
+    on_component_detail: Optional[Callable[[str, str], None]] = None,
 ) -> int:
     """Build every selected dependency using its existing production contract."""
     from .cross_component_contracts import component_validator
@@ -96,10 +103,24 @@ def run_cross_build(
     active = None
     built: list[str] = []
     reused: list[str] = []
+
+    def message(text: str) -> None:
+        if on_message is None:
+            print(text, flush=True)
+        else:
+            on_message(text)
+
     try:
+        if reason := config.cross_version_block_reason():
+            raise BuildError("Windows build", reason)
         # Matching accepted artifacts are reused even without --resume. A fresh
         # build is an explicitly empty workspace, never a status-only reset.
+        if on_message:
+            message("Preparing Windows target, toolchains, inputs and identity...")
         session = app.prepare_target(config, resume=True)
+        message(f"Windows target workspace: {session.workspace}")
+        for note in session.notes:
+            message(f"NOTE: {note}")
         initial_state = app.state_manager.get()
         clean_start = not initial_state.components and not any(
             path.is_file() or path.is_symlink()
@@ -107,16 +128,12 @@ def run_cross_build(
             for path in (session.workspace / directory).rglob("*")
         )
         session.stamp(app.state_manager)
+        if on_message:
+            message("Preparing cross environment and resolving component plan...")
         environment = app.prepare_cross_environment(config, session)
         selection = app._get_component_selection(config)
         input_names = {component.name for component in selection.target_inputs}
-        components = dependency_order(
-            [
-                *selection.target_inputs,
-                *selection.target_components_to_build,
-                *selection.mixed_components,
-            ]
-        )
+        components = dependency_order(selection.production_components)
         state = app.state_manager.get()
         provenance_path = session.workspace / "g7-build-start.json"
         implementation = implementation_digest()
@@ -144,12 +161,15 @@ def run_cross_build(
         state.config = config.to_dict()
         state.total_steps = len(components)
         app.state_manager.save()
+        if on_plan:
+            on_plan(components)
         builder = FFmpegBuilder(
             config,
             app.workspace,
             app.packages,
             app.state_manager,
             app.platform_detector,
+            on_log=on_message,
             toolchain_env=app._component_toolchain_env(config, components),
             cross_environment=environment,
         )
@@ -158,9 +178,8 @@ def run_cross_build(
         sources = {}
         for position, component in enumerate(components, 1):
             active = component
-            print(
-                f"\n=== [{position}/{len(components)}] {component.name} {component.version} ===",
-                flush=True,
+            message(
+                f"\n=== [{position}/{len(components)}] {component.name} {component.version} ==="
             )
             state.current_step = position
             app.state_manager.save()
@@ -175,7 +194,12 @@ def run_cross_build(
             if component.name == "ffmpeg":
                 Wave2TargetValidator(environment, session.identity.build_key).validate_prefix()
                 if run_g4_final(
-                    app, config, production=True, session=session, environment=environment
+                    app,
+                    config,
+                    production=True,
+                    session=session,
+                    environment=environment,
+                    **({"on_message": on_message} if on_message else {}),
                 ):
                     raise BuildError("ffmpeg", "Windows FFmpeg integration failed.")
             else:
@@ -205,13 +229,22 @@ def run_cross_build(
                     detail="Windows target output contract accepted",
                 )
             (reused if completed else built).append(component.name)
-            print(f"Accepted {component.name}: {'reused' if completed else 'built'}", flush=True)
+            if on_component_detail and completed:
+                on_component_detail(component.name, "reused")
+            message(f"Accepted {component.name}: {'reused' if completed else 'built'}")
         active = None
+        if on_message:
+            message("Validating final integration and Windows runtime acceptance...")
         validate_prior_manifests(
             session.workspace, environment.paths.target_prefix, session.identity.build_key, ""
         )
         if run_g7_package(
-            app, config, session, environment, package=config.make_release and not no_release
+            app,
+            config,
+            session,
+            environment,
+            package=config.make_release and not no_release,
+            **({"on_message": on_message} if on_message else {}),
         ):
             raise BuildError("Windows acceptance", "Runtime/package acceptance failed.")
         effective = config.to_dict()
@@ -257,10 +290,9 @@ def run_cross_build(
         runs.mkdir(exist_ok=True)
         _write(runs / f"{uuid.uuid4().hex}.json", report)
         _write(session.workspace / "g7-acceptance.json", report)
-        print(
+        message(
             f"PASS: Windows workflow built={built}, reused={reused}; "
-            f"evidence={session.workspace / 'g7-acceptance.json'}",
-            flush=True,
+            f"evidence={session.workspace / 'g7-acceptance.json'}"
         )
         return 0
     except (
@@ -272,7 +304,7 @@ def run_cross_build(
         subprocess.SubprocessError,
     ) as exc:
         if session is None:
-            print(f"BLOCKED by identity guard: {exc}", flush=True)
+            message(f"BLOCKED by identity guard: {exc}")
             return 2
         if active is not None:
             app.state_manager.mark_component_status(
@@ -280,9 +312,12 @@ def run_cross_build(
                 ComponentStatus.FAILED,
                 active.version,
                 str(exc),
+                str(exc.log_file) if isinstance(exc, BuildError) and exc.log_file else None,
                 detail="Windows production workflow failed",
             )
-        print(f"FAIL: Windows production workflow: {exc}", flush=True)
+        message(f"FAIL: Windows production workflow: {exc}")
+        if isinstance(exc, BuildError) and exc.log_file:
+            message(f"  log: {exc.log_file}")
         return 1
     finally:
         if builder is not None:

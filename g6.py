@@ -312,16 +312,21 @@ def run_g6(
     session: Any = None,
     environment: Any = None,
     runtime_only: bool = False,
+    on_message: Any = None,
 ) -> int:
     """Package G4/G5 outputs, or normal-workflow profile acceptance when supplied."""
+
+    def message(text: str) -> None:
+        if on_message:
+            on_message(text)
+        else:
+            print(text, flush=True)
+
     gate = "G7" if production_evidence is not None else "G6"
     if runtime_only and production_evidence is None:
         raise ValueError("Runtime-only acceptance requires production evidence.")
-    if config.target_backend != TARGET_BACKEND_CROSS_MINGW or config.ffmpeg_version != "9.0":
-        print(
-            f"BLOCKED: {gate} requires the accepted FFmpeg 9.0 linux-cross-mingw target.",
-            flush=True,
-        )
+    if config.target_backend != TARGET_BACKEND_CROSS_MINGW or config.cross_version_block_reason():
+        message(f"BLOCKED: {gate} requires the accepted FFmpeg 9.0 linux-cross-mingw target.")
         return 2
     builder: FFmpegBuilder | None = None
     try:
@@ -375,7 +380,7 @@ def run_g6(
                 json.dumps(g5_evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8"
             )
             if runtime_only:
-                print(f"PASS: G7 profile runtime accepted. Evidence: {g5_path}", flush=True)
+                message(f"PASS: G7 profile runtime accepted. Evidence: {g5_path}")
                 return 0
         g5_digest = _digest(g5_path)
         if g5_evidence["g4"] != g4:
@@ -512,8 +517,8 @@ def run_g6(
         report_path.write_text(
             json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
-        print(f"PASS: {gate} Windows bundle accepted: {release_dir}", flush=True)
-        print(f"Relocated runtime: {relocated}", flush=True)
+        message(f"PASS: {gate} Windows bundle accepted: {release_dir}")
+        message(f"Relocated runtime: {relocated}")
         return 0
     except (
         BuildError,
@@ -542,7 +547,9 @@ def run_g6(
                 )
             except OSError:
                 pass
-        print(f"FAIL: {gate} Windows packaging acceptance: {exc}", flush=True)
+        message(f"FAIL: {gate} Windows packaging acceptance: {exc}")
+        if isinstance(exc, BuildError) and exc.log_file and on_message:
+            message(f"  log: {exc.log_file}")
         return 1
     finally:
         if builder is not None:
@@ -550,7 +557,13 @@ def run_g6(
 
 
 def run_g7_package(
-    app: Any, config: BuildConfig, session: Any, environment: Any, *, package: bool = True
+    app: Any,
+    config: BuildConfig,
+    session: Any,
+    environment: Any,
+    *,
+    package: bool = True,
+    on_message: Any = None,
 ) -> int:
     """Always accept the normal profile runtime; optionally accept its package."""
     return run_g6(
@@ -560,4 +573,5 @@ def run_g7_package(
         session=session,
         environment=environment,
         runtime_only=not package,
+        **({"on_message": on_message} if on_message else {}),
     )

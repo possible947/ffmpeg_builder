@@ -20,7 +20,8 @@ external. The accepted GPL/nonfree bundle is internal and nonredistributable.
 G7 CLI also passed: separate clean full BASE/PREFERRED FFmpeg 9.0 builds
 automatically constructed all 40/46 selected components, passed the appropriate
 runtime/package checks, and reused all components on identical invocations.
-Windows TUI integration remains a separate, not-yet-completed task.
+The shared TUI now exposes the G7 path as `9.0-windows`; the maintainer's
+final clean interactive PREFERRED acceptance remains pending.
 Post-G7 stabilisation made the libjxl Brotli/Highway archives and cargo-c
 0.10.25 project-managed offline inputs (no `~/.cargo/bin` PATH setup) and
 recorded x265 4.2's upstream identity (commit `e444744c0397`; its stale
@@ -879,6 +880,17 @@ Built with the `rich` library. Static screens use `Table`, `Panel`, and `Prompt`
 
 `mark_component_status` accepts a transient `detail` argument (not persisted to `workspace/build_state.json`) that is forwarded to the listener so the dashboard can show the running command (e.g. `make -j40`, `cmake`, `ninja -C build`, `cargo cinstall`) or live download progress (`12.3/45.7 MB (27%)`). When adding a new build helper, always pass `detail="…"` on every transition so the dashboard column stays meaningful.
 
+For `linux-cross-mingw`, the TUI calls the same production route as the headless
+driver in-process. Its dashboard is created after the actual lifecycle plan is
+resolved and listens to the identity workspace's `StateManager`; reuse is a
+transient detail on an existing status. Preparation and final acceptance are
+messages, not persisted states. The initial display uses only the read-only
+Windows probe: Windows OpenCL runtime and target build-interface readiness are
+separate from WSL OpenCL, and host SDK tools are labelled separately from
+Windows runtime facts. The target-aware final report lists Windows executables
+and does not offer host installation. The native screens and build flow remain
+unchanged.
+
 ### `ui/error_handler.py` — Error Handling
 
 **`ErrorHandler`** — on `BuildError`:
@@ -897,8 +909,8 @@ build environment, which uses the LLVM-MinGW/UCRT cross toolchain to produce
 a Windows FFmpeg target. **WSL-Mingw** is the user-facing name; the backend
 identifier is **`linux-cross-mingw`**. G1–G6 and G7 CLI are PASS on the recorded
 physical target, including separate clean BASE/PREFERRED builds, controlled
-relocated release packaging and identical-run reuse. Windows TUI integration
-has not yet been completed.
+relocated release packaging and identical-run reuse. The shared TUI dispatches
+Windows Start and Resume through that same CLI-proven workflow.
 The gate history, verified results and open issues are in
 [`windows_build_strategy.md`](windows_build_strategy.md), which is the
 authoritative plan. The previous MSYS2-based Windows build path was replaced
@@ -941,7 +953,7 @@ Implementer rules:
   G2.6 prefix, generates the target-only pkg-config wrapper, CMake toolchain,
   Meson cross file and Autotools projection, and runs isolated configure/link
   acceptance. The G3 test itself does not build components; the current normal
-  headless cross route continues through `cross_build.run_cross_build`, which
+  CLI and TUI cross routes continue through `cross_build.run_cross_build`, which
   dependency-orders the effective selection and builds every target component.
   `cross_component_contracts` adapts the accepted output validators without
   invoking historical wave runners. Normal component evidence lives in
@@ -949,7 +961,14 @@ Implementer rules:
   instead of requiring manually accumulated wave manifests.
   G7 reuses G5 runtime helpers for profile-specific representative checks and
   G6 for runtime ownership, deterministic packaging and controlled relocation.
-  TUI integration remains a separate, uncompleted task.
+- **TUI variant:** `9.0-windows` maps to the existing `ffmpeg_version: "9.0"`
+  and `target_backend: linux-cross-mingw` fields. Separate default roots
+  (`workspace_90` and `workspace_90_windows`) keep whole-workspace cleanup
+  local to the selected variant. On a backend switch, host discovery starts
+  with a fresh detector; the Windows probe feeds the shared selection for
+  display. Production preparation re-probes and verifies identity before
+  trusting any saved status. The Previous Build panel is variant history,
+  not identity approval.
 - **Headless profiles:** `--config PATH` is loaded before platform discovery;
   `--workspace PATH` keeps profile build state independent without rewriting
   the user's ignored `build_config.yaml`. `enable_hardware_acceleration`

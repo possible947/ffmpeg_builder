@@ -13,6 +13,7 @@ SUPPORTED_FFMPEG_VERSIONS = ("8.1", "9.0")
 TARGET_BACKEND_NATIVE = "native"
 TARGET_BACKEND_CROSS_MINGW = "linux-cross-mingw"
 SUPPORTED_TARGET_BACKENDS = (TARGET_BACKEND_NATIVE, TARGET_BACKEND_CROSS_MINGW)
+SUPPORTED_CROSS_MINGW_VERSIONS = ("9.0",)
 
 
 def get_workspace_dir_name(ffmpeg_version: str) -> str:
@@ -124,8 +125,19 @@ class BuildConfig:
 
     @property
     def workspace_dir_name(self) -> str:
-        """Get the workspace folder name for the configured FFmpeg version."""
-        return get_workspace_dir_name(self.ffmpeg_version)
+        """Get the default workspace folder for the configured build variant."""
+        name = get_workspace_dir_name(self.ffmpeg_version)
+        return f"{name}_windows" if self.target_backend == TARGET_BACKEND_CROSS_MINGW else name
+
+    def cross_version_block_reason(self) -> str:
+        """Explain an unsupported Windows version without preventing config edits."""
+        if (
+            self.target_backend == TARGET_BACKEND_CROSS_MINGW
+            and self.ffmpeg_version not in SUPPORTED_CROSS_MINGW_VERSIONS
+        ):
+            accepted = ", ".join(SUPPORTED_CROSS_MINGW_VERSIONS)
+            return f"linux-cross-mingw supports FFmpeg {accepted} only (got {self.ffmpeg_version})."
+        return ""
 
     def get_workspace_path(self, root: Optional[Path] = None) -> Path:
         """Get full path to the workspace directory.

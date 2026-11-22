@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+import io
 import threading
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Deque, Dict, List, Optional, Set
+from typing import Callable, Deque, Dict, List, Optional, Set, TextIO, Tuple
 
-from rich.console import Console, Group, RenderableType
+from rich.console import Console, ConsoleOptions, Group, RenderableType, RenderResult
 from rich.panel import Panel
 from rich.progress_bar import ProgressBar
+from rich.segment import Segment
 from rich.table import Table
 from rich.text import Text
 
@@ -76,14 +78,67 @@ _IN_PROGRESS = {
 }
 
 
+class MessageStream(io.TextIOBase):
+    """Text stream forwarding complete lines to a callback.
+
+    Used while an alternate-screen Live display owns the terminal, so stray
+    ``print`` output becomes dashboard messages instead of being written above
+    the full-height frame (which scrolls the terminal). ``rich_proxied_file``
+    lets Rich consoles keep rendering to the real terminal stream.
+    """
+
+    def __init__(self, original: TextIO, sink: Callable[[str], None]):
+        self.rich_proxied_file = original
+        self._sink = sink
+        self._buffer = ""
+        self._lock = threading.Lock()
+
+    def writable(self) -> bool:
+        return True
+
+    def isatty(self) -> bool:
+        return self.rich_proxied_file.isatty()
+
+    def fileno(self) -> int:
+        return self.rich_proxied_file.fileno()
+
+    @property
+    def encoding(self) -> str:  # type: ignore[override]
+        return getattr(self.rich_proxied_file, "encoding", None) or "utf-8"
+
+    def write(self, text: str) -> int:
+        with self._lock:
+            self._buffer += text.replace("\r\n", "\n").replace("\r", "\n")
+            *complete, self._buffer = self._buffer.split("\n")
+        for line in complete:
+            if line.strip():
+                self._sink(line)
+        return len(text)
+
+    def flush(self) -> None:
+        with self._lock:
+            line, self._buffer = self._buffer, ""
+        if line.strip():
+            self._sink(line)
+
+
 class BuildDashboard:
     """Rich renderable build dashboard."""
 
-    def __init__(self, console: Console, ffmpeg_version: str, jobs: int, download_workers: int):
+    def __init__(
+        self,
+        console: Console,
+        ffmpeg_version: str,
+        jobs: int,
+        download_workers: int,
+        *,
+        status_only: bool = False,
+    ):
         self.console = console
         self.ffmpeg_version = ffmpeg_version
         self.jobs = jobs
         self.download_workers = download_workers
+        self.status_only = status_only
         self._rows_by_name: Dict[str, ComponentRow] = {}
         self.rows: List[ComponentRow] = []
         self.messages: Deque[str] = deque(maxlen=10)
@@ -233,58 +288,113 @@ class BuildDashboard:
 
     def render(self) -> RenderableType:
         """Render current dashboard."""
-        with self._lock:
-            return Group(self._header(), self._table(), self._messages())
+        return self
 
-    def __rich__(self) -> RenderableType:
-        return self.render()
+    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+        """Render exactly within the measured viewport.
+
+        Every row, wrapped message line, panel border and padding line is
+        counted, so the frame never exceeds ``options.height`` (Live screen
+        mode) or the current terminal height. Sizes are read on every
+        refresh, so a terminal resize recalculates the layout.
+        """
+        width = max(1, options.max_width)
+        height = options.height or console.size.height
+        with self._lock:
+            header, rows_height, messages_height = self._layout(height)
+            parts: List[RenderableType] = []
+            if header:
+                parts.append(self._header(header))
+            parts.append(self._table(rows_height))
+            if messages_height:
+                parts.append(self._messages(messages_height, width, console))
+            lines = console.render_lines(
+                Group(*parts), options.update(width=width, height=None), pad=True
+            )[: max(0, height)]
+        for line in lines:
+            yield from line
+            yield Segment.line()
+
+    @staticmethod
+    def _layout(height: int) -> Tuple[int, int, int]:
+        """Return header, component-row and messages-panel heights summing to ``height``.
+
+        Normal terminals keep the established layout (3-line header,
+        10-line messages panel); small terminals shrink the panel first.
+        """
+        height = max(0, height)
+        header = 3 if height >= 8 else min(1, height)
+        remaining = height - header
+        if remaining >= 13:
+            messages = 10
+        elif remaining >= 6:
+            messages = remaining - remaining // 2
+        elif remaining >= 3:
+            messages = 3
+        else:
+            messages = 0
+        return header, remaining - messages, messages
 
     def _component_height(self) -> int:
-        """Fixed number of component rows above the anchored messages panel.
+        """Component rows available in the current terminal."""
+        return self._layout(self.console.size.height)[1]
 
-        Layout overhead: header panel = 3 lines, messages panel = 10 lines
-        (8 content + 2 borders).
-        """
-        return max(3, self.console.size.height - 13)
-
-    def _header(self) -> Panel:
+    def _header(self, height: int = 3) -> RenderableType:
         """Compact header with title and elapsed time."""
-        text = Text()
+        text = Text(no_wrap=True, overflow="ellipsis")
         text.append(f"FFmpeg Builder {self.ffmpeg_version} - Building", style="bold blue")
         elapsed_text = str(datetime.now() - self.started_at).split(".")[0]
         text.append(f" | Elapsed: {elapsed_text}", style="italic")
-        return Panel(text, border_style="blue")
+        if height < 3:
+            return text
+        return Panel(text, border_style="blue", height=3)
 
-    def _table(self) -> Group:
+    def _table(self, height: Optional[int] = None) -> Group:
         """Simplified table: one line per component with progress bar and status."""
-        visible = self._visible_rows()
-        height = self._component_height()
+        height = self._component_height() if height is None else height
+        visible = self._visible_rows(height)
         rendered = []
         for row in visible:
-            pct = int(row.progress)
-            bar = "█" * (pct // 10) + "-" * ((100 - pct) // 10)
             status_label = _STATUS_LABELS[row.status]
-            txt = (
-                f"{row.index}/{row.total} {row.name:20.20} "
-                f"{bar} {pct}% [{status_label}] | {row.detail}"
+            if self.status_only:
+                txt = f"{row.index}/{row.total} {row.name:20.20} [{status_label}] | {row.detail}"
+            else:
+                pct = int(row.progress)
+                bar = "█" * (pct // 10) + "-" * ((100 - pct) // 10)
+                txt = (
+                    f"{row.index}/{row.total} {row.name:20.20} "
+                    f"{bar} {pct}% [{status_label}] | {row.detail}"
+                )
+            rendered.append(
+                Text(txt, style=_STATUS_STYLES[row.status], no_wrap=True, overflow="ellipsis")
             )
-            rendered.append(Text(txt, style=_STATUS_STYLES[row.status]))
         # Pad so the component area always has the same height; messages panel stays anchored.
         for _ in range(height - len(rendered)):
             rendered.append(Text(""))
         return Group(*rendered)
 
-    def _messages(self) -> Panel:
-        """Fixed-height messages panel (8 content lines) anchored at the bottom."""
-        lines = list(self.messages)[-8:]
-        if not lines:
-            lines = ["No messages yet."]
-        while len(lines) < 8:
-            lines.append("")
-        content = "\n".join(lines)
-        return Panel(Text(content), title="Messages", border_style="dim")
+    def _messages(
+        self, height: int = 10, width: Optional[int] = None, console: Optional[Console] = None
+    ) -> Panel:
+        """Messages panel of exactly ``height`` lines showing the newest wrapped lines."""
+        console = console or self.console
+        width = console.size.width if width is None else width
+        inner_width = max(1, width - 4)
+        capacity = max(1, height - 2)
+        wrapped: List[Text] = []
+        for message in self.messages:
+            for raw in message.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+                if raw.strip():
+                    wrapped.extend(Text(raw.expandtabs()).wrap(console, inner_width))
+        lines = wrapped[-capacity:] or [Text("No messages yet.")]
+        for line in lines:
+            line.no_wrap = True
+            line.overflow = "crop"
+        return Panel(
+            Group(*lines), title="Messages", border_style="dim", height=height, padding=(0, 1)
+        )
 
-    def _visible_rows(self) -> List[ComponentRow]:
+    def _visible_rows(self, height: Optional[int] = None) -> List[ComponentRow]:
         with self._lock:
             if not self.rows:
                 return []
@@ -294,9 +404,9 @@ class BuildDashboard:
                 visible = [r for r in self.rows if r.first_seen]
             if not visible:
                 return []
-            # Fixed layout: header = 3 lines, messages = 10 lines (8 content + 2 borders).
-            # Component list fills the remaining space; messages stay anchored at the bottom.
-            height = self._component_height()
+            height = self._component_height() if height is None else height
+            if height <= 0:
+                return []
             if len(visible) <= height:
                 return visible
 

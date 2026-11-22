@@ -1,3 +1,31 @@
+### Corrected — Windows cross TUI presentation
+
+- The in-process production cross route feeds the existing component-state
+  dashboard, with transient preparation, reuse and final-acceptance messages.
+- Windows probe results and OpenCL target-interface readiness are displayed
+  separately from WSL diagnostics. Windows completion and failure reports show
+  target outputs or resumable error details without a Linux install action.
+- The live dashboard measures every frame against the current terminal size:
+  wrapped and multi-line messages and panel borders are counted, so the
+  Messages panel shrinks on small terminals and recalculates after a resize.
+  While the Windows dashboard is live, stray validator `print`/stderr output is
+  routed into Messages instead of scrolling the alternate screen; streams are
+  restored before the final Windows report.
+- Native and headless workflows retain their existing behavior; no component or
+  packaging contract is changed.
+
+### Integrated — FFmpeg 9.0 Windows in the shared TUI
+
+- The existing version prompt offers `9.0-windows`, stored as FFmpeg `9.0`
+  with backend `linux-cross-mingw`. FFmpeg 8.1 cross builds are rejected
+  before component building.
+- Windows Start and Resume call the G7 production orchestrator. Status,
+  component info and toolchain views use the selected backend's resolution;
+  switching backends discards stale host and target data.
+- CLI and TUI default to `workspace_90_windows`, so TUI cleanup removes every
+  Windows identity in that root without removing native 9.0. No workspaces
+  are migrated. Final clean interactive PREFERRED acceptance is pending.
+
 ### Accepted — post-G7 source/tool/provenance stabilisation
 
 - **libjxl nested sources:** Brotli `028fb5a23661f123017c060daa546b55cf4bde29`
@@ -33,7 +61,7 @@
   relocated-package acceptance passed. An identical rerun reused all 46
   components in 350 s; only the release manifest's `generated_at` changed. BASE
   was not rerun.
-- G7 remains accepted; Windows TUI integration remains not started.
+- G7 remains accepted; this pass did not exercise the TUI.
 
 ### Accepted — G7 CLI clean production workflow
 
@@ -61,7 +89,7 @@
   `~/Temp/workspace_90` were preserved. Final checks: 917 tests passed, one
   skipped; Black, frozen mypy baseline and diff whitespace checks passed.
   See `windows_build_strategy.md` for identities, evidence and rebuild scope.
-- **G7 CLI PASS; Windows TUI integration is separate and not yet completed.**
+- **G7 CLI PASS; this gate covers the headless workflow only.**
   Existing G5 consumer scope and G6 internal/nonredistributable runtime
   ownership remain unchanged. No FFmpeg 8.1 Windows acceptance was added.
 

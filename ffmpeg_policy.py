@@ -7,7 +7,13 @@ import shutil
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from ffmpeg_builder.config import BuildConfig, SUPPORTED_FFMPEG_VERSIONS
+from ffmpeg_builder.config import (
+    BuildConfig,
+    SUPPORTED_CROSS_MINGW_VERSIONS,
+    SUPPORTED_FFMPEG_VERSIONS,
+    TARGET_BACKEND_CROSS_MINGW,
+    TARGET_BACKEND_NATIVE,
+)
 from ffmpeg_builder.platform_detect import PlatformInfo, ToolInfo
 from ffmpeg_builder.toolchain_registry import (
     ToolchainRegistry,
@@ -15,6 +21,14 @@ from ffmpeg_builder.toolchain_registry import (
     _system_tool_in_range,
     _version_tuple,
 )
+
+FFMPEG_BUILD_VARIANTS = {
+    **{version: (version, TARGET_BACKEND_NATIVE) for version in SUPPORTED_FFMPEG_VERSIONS},
+    **{
+        f"{version}-windows": (version, TARGET_BACKEND_CROSS_MINGW)
+        for version in SUPPORTED_CROSS_MINGW_VERSIONS
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -25,6 +39,11 @@ class FfmpegPolicy:
     selected_version_allowed: bool
     blocked_reason: str = ""
     notes: List[str] = field(default_factory=list)
+    available_windows_variants: List[str] = field(default_factory=list)
+
+    @property
+    def available_variants(self) -> List[str]:
+        return self.available_versions + self.available_windows_variants
 
 
 def _macports_clang_17_available(config: BuildConfig) -> bool:
@@ -103,6 +122,7 @@ def evaluate_ffmpeg_policy(
     available = list(SUPPORTED_FFMPEG_VERSIONS)
     notes: List[str] = []
     reasons: List[str] = []
+    windows_variants: List[str] = []
 
     if platform_info.is_macos:
         reasons, notes = _evaluate_macos_policy(config, available)
@@ -131,16 +151,35 @@ def evaluate_ffmpeg_policy(
                 reasons.append(
                     _describe_range_failure(profile.system_tool_range, versions, version)
                 )
+            # Use the same host scope as target preparation. The Windows probe
+            # and managed toolchain installation are separate prerequisites.
+            if platform_info.is_linux:
+                windows_variants = [
+                    label
+                    for label, (version, backend) in FFMPEG_BUILD_VARIANTS.items()
+                    if backend == TARGET_BACKEND_CROSS_MINGW
+                    and registry.required_toolchains_for(version, platform, backend)
+                ]
 
     if "8.1" not in available and "9.0" in available:
         notes.append("Рекомендация: использовать FFmpeg 9.0.")
 
     selected_allowed = config.ffmpeg_version in available
     blocked_reason = " ".join(reasons) if not selected_allowed else ""
+    if config.target_backend == TARGET_BACKEND_CROSS_MINGW:
+        blocked_reason = config.cross_version_block_reason()
+        if not blocked_reason and f"{config.ffmpeg_version}-windows" not in windows_variants:
+            blocked_reason = (
+                "The linux-cross-mingw target requires a Linux/WSL build host."
+                if not platform_info.is_linux
+                else f"No WSL-Mingw toolchain profile is available for FFmpeg {config.ffmpeg_version}."
+            )
+        selected_allowed = not blocked_reason
 
     return FfmpegPolicy(
         available_versions=available,
         selected_version_allowed=selected_allowed,
         blocked_reason=blocked_reason,
         notes=notes,
+        available_windows_variants=windows_variants,
     )

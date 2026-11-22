@@ -356,7 +356,9 @@ def test_current_windows_strategy_status_is_consistent():
     assert "G4 **PASS**" in text
     assert "G5 **PASS**" in text
     assert "G6 **PASS**; G7 CLI **PASS** on the recorded physical target." in text
-    assert "Windows TUI integration remains separate and **not yet completed**." in text
+    status = text.split("### G5", maxsplit=1)[0]
+    assert "`9.0-windows`" in status
+    assert "clean interactive PREFERRED build is **pending**." in status
     assert "G6 — accepted Windows runtime bundle" in text
     assert "Wave 0 complete; Wave 1 not started" not in text
     assert "G4 component adapters and full-stack builds have not started" not in text

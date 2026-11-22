@@ -42,6 +42,7 @@ def test_normal_cross_workflow_builds_clean_then_reuses_without_waves(tmp_path, 
     import json
 
     from ffmpeg_builder import cross_build, cross_component_contracts, g6
+    from ffmpeg_builder.components import ComponentSelection
     from ffmpeg_builder.config import BuildConfig
     from ffmpeg_builder.state import ComponentStatus, StateManager
 
@@ -58,7 +59,9 @@ def test_normal_cross_workflow_builds_clean_then_reuses_without_waves(tmp_path, 
     prefix.mkdir()
     manager = StateManager(tmp_path / "build_state.json")
     identity = SimpleNamespace(build_key="identity", to_dict=lambda: {"build_key": "identity"})
-    session = SimpleNamespace(workspace=tmp_path, identity=identity, stamp=lambda manager: None)
+    session = SimpleNamespace(
+        workspace=tmp_path, identity=identity, stamp=lambda manager: None, notes=[]
+    )
     environment = SimpleNamespace(paths=SimpleNamespace(target_prefix=prefix))
     app = SimpleNamespace(
         workspace=tmp_path,
@@ -69,8 +72,8 @@ def test_normal_cross_workflow_builds_clean_then_reuses_without_waves(tmp_path, 
         config_manager=SimpleNamespace(config_path=tmp_path / "BASE.yaml"),
         prepare_target=lambda config, resume: session,
         prepare_cross_environment=lambda config, session: environment,
-        _get_component_selection=lambda config: SimpleNamespace(
-            target_inputs=[], target_components_to_build=[dependency, ffmpeg], mixed_components=[]
+        _get_component_selection=lambda config: ComponentSelection(
+            target_components_to_build=[dependency, ffmpeg]
         ),
         _component_toolchain_env=lambda config, components: {},
     )

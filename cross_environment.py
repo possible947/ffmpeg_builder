@@ -411,7 +411,9 @@ def _require_executable(path: Path, label: str, prefix: Optional[Path] = None) -
     return path
 
 
-def _resolve_host_tools(parent_environment: Mapping[str, str]) -> HostTools:
+def _detect_host_tool_paths(
+    parent_environment: Mapping[str, str],
+) -> tuple[dict[str, str], list[str]]:
     path_value = parent_environment.get("PATH", os.defpath)
     required = (
         "cc",
@@ -427,31 +429,41 @@ def _resolve_host_tools(parent_environment: Mapping[str, str]) -> HostTools:
         "autoreconf",
     )
     resolved: dict[str, str] = {}
+    missing: list[str] = []
     for name in required:
         path = shutil.which(name, path=path_value)
         if path is None:
-            raise _build_error(
-                "WSL-Mingw cross environment",
-                f"Required WSL/Linux host tool {name!r} was not found on the host PATH.",
-                CATEGORY_TARGET_DATA,
-                "wsl_mingw_host_tool_missing",
-            )
-        resolved[name] = str(Path(path).resolve())
+            missing.append(name)
+        else:
+            resolved[name] = str(Path(path).resolve())
     # Keep the venv entrypoint spelling: resolving its symlink can escape the
     # venv and lose the project's installed package/development tools.
     python_path = str(Path(sys.executable).absolute())
     if not Path(python_path).is_file():
-        raise _build_error(
-            "WSL-Mingw cross environment",
-            f"Host Python executable is unavailable: {python_path}.",
-            CATEGORY_TARGET_DATA,
-            "wsl_mingw_host_tool_missing",
-        )
-    resolved["python"] = python_path
+        missing.append("python")
+    else:
+        resolved["python"] = python_path
     for name in ("nasm", "yasm", "config.guess"):
         path = shutil.which(name, path=path_value)
         if path:
             resolved[name] = str(Path(path).resolve())
+    return resolved, missing
+
+
+def missing_cross_host_tools() -> list[str]:
+    """Report the same host-tool requirements as cross-environment setup."""
+    return _detect_host_tool_paths(os.environ)[1]
+
+
+def _resolve_host_tools(parent_environment: Mapping[str, str]) -> HostTools:
+    resolved, missing = _detect_host_tool_paths(parent_environment)
+    if missing:
+        raise _build_error(
+            "WSL-Mingw cross environment",
+            "Required WSL/Linux host tools are missing: " + ", ".join(missing),
+            CATEGORY_TARGET_DATA,
+            "wsl_mingw_host_tool_missing",
+        )
     return HostTools(paths=resolved)
 
 

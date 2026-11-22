@@ -3,7 +3,8 @@
 Interactive Python-based build system for FFmpeg 8.1 (default) and 9.0 on
 macOS and Linux. Windows builds follow the **WSL-Mingw** route (WSL2 Ubuntu →
 LLVM-MinGW/UCRT cross toolchain). G1–G6 and **G7 CLI are PASS** on the accepted
-physical Windows target; Windows TUI integration is still separate — see
+physical Windows target. The shared TUI exposes `9.0-windows`; final interactive
+acceptance on that target is pending — see
 [Windows (WSL-Mingw)](#windows-wsl-mingw).
 
 FFmpeg Builder replaces the traditional bash `build-ffmpeg` script with a modern, interactive interface featuring real-time progress tracking, configuration management, platform-aware hardware acceleration detection, and resumable builds.
@@ -35,7 +36,7 @@ guide.
 - **~60 Components** — All codecs, libraries, and tools built from source in correct dependency order
 - **macOS Support** — Macports clang detection, OpenMP, VideoToolbox, glibtool handling
 - **Linux Support** — GCC/Clang detection, C11/C++17 standards, host-tuned (`-march=native -mtune=native -fopenmp`) builds
-- **Windows (WSL-Mingw) — G7 CLI PASS** — FFmpeg 9.0 passed separate clean full BASE/PREFERRED builds, runtime/package acceptance and identical-run reuse on the recorded physical Windows target; Windows TUI integration remains separate
+- **Windows (WSL-Mingw) — G7 CLI PASS** — FFmpeg 9.0 passed separate clean full BASE/PREFERRED builds, runtime/package acceptance and identical-run reuse on the recorded physical Windows target; the TUI uses the same production workflow
 
 ## Requirements
 
@@ -159,8 +160,9 @@ Or use the environment check script:
 > **Status: G1–G6 and G7 CLI PASS.** Separate clean full BASE (40 components)
 > and PREFERRED (46 components) FFmpeg 9.0 builds completed through the normal
 > headless workflow without historical wave state. Both passed runtime,
-> relocated packaging and identical-run reuse. Windows TUI integration is
-> **not yet completed**. Production FFmpeg 9.0
+> relocated packaging and identical-run reuse. The TUI integration is implemented;
+> the maintainer's final clean interactive PREFERRED build is still pending.
+> Production FFmpeg 9.0
 > integrated the configured Windows target stack, and `ffmpeg.exe` and
 > `ffprobe.exe` passed software and representative CUDA/libvmaf, Vulkan and
 > OpenCL operations from a relocated bundle under a controlled PATH on the
@@ -174,7 +176,42 @@ Or use the environment check script:
 > The previous MSYS2 route is unsupported legacy code. See
 > [`docs/windows_build_strategy.md`](docs/windows_build_strategy.md) for evidence.
 
-Supported Windows build route:
+### Interactive Windows build
+
+1. In WSL2, start `python -m ffmpeg_builder`. Open configuration (`c`) and
+   choose `9.0-windows` in the **FFmpeg version** input. The TUI saves
+   `ffmpeg_version: "9.0"` and `target_backend: linux-cross-mingw`, not the alias.
+   `8.1` and `9.0` select native builds. Windows supports only FFmpeg 9.0:
+   `8.1-windows` is not offered, and an 8.1 cross configuration is blocked
+   before component building.
+2. Use `t` to inspect required toolchains and `p` → `p` to prepare recommended
+   managed profiles (LLVM-MinGW, Rust with Windows target support and cargo-c).
+   When CUDA is requested, the configured SDK version selects the managed
+   NVCC host compiler, which is also recommended. No manual cargo-c PATH
+   setup is required.
+3. Use `b` to start the build or `r` to resume when **Previous Build** is shown.
+   Both actions run G7 and validate the current target identity before reusing
+   outputs. Previous Build shows the last recorded Windows build for this
+   variant, not a guarantee of compatibility. Use `w` before a clean build
+   to remove all of `workspace_90_windows` without deleting the native 9.0
+   workspace or the project toolchain store.
+4. With release creation enabled, the accepted bundle is written to
+   `workspace_90_windows/targets/linux-cross-mingw-<identity>/release/`.
+
+The TUI calls the same production cross route in-process as the headless
+`scripts/run_build.py` entry point. Preparation and final acceptance are
+transient messages; the dashboard uses existing component state and marks
+validated reuse as detail. The report separates WSL host tools from the Windows
+target: Windows OpenCL runtime comes from the Windows probe, while the target
+build interface is shown separately as prepared or not prepared. Windows
+completion lists the actual `.exe` outputs and never offers Linux installation.
+Native UI behavior is unchanged.
+
+**Manual TUI check:** select `9.0-windows`, check the Windows runtime and
+OpenCL interface labels and component roles, then resume a known matching
+workspace. Confirm preparation feedback, component reuse in the dashboard,
+final acceptance messages and `.exe` paths, with no Linux install prompt.
+This reuse still performs normal identity and runtime acceptance checks.
 
 ```
 Windows host
@@ -552,8 +589,9 @@ The normal workflow records component/output hashes, FFmpeg acceptance,
 representative runtime results and G6-style deterministic packaging/relocation
 under its identity workspace. `--no-release` skips packaging, not runtime
 acceptance. A clean acceptance removes only that profile's generated workspace;
-keep toolchains, caches and external SDKs. TUI integration is separate and is
-not implemented by G7 CLI work.
+keep toolchains, caches and external SDKs. Both entry points now default to
+`workspace_90_windows` for Windows builds. Existing workspaces are not moved;
+to reuse the old CLI layout explicitly, pass `--workspace workspace_90`.
 
 Supported `ffmpeg_version` values are `8.1` (the default) and `9.0`. Each version
 uses a separately verified source archive checksum. Add its archive to the local
@@ -702,10 +740,10 @@ workspace_<version>/bin/ffplay
 ```
 
 For the accepted Windows cross build, source binaries are at
-`workspace_90/targets/linux-cross-mingw-<identity>/bin/ffmpeg.exe` and
+`workspace_90_windows/targets/linux-cross-mingw-<identity>/bin/ffmpeg.exe` and
 `ffprobe.exe`; target headers, libraries and metadata are in that identity's
 `prefix/`. The G6 production bundle is in that identity's `release/`, with a
-runtime-ownership `manifest.json`; `g6-acceptance.json` records repeated
+runtime-ownership `manifest.json`; `g7-package-acceptance.json` records repeated
 packaging and relocated runtime acceptance. The bundle is target-specific and
 not redistributable.
 

@@ -446,6 +446,7 @@ class ToolchainRegistry:
         platform: str,
         system_tool_versions: Mapping[str, str],
         cuda_version: Optional[str] = None,
+        backend: Optional[str] = None,
     ) -> List[ComponentToolchainPlan]:
         """Build a read-only toolchain plan for a component list.
 
@@ -456,10 +457,30 @@ class ToolchainRegistry:
         """
         plan: List[ComponentToolchainPlan] = []
         cuda_profile = self.toolchain_for_cuda(cuda_version) if cuda_version else None
-        for component in components:
-            assignment = self.resolve_component_toolchain(
-                component.toolchain, ffmpeg_version, platform, system_tool_versions
+        cross_compiler = (
+            next(
+                (
+                    profile.name
+                    for name in self.required_toolchains_for(ffmpeg_version, platform, backend)
+                    if (profile := self.get_profile(name)) is not None
+                    and profile.kind == "cross_compiler"
+                ),
+                None,
             )
+            if backend is not None
+            else None
+        )
+        for component in components:
+            if backend is not None and component.toolchain in ("", "n/a"):
+                assignment = (
+                    ToolchainAssignment(mode="deploy", profile=cross_compiler)
+                    if cross_compiler
+                    else None
+                )
+            else:
+                assignment = self.resolve_component_toolchain(
+                    component.toolchain, ffmpeg_version, platform, system_tool_versions
+                )
             plan.append(
                 ComponentToolchainPlan(
                     component=component.name,

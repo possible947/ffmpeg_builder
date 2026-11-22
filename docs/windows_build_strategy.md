@@ -2,7 +2,8 @@
 
 **Status:** G1 **PASS**; G2.1–G2.8 **PASS**; G3 **PASS**; G4 **PASS**;
 G5 **PASS**; G6 **PASS**; G7 CLI **PASS** on the recorded physical target.
-Windows TUI integration remains separate and **not yet completed**.
+The shared TUI now exposes that workflow as `9.0-windows`. The maintainer's
+final clean interactive PREFERRED build is **pending**.
 
 ### G5 — accepted, consumer-oriented hardware validation
 
@@ -1463,8 +1464,9 @@ removed; no Windows FFmpeg 8.1 acceptance or TUI integration was performed.
   production-code fingerprint, clean provenance, components/features and
   built/reused lists. A reuse invocation is not itself a clean full build;
   its corresponding original full-build record must also be retained.
-- **UI boundary:** G7 acceptance is headless CLI only. TUI integration is
-  separate and is not completed by the CLI implementation.
+- **UI boundary at G7 acceptance:** the recorded G7 acceptance was headless
+  CLI only. TUI Start and Resume call the same G7 orchestrator in-process; the
+  interactive physical-target acceptance remains separate.
 - **Scope / code/docs:** Run the complete configured build and acceptance
   flow; native Linux, native WSL/Linux and macOS regression protection as
   applicable; migration/removal tests for any remaining legacy Windows
@@ -1572,5 +1574,5 @@ project-owned artifact and never a Windows target component.
    external system/driver runtime policy.
 7. **G7 CLI — PASS:** Separate clean full BASE/PREFERRED production builds,
    runtime/package acceptance, identical-run reuse and regression checks
-   passed; user/developer docs and changelog updated. Windows TUI integration
-   remains a separate, not-yet-completed task.
+   passed; user/developer docs and changelog updated. This gate did not
+   exercise the interactive workflow.

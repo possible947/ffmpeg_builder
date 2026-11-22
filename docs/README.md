@@ -133,7 +133,9 @@ Or use the environment check script:
 
 ## Windows (WSL-Mingw)
 
-> **Status: G1–G6 PASS.** Production FFmpeg 9.0
+> **Status: G1–G6 and G7 CLI PASS.** The TUI uses the same production workflow;
+> the maintainer's final clean interactive PREFERRED build is pending.
+> Production FFmpeg 9.0
 > integrated the configured Windows target stack, and `ffmpeg.exe` and
 > `ffprobe.exe` passed software and representative CUDA/libvmaf, Vulkan and
 > OpenCL operations from a relocated bundle under a controlled PATH on the
@@ -557,6 +559,14 @@ for FFmpeg 9.0 on the same host nothing is deployed (system GCC is in range).
 
 Open the builder (`python -m ffmpeg_builder`) and use:
 
+On WSL2 choose `c` → `9.0-windows` in the **FFmpeg version** input. It saves
+`ffmpeg_version: "9.0"` and `target_backend: linux-cross-mingw`. The `8.1` and
+`9.0` choices remain native. FFmpeg 8.1 is not supported on the Windows target
+and is rejected before component building. After preparing tools, use `b`
+to start or `r` when a previous Windows build is shown. Both use the same
+identity-guarded workflow as the CLI; `w` removes the entire selected
+workspace. See the [Windows quick start](../README.md#windows-wsl-mingw).
+
 | Key | Action |
 |-----|--------|
 | `t` | Toolchain plan: per-component resolution (`system` / `deploy: <profile>`) with skip reasons |
@@ -719,10 +729,10 @@ workspace_<version>/bin/ffplay
 ```
 
 For the accepted Windows cross build, source binaries are at
-`workspace_90/targets/linux-cross-mingw-<identity>/bin/ffmpeg.exe` and
+`workspace_90_windows/targets/linux-cross-mingw-<identity>/bin/ffmpeg.exe` and
 `ffprobe.exe`; target headers, libraries and metadata are in that identity's
 `prefix/`. The G6 production bundle is in that identity's `release/`, with a
-runtime-ownership `manifest.json`; `g6-acceptance.json` records repeated
+runtime-ownership `manifest.json`; `g7-package-acceptance.json` records repeated
 packaging and relocated runtime acceptance. The bundle is target-specific and
 not redistributable.
 

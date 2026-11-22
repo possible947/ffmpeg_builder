@@ -86,3 +86,21 @@ def test_macos_allows_ffmpeg81_only_with_macports17(monkeypatch):
 
     assert "8.1" in policy.available_versions
     assert policy.selected_version_allowed is True
+    assert "9.0-windows" not in policy.available_variants
+
+
+def test_windows_policy_uses_backend_profile_not_native_gcc_range():
+    info = PlatformInfo(is_linux=True, is_wsl2=True, platform="linux", gcc_major_version=13)
+    config = BuildConfig(ffmpeg_version="9.0", target_backend="linux-cross-mingw")
+
+    policy = evaluate_ffmpeg_policy(config, info, {})
+
+    assert policy.selected_version_allowed
+    assert "9.0" not in policy.available_variants
+    assert "9.0-windows" in policy.available_variants
+    assert "8.1-windows" not in policy.available_variants
+
+    config.ffmpeg_version = "8.1"
+    policy = evaluate_ffmpeg_policy(config, info, {})
+    assert not policy.selected_version_allowed
+    assert "supports FFmpeg 9.0 only" in policy.blocked_reason
