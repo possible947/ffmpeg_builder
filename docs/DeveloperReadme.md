@@ -4,7 +4,16 @@ This document describes the internal architecture, module responsibilities, data
 
 ## Release Status
 
-The current package version is `3.0.0`. The toolchain store replaces the
+The current package version is `4.0.0` (the 4.0 release). Clean Linux/native
+FFmpeg 8.1 and 9.0 builds and a clean Windows FFmpeg 9.0 build through the
+normal `9.0-windows` TUI variant are accepted; the Windows run used production
+`linux-cross-mingw` orchestration. The normal headless production workflow is
+also accepted. Clean orchestration, identity-checked reuse, runtime
+acceptance, packaging and relocation are complete on the recorded target.
+These maintainer TUI results add final end-user acceptance to the earlier G1–G7
+engineering evidence below.
+
+The toolchain store replaces the
 external `nix shell` environment: compilers are built on the host for the
 host, and both FFmpeg versions build end-to-end (Linux, GCC 16.2.1 host: 8.1
 with deployed gcc12 12.5.0 and 9.0 with the system GCC — 58/58 components
@@ -17,11 +26,12 @@ the relocated bundle contains `ffmpeg.exe`, `ffprobe.exe`, and the four
 hash-verified LLVM-MinGW runtime DLLs, while Windows/UCRT, GPU-driver,
 Vulkan/OpenCL loader and vendor runtimes, and optional `VSScript.dll` remain
 external. The accepted GPL/nonfree bundle is internal and nonredistributable.
-G7 CLI also passed: separate clean full BASE/PREFERRED FFmpeg 9.0 builds
+G7 CLI passed: separate clean full BASE/PREFERRED FFmpeg 9.0 builds
 automatically constructed all 40/46 selected components, passed the appropriate
 runtime/package checks, and reused all components on identical invocations.
-The shared TUI now exposes the G7 path as `9.0-windows`; the maintainer's
-final clean interactive PREFERRED acceptance remains pending.
+The shared TUI exposes this production path as `9.0-windows`; its final clean
+acceptance, along with clean native 8.1 and 9.0 TUI builds, is now recorded
+above and in `docs/README.md`.
 Post-G7 stabilisation made the libjxl Brotli/Highway archives and cargo-c
 0.10.25 project-managed offline inputs (no `~/.cargo/bin` PATH setup) and
 recorded x265 4.2's upstream identity (commit `e444744c0397`; its stale
@@ -74,12 +84,16 @@ nonfree and unredistributable. G6 packages LLVM-MinGW libc++, libunwind,
 winpthread and libomp DLLs, and the relocated bundle passed software plus
 representative CUDA/libvmaf, Vulkan and OpenCL checks with a controlled PATH.
 System/UCRT, driver, Vulkan/OpenCL loader and vendor, and optional VapourSynth
-runtimes remain external. The cross route requires the already accepted
-component waves; it does not yet orchestrate a fresh stack build automatically. The
-compatibility/portable profile is `native_build=false`,
+runtimes remain external. The normal cross route builds the selected stack
+automatically without historical wave state. The compatibility/portable profile is `native_build=false`,
 `openmp=false`; it is for portable releases/diagnostics and cannot substitute
 for a failed primary-profile build.
 See `CHANGELOG.md` for the release history.
+
+The detailed G1–G7 descriptions below record each gate's results at the time
+it ran. Their stage-specific "not started" statements are historical, not
+current blockers. The final accepted contract is summarized in the release
+status above and at the start of `docs/windows_build_strategy.md`.
 
 ## Architecture Overview
 
@@ -164,7 +178,7 @@ prefix contains only G2.6 headers/interfaces at this stage.
 `run_cross_environment_acceptance()` executes temporary C/C++/resource and
 static-archive probes, target pkg-config isolation, and minimal CMake, Meson,
 and Autotools fixtures. The TUI and normal headless cross route now continue
-to G4 FFmpeg acceptance using the previously accepted component stack;
+through the selected component stack and G4 FFmpeg acceptance;
 headless `--dry-run` reports G4 Wave-0 component roles without building. When
 `native_build` is enabled, target C/C++ uses exactly `-march=native
 -mtune=native`; LLVM-MinGW interprets `native`, and the project does not
@@ -544,8 +558,8 @@ Store behaviour (all profiles, not just LLVM-MinGW):
 
   Both `scripts/run_build.py`'s headless `run_build()` and the TUI
   `_run_build()` path reach the same preparation and identity-local G3
-  acceptance. They now continue to final G4 integration when the component
-  waves have already been accepted for that identity. Cross `--dry-run`
+  acceptance. They now build the selected component stack and continue to
+  final G4 integration without requiring historical waves. Cross `--dry-run`
   reports Wave-0 selection without building.
 
 Isolated offline provisioning (does not touch the normal store):
@@ -633,7 +647,7 @@ Detects the full system environment in a single `detect_all()` call.
 | `PlatformInfo` | platform, build_backend, is_macos, is_linux, is_windows, is_arm64, is_wsl2, is_msys2, is_ucrt64, msystem, macports_clang, cuda_available, cuda_path, cuda_compute_capability, nvenc_api_version, nvenc_reason, vaapi_available, vaapi_reason, vaapi_detected_via, vaapi_detected_header_paths, vaapi_detected_loader_paths, vaapi_render_nodes, qsv_available, amf_available, amf_reason, amf_gpu_names, amf_headers_detected_paths, vulkan_available, vulkan_dev_available, vulkan_runtime_available, vulkan_reason, vulkan_detected_via, vulkan_detected_header_paths, vulkan_detected_icd_files, opencl_available, opencl_runtime_available, opencl_dev_available, opencl_effective_available, opencl_runtime_reason, opencl_dev_reason, opencl_effective_reason, opencl_detected_header_paths, opencl_detected_loader_paths, opencl_detected_icd_files, opencl_pkg_config_name, rocm_available, rocm_path, vulkan_sdk_available, vulkan_sdk_path |
 | `ToolInfo` | name, path, version, available |
 
-`is_msys2`, `is_ucrt64` and `msystem` are legacy fields of the unsupported MSYS2 Windows path; they remain only until migration to `linux-cross-mingw`.
+`is_msys2`, `is_ucrt64` and `msystem` are legacy fields of the unsupported MSYS2 Windows path; the production `linux-cross-mingw` route does not use them.
 **Detection methods:**
 
 | Method | What it detects |
@@ -812,14 +826,19 @@ The existing `FFmpegBuilder` methods remain the implementation target during thi
 
 **Release bundles** (`release_bundle.py`):
 
-When `make_release: true`, `make_release_bundle()` writes a release directory at `<workspace>/release` after a successful build. It copies the built `ffmpeg`/`ffprobe`/`ffplay` binaries and recursively collects their **non-system runtime dependencies** (via `ldd` on Linux, `otool -L` on macOS, `objdump -p` on Windows) into the same flat directory, then writes a `manifest.json` recording the platform, build backend, FFmpeg version, copied binaries/dependencies, and any missing binaries or dependencies.
+When `make_release: true`, `make_release_bundle()` writes `<workspace>/release`
+after a successful build. Native bundles collect built `ffmpeg`/`ffprobe`/
+`ffplay` binaries and their non-system runtime dependencies using `ldd` or
+`otool -L`. The Windows cross bundle contains `ffmpeg.exe`, `ffprobe.exe` and
+the verified LLVM-MinGW runtime closure, using PE imports and accepted runtime
+metadata. Both write a `manifest.json`.
 
 Packaging rule (final):
 
-- A release copies **all non-system runtime dependencies** and is **autonomous within the system on which it was built**. System libraries — including glibc and the dynamic loader — are intentionally **not** copied and must be present on the host; a release is not a "portable to any distribution" bundle. This matches the "build on the host, for the host" goal and keeps releases compatible with AppImage-style packaging (which relies on the host C runtime).
+- Native releases collect non-system runtime dependencies; system libraries, including glibc and the dynamic loader, remain external. The Windows bundle classifies system, GPU-driver, Vulkan/OpenCL and optional VapourSynth runtimes as external rather than copying them. Neither policy promises arbitrary-host portability.
 - System paths excluded by `_is_system_runtime_library()`: `/lib`, `/lib64`, `/usr/lib`, `/usr/lib64` (Linux); `WINDIR` (Windows); `/usr/lib`, `/System/Library`, and dyld-shared-cache references (macOS, via `_is_system_dependency_reference()`).
 - Non-system dependencies — workspace-built libraries and any libraries resolved from a local toolchain prefix — are copied into the release directory. A local-toolchain runtime (e.g. `libstdc++`/`libgomp`/`libgcc_s` under the toolchain prefix) is therefore bundled, while the host glibc is not.
-- macOS releases are additionally made relocatable: bundled dylib install names are rewritten to `@rpath/<name>`, `@loader_path` is added as an rpath, and each modified Mach-O is re-signed ad-hoc (`_make_macos_bundle_relocatable()`). Linux/Windows releases copy dependencies flat next to the binaries.
+- macOS bundles rewrite dylib paths and re-sign modified Mach-O files; Linux bundles use `$ORIGIN` RUNPATH and verify their ELF closure. Windows bundles place verified runtime DLLs next to the executables and validate relocation on the recorded target.
 
 ### `executor.py` — Command Execution
 
@@ -1108,8 +1127,9 @@ those paths on the recorded target. The authoritative requirements and evidence 
 Current cross preparation enables the CUDA prerequisite when
 `cuda_build_mode: required`, or in `auto` when libvmaf CUDA is requested; in
 either case the selected SDK/PTX prerequisite is required. `disabled` skips
-it. The accepted G4 configuration includes NVENC/NVDEC; broader independent
-eligibility and the hardware feature matrix remain future validation work. A
+it. The accepted G4 configuration includes NVENC/NVDEC; G5 validated the
+applicable consumer hardware matrix on the recorded target, while absent and
+unsupported devices remain classified rather than accepted. A
 passed PTX probe or `libvmaf_cuda_supported` flag alone is not proof of a
 Windows fatbin build; Wave 8's build and runtime acceptance supply that
 evidence for the recorded target. Preserve explicitly required features,
@@ -1185,8 +1205,8 @@ builder adaptations; the header/registry fix does not eliminate them.
 ### Fedora 44+ / modern GCC (≥15) + CUDA 12.2 — nvcc host-compiler compatibility
 
 The original failure was observed on Fedora 44. The profile below applies to
-native Linux and Linux builds inside WSL2, regardless of the selected
-platform strategy; it does not describe the experimental WSL-Mingw backend.
+native Linux and native Linux builds inside WSL2; it does not describe the
+distinct production WSL-Mingw backend.
 
 Native build preparation resolves a CUDA Toolkit and host compiler before
 selecting a resume point. An explicit `CUDA_NVCC_CCBIN` is authoritative;
@@ -1219,8 +1239,8 @@ overrides GPU detection for builds without a GPU. FFmpeg NVCC requires
 enable FFmpeg's nonfree mode. Without that permission, `auto` may build
 libvmaf with CUDA while leaving FFmpeg NVCC disabled. `auto` reports profile
 failures; `required` blocks preparation, including when nonfree permission is
-missing. WSL-Mingw cross preparation remains experimental and currently
-validates PTX only. The profile still uses the host libc rather than a pinned
+missing. WSL-Mingw has a separate host/target CUDA contract, including
+accepted fatbin and Windows runtime paths. The native profile still uses the host libc rather than a pinned
 sysroot, so it cannot make arbitrary future Toolkit/libc combinations
 compatible.
 

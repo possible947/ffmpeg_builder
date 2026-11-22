@@ -1,920 +1,161 @@
-# FFmpeg Builder 3.0
-
-Interactive Python-based build system for FFmpeg 8.1 (default) and 9.0 on
-macOS and Linux. Windows builds follow the **WSL-Mingw** route (WSL2 Ubuntu →
-LLVM-MinGW/UCRT cross toolchain). G1–G6 and **G7 CLI are PASS** on the accepted
-physical Windows target. The shared TUI exposes `9.0-windows`; final interactive
-acceptance on that target is pending — see
-[Windows (WSL-Mingw)](#windows-wsl-mingw).
-
-FFmpeg Builder replaces the traditional bash `build-ffmpeg` script with a modern, interactive interface featuring real-time progress tracking, configuration management, platform-aware hardware acceleration detection, and resumable builds.
-
-## Release Status
-
-Version `3.0.0` replaces the external `nix shell` environment with compilers
-built on the host for the host: the built-in toolchain store provisions GCC
-and Rust profiles from `toolchains.yaml`, and both FFmpeg versions build
-end-to-end (Linux, GCC 16.2.1 host: 8.1 with deployed gcc12 12.5.0 and 9.0
-with the system GCC — 58/58 components each, 18/18 expected encoders,
-`-march=native -mtune=native -fopenmp`, smoke-tested). Release portability is
-explicitly out of scope: the goal is a maximally host-tuned FFmpeg, and Vulkan
-filters do not work in a fully static binary. See `docs/CHANGELOG.md` for the
-release history and `docs/README.md` → "Toolchain Store" for the provisioning
-guide.
-
-## Features
-
-- **Interactive TUI** — Rich terminal interface with system report, component info, configuration editor, toolchain store with system-analysis recommendations, and live package-manager style build dashboard
-- **Toolchain Store** — Built-in compiler provisioning (`toolchains.yaml`): GCC/Rust profiles built on the host for the host, capability-verified after install, relocatable for bootstrap libraries; per-component `CC`/`CXX`/`PATH` injection. See `docs/README.md` → "Toolchain Store"
-- **Headless Scripts** — `scripts/prepare_toolchains.py` (provision by recommendation/all/explicit list, `--dry-run`, `--verify-only`) and `scripts/run_build.py` (full FFmpeg build with `--dry-run`/`--resume`), twins of the TUI flows for repeatable and CI runs
-- **Platform Detection** — Automatic detection of CPU, RAM, GPU, compilers, and build tools
-- **Hardware Acceleration** — Detects and configures CUDA, Vulkan, VAAPI, AMF, and OpenCL support
-- **Resumable Builds** — JSON state file tracks progress; interrupted builds can be resumed (TUI or `--resume`)
-- **Local source mirror by default** — Archives are read from `third_party/sources` first; network fallback is configurable
-- **Interactive Error Handling** — On failure, choose to retry, skip component, or abort
-- **YAML Configuration** — Human-readable build profiles with platform-specific settings
-- **~60 Components** — All codecs, libraries, and tools built from source in correct dependency order
-- **macOS Support** — Macports clang detection, OpenMP, VideoToolbox, glibtool handling
-- **Linux Support** — GCC/Clang detection, C11/C++17 standards, host-tuned (`-march=native -mtune=native -fopenmp`) builds
-- **Windows (WSL-Mingw) — G7 CLI PASS** — FFmpeg 9.0 passed separate clean full BASE/PREFERRED builds, runtime/package acceptance and identical-run reuse on the recorded physical Windows target; the TUI uses the same production workflow
-
-## Requirements
-
-### FFmpeg version policy
-
-- FFmpeg **8.1** and **9.0** are selected with `ffmpeg_version` (`8.1` default).
-- Each `(ffmpeg_version, platform)` pair declares a `system_tool_range` in
-  `toolchains.yaml`. When the detected system compiler is inside the range,
-  it is used directly; when it is outside, the profile's `fallback_toolchain`
-  is deployed from the built-in toolchain store (see "Toolchain Store" in
-  `docs/README.md`).
-- Example: on a GCC 16 host, FFmpeg 9.0 (`gcc >=15`) builds with the system
-  compiler, while FFmpeg 8.1 (`gcc >=12,<14`) deploys `gcc12` from the store.
-- On **macOS**, FFmpeg 8.1 is allowed only when `macos.clang=macports-clang-17` and `clang-mp-17` is available.
-
-### System
-
-- **Python** >= 3.12 (required for secure `tar` extraction, PEP 706; runs on Python 3.12–3.14)
-- **OS**: macOS (11.0+) or Linux (x86_64 / arm64)
-- **Disk Space**: ~10 GB for sources and build artifacts
-
-### Build Tools (auto-detected, built from source if missing)
-
-| Tool | Purpose |
-|------|---------|
-| make / g++ or clang++ | Core compilation |
-| pkg-config | Library discovery |
-| nasm / yasm | Assembly (x264, x265, dav1d) |
-| cmake | CMake-based components |
-| python3 | Meson-based components |
-| meson / ninja | dav1d, libvmaf, lv2 stack |
-| cargo / rustc | rav1e (Rust AV1 encoder) |
-| curl / git | Source downloads |
-
-### CUDA toolkit / GCC compatibility (nvcc host-compiler version)
-
-Every CUDA toolkit release only supports host compilers up to a specific GCC
-major version (e.g. **CUDA 12.2 supports GCC ≤ 12**). Rolling-release distros
-(Fedora, Arch, ...) routinely ship a much newer default GCC and often no
-longer carry the older `gccNN` package needed to match an installed CUDA SDK
-(for example, Fedora 44 ships GCC 16 and has no `gcc12` package). Without a
-compatible host compiler, `nvcc` rejects CUDA kernel compilation before any
-project code is involved, blocking FFmpeg CUDA filters and the `libvmaf` CUDA
-path. NVENC/NVDEC do not depend on NVCC compilation.
-
-On native Linux, build preparation selects one Toolkit and compiler and tests
-PTX, object, and fatbin compilation. `CUDA_NVCC_CCBIN` is authoritative when
-set; otherwise a verified store compiler mapped in `toolchains.yaml` is tried
-first, followed by system GCC for eligible mapping or probe failures.
-The same tested NVCC and flags are used by libvmaf and FFmpeg. A narrowly
-matched CUDA 12.4/glibc conflict is retried with `-U_GNU_SOURCE` only for
-NVCC. To provision a mapped compiler:
-
-```bash
-python scripts/prepare_toolchains.py   # deploys what the system analysis recommends
-```
-
-Configure CUDA in the TUI or `build_config.yaml`:
-
-```yaml
-cuda_build_mode: auto          # auto, required, or disabled
-cuda_compute_capability: "70"  # optional; otherwise detect via nvidia-smi
-allow_nonfree_cuda: false      # opt in to an unredistributable FFmpeg build
-external_prerequisite_paths:
-  cuda: /opt/cuda-12.4         # optional; otherwise CUDA_HOME/CUDA_PATH or detected nvcc
-```
-
-On native Linux and Linux builds inside WSL2, `auto` reports why CUDA
-compilation is unavailable and continues without it; `required` stops before
-building; `disabled` disables CUDA compilation. Compute capability is chosen
-from `cuda_compute_capability`, then `CUDA_COMPUTE_CAPABILITY`, then detected
-GPUs. There is no fixed fallback: set a target capability when it cannot be
-detected.
-
-FFmpeg's NVCC backend is nonfree; it requires `allow_nonfree_cuda: true` or
-the existing `gpl_enabled: true` setting, which also enables nonfree code in
-this builder. Without that permission, `auto` can still build libvmaf with
-CUDA but disables FFmpeg's NVCC backend. NVENC/NVDEC do not require a working
-NVCC.
-If an older NVIDIA driver selects an older nv-codec release, libvmaf uses
-CUDA driver headers from the registry's default nv-codec archive separately;
-FFmpeg retains the driver-compatible NVENC headers.
-The WSL-Mingw cross backend remains experimental; its current preparation
-checks PTX and uses its separate target/compiler rules. Native NVCC and
-host-compiler paths must not contain whitespace because FFmpeg's configure
-script cannot safely pass such paths. The selected Toolkit, system libc,
-Vulkan loader, and GPU drivers remain external; the profile is not a
-hermetic sysroot and cannot guarantee compatibility with every future update.
-
-### Python Dependencies
-
-```
-rich>=13.0.0
-tqdm>=4.65.0
-pyyaml>=6.0
-requests>=2.31.0
-jinja2>=3.1.0
-```
-
-Install all dependencies:
-
-```bash
-pip install -e .
-```
-
-Or use the environment check script:
-
-```bash
-./scripts/check_python_env.sh
-```
-
-### System Requirements
-
-- **Python** >= 3.12 (required for secure `tar` extraction, PEP 706; runs on Python 3.12–3.14)
-- **OS**: macOS (11.0+), Linux (x86_64 / arm64); Windows via WSL2 Ubuntu (WSL-Mingw, accepted on the recorded target)
-- **Disk Space**: ~10 GB for sources and build artifacts
-- **Recommended RAM**: 32+ GiB (full builds with parallel compilation)
-
-## Windows (WSL-Mingw)
-
-> **Status: G1–G6 and G7 CLI PASS.** Separate clean full BASE (40 components)
-> and PREFERRED (46 components) FFmpeg 9.0 builds completed through the normal
-> headless workflow without historical wave state. Both passed runtime,
-> relocated packaging and identical-run reuse. The TUI integration is implemented;
-> the maintainer's final clean interactive PREFERRED build is still pending.
-> Production FFmpeg 9.0
-> integrated the configured Windows target stack, and `ffmpeg.exe` and
-> `ffprobe.exe` passed software and representative CUDA/libvmaf, Vulkan and
-> OpenCL operations from a relocated bundle under a controlled PATH on the
-> physical target. G5 provides the broader consumer-driven hardware results;
-> this is not exhaustive hardware validation. The bundle contains only the
-> accepted LLVM-MinGW runtime DLLs and is **internal, target-specific and not
-> redistributable** under the accepted GPL/nonfree configuration. Windows,
-> UCRT, GPU-driver, Vulkan/OpenCL loader and vendor runtimes remain external;
-> `VSScript.dll` is an optional VapourSynth prerequisite. Resume is guarded by
-> target-and-input identity.
-> The previous MSYS2 route is unsupported legacy code. See
-> [`docs/windows_build_strategy.md`](docs/windows_build_strategy.md) for evidence.
-
-### Interactive Windows build
-
-1. In WSL2, start `python -m ffmpeg_builder`. Open configuration (`c`) and
-   choose `9.0-windows` in the **FFmpeg version** input. The TUI saves
-   `ffmpeg_version: "9.0"` and `target_backend: linux-cross-mingw`, not the alias.
-   `8.1` and `9.0` select native builds. Windows supports only FFmpeg 9.0:
-   `8.1-windows` is not offered, and an 8.1 cross configuration is blocked
-   before component building.
-2. Use `t` to inspect required toolchains and `p` → `p` to prepare recommended
-   managed profiles (LLVM-MinGW, Rust with Windows target support and cargo-c).
-   When CUDA is requested, the configured SDK version selects the managed
-   NVCC host compiler, which is also recommended. No manual cargo-c PATH
-   setup is required.
-3. Use `b` to start the build or `r` to resume when **Previous Build** is shown.
-   Both actions run G7 and validate the current target identity before reusing
-   outputs. Previous Build shows the last recorded Windows build for this
-   variant, not a guarantee of compatibility. Use `w` before a clean build
-   to remove all of `workspace_90_windows` without deleting the native 9.0
-   workspace or the project toolchain store.
-4. With release creation enabled, the accepted bundle is written to
-   `workspace_90_windows/targets/linux-cross-mingw-<identity>/release/`.
-
-The TUI calls the same production cross route in-process as the headless
-`scripts/run_build.py` entry point. Preparation and final acceptance are
-transient messages; the dashboard uses existing component state and marks
-validated reuse as detail. The report separates WSL host tools from the Windows
-target: Windows OpenCL runtime comes from the Windows probe, while the target
-build interface is shown separately as prepared or not prepared. Windows
-completion lists the actual `.exe` outputs and never offers Linux installation.
-Native UI behavior is unchanged.
-
-**Manual TUI check:** select `9.0-windows`, check the Windows runtime and
-OpenCL interface labels and component roles, then resume a known matching
-workspace. Confirm preparation feedback, component reuse in the dashboard,
-final acceptance messages and `.exe` paths, with no Linux install prompt.
-This reuse still performs normal identity and runtime acceptance checks.
-
-```
-Windows host
-  → WSL2 Ubuntu build environment
-  → LLVM-MinGW/UCRT cross toolchain
-  → Windows FFmpeg target
-```
-
-**WSL-Mingw** is the user-facing name of this route; **`linux-cross-mingw`**
-is the internal backend identifier. The target is Windows/UCRT built through
-LLVM-MinGW from a WSL2 Ubuntu environment.
-
-### Build on the host, for the host
-
-The physical Windows machine running WSL is the target. When `native_build`
-is enabled, target C/C++ uses exactly `-march=native -mtune=native`; the
-selected LLVM-MinGW compiler interprets `native`. G1 CPU data remains part of
-physical-target identity and runtime evidence, not a compiler feature
-whitelist. The project does not expand or independently validate the
-compiler's selected ISA features. These binaries are not claimed portable to
-unrelated Windows CPUs, and a relevant target, compiler, or policy change may
-require rebuilding.
-
-### Required WSL environment
-
-The WSL2 Ubuntu environment must provide the host tools needed by the
-configured components, such as a C/C++ build environment, CMake, Meson, Ninja,
-pkg-config, NASM/Yasm, Perl and Python, plus any other host tool a configured
-component requires. LLVM-MinGW, Rust and its Windows target standard library
-are provisioned by the toolchain store. Component sources are obtained from
-the local source mirror or, when enabled, verified network downloads.
-
-### CUDA SDK prerequisite
-
-For configurations that need CUDA/NVCC, a CUDA SDK must already be present in
-WSL (current environment example: `/opt/cuda-12.4`).
-
-- The build system does not install, archive or manage the CUDA SDK; it only
-  locates and checks it.
-- Do not install a Linux NVIDIA driver for this workflow. The Windows NVIDIA
-  driver provides the Windows CUDA runtime.
-- The CUDA host compiler (`-ccbin`) is selected by the build configuration
-  and toolchain; do not change the system default compiler for it.
-
-### Vulkan SDK prerequisite
-
-For configurations that need Vulkan build/shader tools, a Vulkan SDK must
-already be present in WSL (current environment example:
-`/opt/vulkan-sdk/1.4.363.1`, effective Linux SDK root
-`/opt/vulkan-sdk/1.4.363.1/x86_64`).
-
-- The build system does not install or manage the Vulkan SDK.
-- The Linux Vulkan SDK is build-host tooling only, not the Windows Vulkan
-  runtime. At run time the Windows Vulkan loader and vendor ICD are used.
-
-### Environment variables
-
-A lightweight setup is sufficient: `CUDA_HOME` and `CUDA_PATH` pointing to the
-CUDA SDK, `VULKAN_SDK` pointing to the Linux SDK root, and PATH additions for
-the selected SDK tool directories.
-
-Do **not** globally inject Linux SDK library, pkg-config or CMake paths into
-the Windows cross-build environment. In particular, sourcing the complete
-LunarG `setup-env.sh` globally sets Linux-native `LD_LIBRARY_PATH`,
-`PKG_CONFIG_PATH`, `CMAKE_PREFIX_PATH` and Vulkan layer paths; these must not
-reach Windows target dependency discovery.
-
-For `target_backend: linux-cross-mingw`, optional explicit SDK roots use
-`external_prerequisite_paths.cuda` and `.vulkan` in `build_config.yaml`.
-Without an override, CUDA resolves `CUDA_HOME` then `CUDA_PATH`, and Vulkan
-resolves `VULKAN_SDK`; an invalid explicit root fails rather than falling back
-to the environment or `PATH`. These are externally managed WSL host
-prerequisites, not project-managed Windows target libraries.
-
-The normal cross route and `python scripts/run_build.py --g4-final` require
-the previously accepted component wave states and manifests for the selected
-identity; they do not automatically build a fresh dependency stack. Cross
-`--dry-run` reports selection without building. See the strategy document for
-wave commands, acceptance and reuse details.
-
-### Windows runtime prerequisites
-
-GPU drivers and runtimes belong to Windows itself: the NVIDIA driver and CUDA
-driver runtime, the Windows Vulkan loader and vendor ICD, the Windows OpenCL
-dispatcher and vendor implementations, and the Windows UCRT/system runtime.
-`VSScript.dll` is external when using VapourSynth. G6 packages the required,
-hash-verified LLVM-MinGW `libc++.dll`, `libunwind.dll`, `libwinpthread-1.dll`
-and `libomp.dll`; the Windows system/UCRT, NVIDIA driver DLLs, Vulkan loader
-and vendor ICD, and OpenCL dispatcher/vendor ICD remain external. The
-accepted GPL/nonfree bundle is internal and not redistributable. Do not copy
-system or driver DLLs into the bundle.
-
-Architecture, gates and verified results: [`docs/windows_build_strategy.md`](docs/windows_build_strategy.md).
-Implementation notes: [`docs/DeveloperReadme.md`](docs/DeveloperReadme.md).
-
-## Linux (native)
-
-For Ubuntu/Debian/Fedora/Arch-style Linux hosts, use a local Python virtual environment and sync Git LFS archives.
-
-From a Linux shell:
-
-```bash
-# 1) System prerequisites (Debian/Ubuntu example)
-sudo apt update
-sudo apt install -y git git-lfs python3-venv python3-pip libgif-dev
-
-# 2) Clone repository + source archive mirror (Git LFS)
-git clone <repository-url> ffmpeg_builder
-cd ffmpeg_builder
-git lfs install --local
-git lfs pull
-git lfs checkout
-
-# 3) Create and activate Python virtual environment
-python3 -m venv .venv
-source .venv/bin/activate
-
-# 4) Install project in editable mode
-python -m pip install --upgrade pip setuptools wheel
-python -m pip install -e .
-
-# 5) Validate environment and run
-./scripts/check_python_env.sh
-python -m ffmpeg_builder
-```
-
-Notes:
-
-- `third_party/sources` archives are stored with Git LFS; without `git lfs pull`, builds fail later during extract/configure stages.
-- On distributions with externally managed system Python (PEP 668), always use `.venv` (do not install with global `pip`).
-
-## Windows WSL2 (Ubuntu)
-
-WSL2 is supported as a Linux backend (`linux-wsl2`). Setup is the same as native Linux, plus optional CUDA passthrough checks.
-
-From your WSL2 Ubuntu shell:
-
-```bash
-# 1) System prerequisites
-sudo apt update
-sudo apt install -y git git-lfs python3-venv python3-pip libgif-dev
-
-# 2) Clone repository + fetch LFS archives
-git clone <repository-url> ffmpeg_builder
-cd ffmpeg_builder
-git lfs install --local
-git lfs pull
-git lfs checkout
-
-# 3) Python environment
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip setuptools wheel
-python -m pip install -e .
-
-# 4) Validate and run
-./scripts/check_python_env.sh
-python -m ffmpeg_builder
-```
-
-WSL2 notes:
-
-- CUDA can work in WSL2 when NVIDIA drivers/toolkit are installed correctly; OpenCL is typically unavailable in WSL2.
-- If you use `/mnt/<drive>/...` paths for the repository, expect slower I/O than using the Linux filesystem (`~/...`).
-
-## macOS + MacPorts
-
-On macOS, use MacPorts for the build toolchain. **MacPorts clang is required** — the Apple-provided `/usr/bin/clang` shim does not support OpenMP and cannot be used for this project.
-
-From Terminal:
-
-```bash
-# 1) Install required MacPorts packages
-sudo port selfupdate
-sudo port install \
-  git git-lfs pkgconfig cmake meson ninja nasm yasm autoconf automake libtool gettext giflib \
-  clang-17 libomp \
-  python312 py312-pip py312-setuptools py312-wheel py312-rich py312-tqdm py312-yaml \
-  py312-requests
-
-# 2) Clone repository + fetch LFS archives
-git clone <repository-url> ffmpeg_builder
-cd ffmpeg_builder
-git lfs install --local
-git lfs pull
-git lfs checkout
-
-# 3) Create and activate Python environment
-python3.12 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip setuptools wheel
-python -m pip install -e .
-
-# 4) Configure the compiler in build_config.yaml
-#    Set macos.clang to the installed MacPorts clang version, e.g.:
-#      macos:
-#        clang: "macports-clang-17"
-
-# 5) Validate and run
-./scripts/check_python_env.sh
-python -m ffmpeg_builder
-```
-
-macOS notes:
-
-- **MacPorts clang is mandatory.** `openmp: true` (the default) requires a compiler with OpenMP support. MacPorts `clang-17` (or any other installed version) provides this; Apple's system clang does not. The builder will raise a clear error if no MacPorts clang is found when OpenMP is enabled.
-- **`macos.clang` must match an installed version.** The `build_config.yaml` entry `macports-clang-17` maps to the binary `clang-mp-17` installed by MacPorts. The start screen displays the configured version (not the highest detected one) so you can verify the correct compiler is selected before starting a build.
-- `third_party/sources` is Git LFS-backed; missing LFS pull/checkout leaves pointer files instead of source archives.
-- If multiple Python versions are installed via MacPorts, activate the matching venv explicitly (e.g. `python3.12 -m venv .venv`).
-- After modifying project source files, reinstall in the venv: `python -m pip install -e .`
-
-## Quick Start
-
-```bash
-# Clone the repository
-git clone <repository-url>
-cd ffmpeg_builder
-
-# Install Python dependencies
-pip install -e .
-
-# Check your environment
-./scripts/check_python_env.sh
-
-# Run the builder
-./ffmpeg_builder
-# or
-python -m ffmpeg_builder
-```
-
-## Usage
-
-## Builder Architecture
-
-The build engine is now split into a small set of focused modules instead of keeping all orchestration details in `builder.py`.
-
-### High-level flow
+# FFmpeg Builder 4.0.0
+
+FFmpeg Builder is an interactive and headless build system for FFmpeg 8.1
+(default) and 9.0. It supports native Linux, native Linux builds in WSL, and
+macOS. The supported Windows route is **WSL-Mingw**, using the internal
+`linux-cross-mingw` backend for FFmpeg 9.0. The former MSYS2 route is
+unsupported legacy code.
+
+The builder tracks component progress, provisions project-managed toolchains,
+and guards build/resume state against incompatible inputs. Sources are
+offline-first: Git LFS archives in `third_party/sources` are used before
+optional network downloads. See the [full guide](docs/README.md),
+[developer guide](docs/DeveloperReadme.md), and
+[changelog](docs/CHANGELOG.md).
+
+## Windows quick start: WSL-Mingw
 
 ```text
-python -m ffmpeg_builder
-  -> __main__.py
-  -> app.py (FFmpegBuilderApp)
-  -> builder.py (FFmpegBuilder)
-     -> build_steps.py
-     -> component_builders.py
-     -> release_bundle.py
-     -> executor.py / downloader.py / state.py / components.py / platform_detect.py
+Windows host → WSL2 Ubuntu → LLVM-MinGW/UCRT → Windows x86-64 FFmpeg
 ```
 
-### Module responsibilities
+WSL runs the build; the executables target Windows. The physical Windows
+machine running WSL supplies target hardware, drivers and runtime capability
+information. Builds are host-specific, not promised portable to unrelated
+machines. Material host or build changes can require a rebuild.
 
-| Module | Responsibility |
-|--------|----------------|
-| `builder.py` | Main orchestration entry point. Owns environment setup, system-component checks, download/extract flow, generic build-system dispatch, and coordination between helper modules. |
-| `build_types.py` | Shared builder exception types: `BuildError` and `SkipComponent`. |
-| `build_steps.py` | Shared command execution helpers for the common status -> execute -> check -> raise lifecycle used during configure/build/install steps. |
-| `component_builders.py` | Explicit registry for `custom_build_fn` dispatch. Keeps custom builder lookup centralized and avoids stringly `getattr()` dispatch. |
-| `release_bundle.py` | Release bundle creation plus recursive runtime dependency discovery and copying for portable `workspace/release/` output. |
+### Prerequisites
 
-### Why this split matters
+- WSL2 Ubuntu with Python 3.12 or newer, Git and Git LFS; a checkout with its
+  LFS source archives available.
+- Normal WSL host tools for the selected components, including a C/C++
+  build environment, make, CMake, Meson, Ninja, pkg-config, NASM/Yasm and
+  Perl. The project toolchain store provisions LLVM-MinGW, Rust with Windows
+  target support, cargo-c and any required managed compiler profiles.
+- For configured CUDA/NVCC work, an externally installed CUDA SDK in WSL and
+  its compatible host compiler. For configured Vulkan/libplacebo Vulkan,
+  the WSL Vulkan SDK's shader and SPIR-V tools are host prerequisites.
+  Configure optional SDK roots using `external_prerequisite_paths.cuda` and
+  `.vulkan`, or use `CUDA_HOME`/`CUDA_PATH` and `VULKAN_SDK`.
+- Windows supplies UCRT/system runtime, GPU drivers, NVIDIA driver/CUDA
+  runtime, Vulkan loader/vendor ICD and OpenCL dispatcher/vendor ICD as
+  applicable. Optional VapourSynth requires `VSScript.dll` on Windows.
 
-- keeps `FFmpegBuilder` as the public API used by `app.py`
-- makes builder exceptions reusable across modules without circular imports
-- centralizes custom component dispatch in one place
-- isolates release-bundle logic from the main build orchestration path
-- makes future extraction of large per-component custom build bodies lower-risk
+Do not use Linux SDK libraries as Windows target libraries or globally inject
+their pkg-config/CMake/library paths into target discovery. Target headers and
+import interfaces are project-managed. Lack of OpenCL in WSL does **not** mean
+Windows lacks OpenCL; a Linux OpenCL runtime is not required for this target.
 
-### Interactive Mode
+### Setup
+
+From the repository root in WSL, after installing the host prerequisites:
 
 ```bash
-python -m ffmpeg_builder
-```
-
-The application starts with a **System Report** screen showing:
-
-- Hardware information (CPU, cores, RAM, GPU)
-- Software information (OS, compiler, architecture)
-- Available build tools and their versions
-- Hardware acceleration status (CUDA, Vulkan, VAAPI, AMF, OpenCL)
-- Current build configuration
-
-From the main menu, type a letter key and press Enter:
-
-| Key | Action | Description |
-|-----|--------|-------------|
-| `b` | **Start new build** | Begin building all components from scratch (resets previous state) |
-| `r` | **Resume previous build** | Continue from the last interrupted build when state exists |
-| `c` | **Edit configuration** | Modify build settings interactively |
-| `w` | **Cleanup workspace** | Remove all build artifacts and state |
-| `i` | **Component info** | Show the current buildable component set and non-selected components |
-| `t` | **Toolchain plan** | Show per-component toolchain resolution with skip reasons |
-| `p` | **Toolchain store** | Review system-analysis recommendations, acquire/remove profiles |
-| `h` | **Help** | Show the full key reference for all screens (start, info, store, error prompt, dashboard) |
-| `q` | **Exit** | Exit the application |
-
-During a build, the live dashboard shows a compact header line (`FFmpeg Builder X.Y - Building | Elapsed: HH:MM:SS`), a per-component table with `n/total`, name, a 10-segment progress bar, percentage, status (`pending`/`system`/`downloading`/`config`/`build`/`install`/`complete`/`fail`/`skip`), and a Detail column showing the running command (e.g. `make -j40`) or live download progress (e.g. `12.3/45.7 MB (27%)`). The component table occupies a fixed-height area and scrolls upward as new rows appear, so the messages panel below it stays anchored at the bottom with a fixed size (8 lines of content). The viewport follows the active component in build order, keeping the progression readable while the current phase remains visible. Rows appear as downloads are queued and builds start (not pre-populated). The layout automatically adapts to the terminal height. All status colors follow the same legend: complete green, build magenta, config yellow, downloading/system cyan, install blue, fail red, skip yellow dim, pending dim.
-
-On failure, type `r` to retry, `s` to skip, `a` to abort, or `l` to view the full log when available.
-
-On resume, changed CUDA inputs invalidate completed libvmaf and FFmpeg; a
-change in selected nv-codec headers also invalidates nv-codec. When
-Vulkan-Headers is selected, missing or changed header/registry provenance
-invalidates Vulkan-Headers, libplacebo, and FFmpeg. Unaffected completed
-components can be reused; there is no need to reset the entire workspace for
-these changes.
-
-### Configuration
-
-Build configuration is stored in `build_config.yaml`:
-
-```yaml
-ffmpeg_version: "8.1"
-gpl_enabled: false
-make_release: false
-native_build: false
-full_static: false
-openmp: true
-enable_libvmaf: true
-enable_libvmaf_cuda: true
-cuda_build_mode: auto
-cuda_compute_capability: null  # auto-detect; or set e.g. "70"
-allow_nonfree_cuda: false
-enable_libplacebo_vulkan: false
-enable_hardware_acceleration: true
-target_backend: native
-# Optional SDK roots (vulkan is used by WSL-Mingw preparation):
-# target_backend: linux-cross-mingw
-# external_prerequisite_paths:
-#   cuda: /opt/cuda-12.4
-#   vulkan: /opt/vulkan-sdk/1.4.363.1
-disable_lv2: false
-num_jobs: "auto"
-make_timeout_seconds: 0
-install_timeout_seconds: 0
-async_downloads: true
-download_workers: 4
-source_archives_dir: "third_party/sources"
-allow_network_downloads: false
-
-macos:
-  clang: "macports-clang-17"
-  c_standard: "gnu11"
-  cxx_standard: "c++17"
-
-```
-
-Selecting `linux-cross-mingw` in the headless workflow builds the selected
-Windows dependencies automatically before FFmpeg, runtime acceptance and
-packaging. Historical G4 wave commands are not prerequisites. Legacy MSYS2
-settings are not used by this backend; `windows.target_override` and
-`windows.probe_timeout_seconds` configure physical-target probing.
-
-Headless profiles can be kept separate from the local user configuration:
-
-```bash
-# Project-managed tools (LLVM-MinGW, Rust + target std, cargo-c 0.10.25)
-# come from the Toolchain Store; no PATH preparation is needed:
+git lfs pull
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e .
+./scripts/check_python_env.sh
+python scripts/prepare_toolchains.py --backend linux-cross-mingw --ffmpeg-version 9.0 --dry-run
 python scripts/prepare_toolchains.py --backend linux-cross-mingw --ffmpeg-version 9.0
-python scripts/run_build.py --config /path/to/profile.yaml --workspace workspace_windows
-# Identical command validates and reuses matching accepted component outputs.
-python scripts/run_build.py --config /path/to/profile.yaml --workspace workspace_windows
-```
-
-For a software-only Windows profile, use FFmpeg 9.0, `gpl_enabled: true`,
-`make_release: true`, `native_build: false` and
-`enable_hardware_acceleration: false`. The latter disables GPU components
-and FFmpeg hardware APIs, normalizes CUDA/Vulkan settings off, and preserves
-the normal software codec/library policy, software libvmaf and OpenMP.
-This is the G7 **BASE** profile, not the project's literal defaults.
-**PREFERRED** instead preserves the maintainer's full host-tuned reference
-configuration with only `target_backend` changed to `linux-cross-mingw`.
-Both GPL/nonfree-capable bundles remain internal and nonredistributable.
-
-The normal workflow records component/output hashes, FFmpeg acceptance,
-representative runtime results and G6-style deterministic packaging/relocation
-under its identity workspace. `--no-release` skips packaging, not runtime
-acceptance. A clean acceptance removes only that profile's generated workspace;
-keep toolchains, caches and external SDKs. Both entry points now default to
-`workspace_90_windows` for Windows builds. Existing workspaces are not moved;
-to reuse the old CLI layout explicitly, pass `--workspace workspace_90`.
-
-Supported `ffmpeg_version` values are `8.1` (the default) and `9.0`. Each version
-uses a separately verified source archive checksum. Add its archive to the local
-source mirror or enable verified network downloads before building it.
-Existing configurations remain on `8.1`; set `ffmpeg_version: "9.0"` to opt in
-to the FFmpeg 9.0 source profile.
-
-By default, builds are **offline-first**: every archive must exist in `third_party/sources`.
-To allow fetching missing archives from the network, set `allow_network_downloads: true`.
-For archive integrity validation, components in `components.yaml` may define optional
-`sha256` checksums; when present, downloads are verified before extraction.
-
-### Command Line
-
-```bash
-# Launch interactive UI (no CLI arguments supported)
 python -m ffmpeg_builder
-
-# Headless: provision recommended toolchains, then build
-python scripts/prepare_toolchains.py --dry-run   # show the acquisition plan
-python scripts/prepare_toolchains.py             # acquire recommended profiles
-python scripts/run_build.py --dry-run            # show components + resolved CC
-python scripts/run_build.py                      # full build; --resume to continue
 ```
 
-## Components
+Toolchain provisioning uses the local archive mirror unless network downloads
+are explicitly enabled. The TUI can also prepare recommended profiles via
+the toolchain store.
 
-### Build Tools (system or built from source)
+### TUI workflow
 
-giflib, pkg-config, yasm, nasm, zlib, m4, autoconf, automake, libtool, cmake, meson, ninja
+1. In **System Report**, choose `c` and select `9.0-windows` at **FFmpeg
+   version**. This saves `ffmpeg_version: "9.0"` and
+   `target_backend: linux-cross-mingw`. The `8.1` and `9.0` choices are
+   native builds; FFmpeg 8.1 is not supported by this Windows backend.
+2. Inspect Windows target, NVIDIA/CUDA, Vulkan and OpenCL runtime results in
+   the system report. OpenCL target-interface readiness is shown separately
+   from WSL diagnostics; SDK host tools are validated during preparation.
+   Use `i` for component information, `t` for the toolchain plan, and
+   `p` then `p` to prepare recommended toolchains.
+3. Use `b` to start the Windows build or `r` to resume when **Previous Build**
+   is shown. Both validate target and input identity before reusing outputs;
+   previous history alone does not guarantee reuse. The dashboard shows
+   component statuses, progress, command details and preparation/acceptance
+   messages. The final report lists Windows executables and errors.
+4. Enable release creation in configuration to produce the bundle described
+   below. The default Windows workspace is separate from native 9.0.
 
-### Crypto
+The primary host-optimized Windows profile requires `native_build: true` and
+`openmp: true`. With native tuning, target C/C++ uses `-march=native
+-mtune=native`; OpenMP is a required configured capability when enabled.
+Compatibility configurations can disable these options, but their success
+does not replace primary-profile acceptance. The compiler interprets `native`;
+the project does not independently reconstruct its selected ISA features.
 
-| GPL | Non-GPL |
-|-----|---------|
-| gettext, openssl | gmp, nettle, gnutls |
+### Headless workflow
 
-### Video Codecs
-
-dav1d, svtav1, rav1e, x264 (GPL), x265 (GPL), libvpx, xvidcore (GPL), vid.stab (GPL), aom, zimg
-
-### Audio Codecs
-
-lv2 stack (lv2, serd, pcre, zix, sord, sratom, lilv), opencore, lame, opus, libogg, libvorbis, libtheora, fdk_aac (GPL), soxr
-
-### Image Codecs
-
-libtiff, libpng, lcms2, libjxl, libwebp
-
-### Other Libraries
-
-libsdl, freetype, vapoursynth, libvmaf, srt (GPL), libzmq, giflib
-
-### Hardware Acceleration
-
-vulkan-headers, glslang, fast-float, libplacebo, nv-codec, amf, opencl-headers, opencl-icd-loader, onevpl. Eligibility depends on backend, configuration and target capabilities: the accepted Windows target uses nv-codec, Vulkan/libplacebo and OpenCL interfaces; the OpenCL loader is external on Windows. AMF and oneVPL were not selected on that target.
-
-### Target
-
-FFmpeg 8.1 (default) or 9.0, selected with `ffmpeg_version`
-
-## Hardware Acceleration
-
-The builder automatically detects available hardware acceleration and configures FFmpeg accordingly:
-
-| Technology | Platform | Detection Method |
-|------------|----------|------------------|
-| **CUDA** | Linux | nvcc in PATH, then platform-specific default install paths |
-| **Vulkan** | Linux/macOS | pkg-config, headers, vulkaninfo |
-| **libplacebo** | Linux/macOS/WSL2 | always built; `enable_libplacebo_vulkan` controls Vulkan GPU backend; disabled on `full_static` Linux |
-| **VAAPI** | Linux | pkg-config libva |
-| **Intel QSV** | Linux | vainfo or PCI Intel GPU (requires VAAPI, disabled in WSL2) |
-| **AMF** | Linux | AMD GPU detected via `lspci` or DRM sysfs; AMF headers are downloaded from GPUOpen |
-| **OpenCL** | Linux/macOS | Runtime+dev readiness model: pkg-config (`OpenCL`/`opencl`) or headers (including `/opt/rocm` and `/usr/local/cuda`) plus ICD loader and vendor ICD files; macOS uses `OpenCL.framework` |
-| **VideoToolbox** | macOS | Always available |
-
-The table describes native detection. For `linux-cross-mingw`, capabilities
-come from physical Windows target evidence, not WSL hardware detection.
-The accepted configuration includes CUDA/NVENC/NVDEC/CUVID, Vulkan/libplacebo,
-OpenCL and CUDA libvmaf; see `docs/windows_build_strategy.md`.
-
-Build backends are explicit: `linux-native` and `linux-wsl2` are distinct modes with different component eligibility rules (`linux-wsl2` builds Linux binaries for WSL itself, not Windows binaries).
-
-### CUDA Notes
-
-- CUDA kernel compilation requires a CUDA Toolkit; NVENC/NVDEC can also be detected through the installed NVIDIA driver without NVCC.
-- Native Linux builds in WSL2 cannot rely on OpenCL through the paravirtualized NVIDIA driver; cross builds use the physical Windows OpenCL runtime instead.
-- NVENC/NVDEC use the selected nv-codec headers independently of NVCC. CUDA kernels use `--enable-cuda-nvcc` only with a verified profile and nonfree permission; unverified CUDA LLVM is disabled.
-- On `linux-native` or `linux-wsl2`, `enable_libvmaf_cuda: true` enables the CUDA path when the shared CUDA profile passes its probes. The Windows cross path uses its separately validated host/target CUDA contract.
-- For `libvmaf` CUDA builds with `openmp: true`, the builder forwards OpenMP to NVCC host compilation via `NVCC_PREPEND_FLAGS=-Xcompiler=-fopenmp` and removes raw `-fopenmp` from inherited compile/link flags to avoid `nvcc fatal: Unknown option '-fopenmp'`
-- Compute capability priority is config → `CUDA_COMPUTE_CAPABILITY` → `nvidia-smi` detection (minimum across detected GPUs). If none is available, `auto` disables CUDA compilation and `required` fails.
-- FFmpeg receives the selected NVCC, host compiler, compatibility flags, and `compute_XX`/`sm_XX` architecture. The chosen Toolkit supplies include/lib paths and libvmaf's `bin2c`.
-- When neither CUDA nor the NVENC driver API is detected, `--disable-ffnvcodec` is added.
-
-### Vulkan Notes
-
-- Requires Vulkan SDK or at minimum vulkan-headers and loader
-- The builder installs Vulkan-Headers with the matching `share/vulkan/registry/vk.xml` and builds glslang when Vulkan is available. The Vulkan loader remains external.
-- libplacebo uses the verified workspace headers and registry together, even when a different `VULKAN_SDK` is active. A missing or changed pair is detected on resume when Vulkan-Headers is selected.
-- Adds `--enable-vulkan` to FFmpeg configure. FFmpeg 8.1 also receives
-  `--enable-libglslang`; FFmpeg 9.0 omits that removed configure option while retaining
-  glslang as a libplacebo dependency
-
-### Checking built features
-
-For a native CUDA-enabled build with libplacebo Vulkan enabled, inspect the installed
-binary and configure logs (replace `workspace_81` with `workspace_90` for
-FFmpeg 9.0):
+After selecting `9.0-windows` in the TUI, the saved `build_config.yaml` can
+also drive the normal headless route:
 
 ```bash
-workspace_81/bin/ffmpeg -hide_banner -filters | grep -E 'scale_cuda|libvmaf_cuda|libplacebo'
-workspace_81/bin/ffmpeg -hide_banner -encoders | grep h264_nvenc
-grep -F -- '-Denable_cuda=true' workspace_81/logs/libvmaf_configure.log
-grep -F -- '-Dvulkan-registry=' workspace_81/logs/libplacebo_configure.log
+python scripts/run_build.py --dry-run
+python scripts/run_build.py
+python scripts/run_build.py --resume
 ```
 
-These checks confirm build configuration and feature presence, not successful
-execution on a particular GPU or driver.
-
-### libplacebo Notes
-
-- GPU-accelerated video/image rendering and processing library (Vulkan backend)
-- **Always built** on all platforms (Linux, macOS, WSL2) — no opt-in required
-- `enable_libplacebo_vulkan: true` in `build_config.yaml` enables Vulkan GPU acceleration inside libplacebo; software features (tone mapping, colour space conversion, scaling) are always available regardless
-- Disabled when `full_static: true` on Linux (system `libvulkan.so` cannot be bundled statically); on macOS `libvulkan.dylib` is linked normally
-- On macOS with Vulkan enabled, `LIBRARY_PATH` and `PKG_CONFIG_PATH` are extended with LunarG SDK paths (`/usr/local/lib`, `/usr/local/lib/pkgconfig`)
-- Enables FFmpeg's `libplacebo` filter (`N->V`) only when `enable_libplacebo_vulkan: true`; a software-only libplacebo build remains available for other consumers
-- Built with: `-Dopengl=disabled -Dd3d11=disabled -Dshaderc=disabled -Dlibdovi=disabled -Dlcms=disabled`
-- Requires Python `jinja2` for GLSL preprocessing; installed with project dependencies (`pip install -e .`) or via distro package `python3-jinja2`
-- Depends on `fast-float` v8.2.10 headers (GitHub release tarballs omit this git submodule; the builder provides it as a separate `HEADERS_ONLY` component)
-- Version: 7.360.1
-
-### Intel QSV Notes
-
-- Linux: Intel QSV uses VAAPI backend (`libva`) and is disabled in WSL2.
-- Adds `--enable-libvpl` when QSV is available.
-
-## Build Output
-
-After a successful native build, version-specific binaries are located in:
-
-```
-workspace_<version>/bin/ffmpeg      # e.g., workspace_81/bin/ffmpeg or workspace_90/bin/ffmpeg
-workspace_<version>/bin/ffprobe
-workspace_<version>/bin/ffplay
-```
-
-For the accepted Windows cross build, source binaries are at
-`workspace_90_windows/targets/linux-cross-mingw-<identity>/bin/ffmpeg.exe` and
-`ffprobe.exe`; target headers, libraries and metadata are in that identity's
-`prefix/`. The G6 production bundle is in that identity's `release/`, with a
-runtime-ownership `manifest.json`; `g7-package-acceptance.json` records repeated
-packaging and relocated runtime acceptance. The bundle is target-specific and
-not redistributable.
-
-For native builds, if `make_release: true`, an additional release folder is generated:
-
-```
-workspace_<version>/release/
-```
-
-The release folder contains:
-
-- `ffmpeg`, `ffprobe`, `ffplay`
-- recursively collected non-system runtime libraries in the same `release` directory
-- `manifest.json` with included and missing dependencies
-
-Native build logs are stored in:
-
-```
-workspace_<version>/logs/<component>_<step>.log
-```
-
-For Windows cross builds, logs are under the identity-specific target directory.
-
-## Verified Environments
-
-The following environments have been verified to complete a full FFmpeg build:
-
-| Date | OS | Environment | Configuration | Result |
-|------|------|-------------|---------------|--------|
-| 2026-11-12 | Ubuntu 26.04.1 LTS | x86_64, CUDA 12.4.99, GCC 12.5 NVCC host, TITAN V (`compute_70`) | Native builds with CUDA and libplacebo Vulkan | FFmpeg 8.1 and 9.0 completed (44 built and 12 system components each). Both binaries list `scale_cuda`, `libvmaf_cuda`, `libplacebo`, and `h264_nvenc`; feature listing alone does not verify runtime execution. |
-| 2026-08-10 | Fedora Linux 44 | x86_64, GCC 16, Python 3.14 (system), full HW acceleration stack | GPL + non-free, native build, openmp, full HW accel, `make_release: true` | Successful full build of FFmpeg 8.1 (`58/58` components) in **20.5 minutes**. Fresh Python venv, fresh config, full HW acceleration stack (CUDA, Vulkan, OpenCL, AMF, libplacebo). |
-| 2026-08-06 | Fedora Linux 44 (Workstation Edition) | x86_64, Intel Xeon E5-2697A v4 @ 2.60 GHz (dual socket, 128 threads), GCC 16, 188 GiB RAM | GPL + non-free, native build, openmp, libplacebo, AMF, OpenCL, `make_release: true` | Successful full build of FFmpeg 8.1 (`58/58` components) in **~20 minutes** (new record; previous best ~24 min). All video/audio codecs, openssl, libsrt, libzmq, vulkan+glslang+libplacebo, amf, opencl verified. Static libx265.a multi-bitdepth merge confirmed. 28 lib-based encoders + 20 lib-based decoders enabled. |
-| 2026-08-02 | macOS 15.5 (Sequoia) | x86_64, Intel Core i7-6950X, AMD Radeon RX Vega 64 8 GB, LunarG Vulkan SDK 1.4.350.1, MacPorts clang-17 | GPL + non-free, native build, openmp, **libplacebo + Vulkan** (`enable_libplacebo_vulkan: true`) | Successful full build of FFmpeg 8.1 (`56/56` components). HW accels: `videotoolbox`, `opencl`, `vulkan`. libplacebo 7.360.1 with Vulkan GPU backend compiled in. VideoToolbox encode/decode, OpenCL filters, Vulkan filters, libplacebo filter all confirmed present. |
-| 2026-08-01 | macOS 15.5 (Sequoia) | x86_64, Intel Core i7-6950X, AMD Radeon RX Vega 64, LunarG Vulkan SDK 1.4.350.1, MacPorts clang-17 | GPL + non-free, native build, openmp, `make_release: false` | Successful full build of FFmpeg 8.1 (`52/52` buildable components without libplacebo/Vulkan). HW accels confirmed: `videotoolbox`, `opencl`, `vulkan`. |
-| 2026-07-19 | Ubuntu 24.04 (WSL2) | x86_64, NVIDIA CUDA | GPL + non-free, native build | Successful build of FFmpeg 8.1 with all configured components enabled |
-| 2026-07-19 | Fedora Linux 44 | x86_64, dual AMD Instinct MI50, dual Intel Xeon Broadwell, GCC 16.1.1, glibc 2.43 | GPL + non-free, native build | Successful build of FFmpeg 8.1 (45/57 components; 12 LV2/OpenCL/Vulkan/AMF/VapourSynth items not built because the corresponding runtime libraries are not present on this system) |
-
-Build configuration for the verified run:
-
-```yaml
-ffmpeg_version: "8.1"
-gpl_enabled: true
-native_build: true
-full_static: false
-make_release: true
-openmp: true
-enable_libvmaf: true
-enable_libvmaf_cuda: true
-enable_libplacebo_vulkan: false
-disable_lv2: false
-num_jobs: auto
-```
-
-Verified FFmpeg capabilities included:
-
-- CUDA/NVENC/NVDEC: verified `--enable-cuda-nvcc` when permitted; `--enable-cuvid`, `--enable-nvdec`, `--enable-nvenc`, `--enable-ffnvcodec` independently.
-- Video codecs: `libx264`, `libx265`, `libvpx`, `libaom`, `libsvtav1`, `libdav1d`, `libxvid`, `libwebp`, `libjxl`, `libzimg`
-- Audio codecs: `libmp3lame`, `libopus`, `libvorbis`, `libtheora`, `libfdk-aac`, `libsoxr`, `libopencore_amrnb`, `libopencore_amrwb`
-- Streaming/protocols: `openssl`, `libsrt`, `libzmq`
-- GPU processing: `vulkan`, `libglslang`, `libplacebo` (filter `libplacebo N->V`)
-- Other: `libvmaf`, `libvidstab`, `libfreetype`, `vapoursynth`, `lv2`
-
-## Project Structure
-
-```
-ffmpeg_builder/
-    __main__.py              Entry point
-    app.py                   Main application class, screen orchestration
-    build_types.py           Shared builder exceptions
-    build_steps.py           Shared configure/build/install step helpers
-    config.py                YAML configuration management
-    state.py                 JSON build state management
-    system_report.py         Environment report generation
-    components.py            Component registry (~60 components)
-    toolchain_registry.py    Toolchain profile registry + recommendations
-    toolchain_store.py       Persistent toolchain store (acquire/verify/env)
-    toolchain_builders.py    Portable source-build recipes + verification
-    ffmpeg_policy.py         FFmpeg version policy (shared system analysis)
-    builder.py               Build orchestration entry point
-    component_builders.py    Explicit custom builder dispatch registry
-    platform_detect.py       OS, architecture, tools, HW acceleration detection
-    executor.py              Subprocess wrapper with logging
-    downloader.py            File downloads with progress (requests + tqdm)
-    release_bundle.py        Release bundle packaging and runtime dependency collection
-    toolchains.yaml          Pinned toolchain profiles + platform/CUDA tables
-    ui/
-        screens.py           TUI screens: system report, config, info, store, final
-        dashboard.py         Live build dashboard (header / table / messages)
-        error_handler.py     Interactive error handling (retry/skip/abort)
-    profiles/
-        default.yaml         Default build profile
-scripts/
-    check_python_env.sh      Environment and dependency checker
-    prepare_toolchains.py    Headless toolchain provisioning (TUI store twin)
-    run_build.py             Headless FFmpeg build driver (TUI build twin)
-```
-
-## Troubleshooting
-
-### Build fails at a specific component
-
-1. Check the log file: `workspace/logs/<component>_<step>.log`
-2. Use the interactive error handler to retry or skip
-3. Resume the build after fixing the issue
-
-### OpenSSL fails on GCC 15/16
-
-If OpenSSL fails with errors in `crypto/bn/asm/x86_64-gcc.c` (e.g. `expected ')' before ':' token`), the OpenSSL `./Configure` script has forced `-std=c11`. The builder now patches the generated `configdata.pm` and regenerates the `Makefile` with `-std=gnu11` automatically.
-
-### x265 fails with "uint8_t does not name a type" in `json11.cpp`
-
-On GCC 15/16 with the bundled libstdc++, `<limits>` no longer transitively pulls in `<cstdint>`, so `uint8_t` is undeclared in `source/dynamicHDR10/json11/json11.cpp`. The builder now injects `#include <cstdint>` after `#include <limits>` before configuring the build, matching the original `build-ffmpeg` script.
-
-### SVT-AV1 fails with "unknown type name 'locale_t' / 'clockid_t'"
-
-SVT-AV1 4.0.1 includes `<sched.h>`/`<pthread.h>` from a project header (`Source/Lib/Codec/svt_threads.h`) and defines `_GNU_SOURCE` there. On modern glibc this is ignored when compiled with `-std=c11` because GCC defines `__STRICT_ANSI__`. The builder applies a Linux `platform_overrides` entry that appends `-std=gnu11` to svtav1 CFLAGS, the same workaround already used for `gettext`.
-
-### FFmpeg configure fails with "libplacebo >= 5.229.0 not found using pkg-config"
-
-If `libplacebo` was already built, FFmpeg can still fail this check when `libplacebo.pc` contains absolute static archive paths or stale dependency ordering from a previous run. The builder now auto-normalizes `libplacebo.pc` before FFmpeg configure (including resume runs), rewrites absolute archives to `-l...` flags, and enforces SPIRV static dependency order.
-
-### `nvcc` rejects the host compiler (Fedora 44+ / GCC ≥ 15 + CUDA 12.2)
-
-CUDA toolkits pin a maximum supported host-compiler major version (CUDA 12.2 → GCC ≤ 12). The builder probes an explicit `CUDA_NVCC_CCBIN`, or a mapped store compiler followed by system GCC, and forwards the verified result via `-ccbin`. Deploy the mapped profile with `python scripts/prepare_toolchains.py` if needed.
-
-### gettext fails with "expected identifier or '(' before '_Generic'" (GCC ≥ 15)
-
-gettext's bundled gnulib snapshot's ISO-C23 `wmemchr`/`bsearch` compatibility shims collide with glibc ≥ 2.41's own `_Generic`-based redeclarations of the same functions. The builder now applies patches that undefine the colliding macro before gnulib's declaration, across all vendored gnulib copies gettext ships.
-
-### OpenSSL `./Configure` fails with Perl module errors (`FindBin`, `IPC::Cmd`, `Time::Piece`)
-
-A minimal Perl install may be missing these modules that OpenSSL's `Configure` script requires. The builder ships clean-room shim implementations and injects them via `PERL5LIB` automatically on modern GCC toolchains.
-
-### rav1e / libtiff fail with BSD type or POSIX declaration errors (`u_int`, `fseeko`)
-
-The project's default `-std=c11` CFLAGS leave `__USE_MISC` unset under glibc, breaking BSD (`u_int`/`u_char`) and some POSIX (`fseeko`/`ftello`) declarations used by rav1e's `cargo-c` dependencies and libtiff's own tools. The builder rewrites `-std=c11` → `-std=gnu11` for these components automatically on modern GCC toolchains.
-
-### libvmaf CUDA path fails with missing `ffnvcodec` headers or `CudaFunctions has no member`
-
-For native builds, the builder keeps libvmaf's CUDA driver headers separate from driver-compatible NVENC headers when needed. The Windows cross path uses its verified target inputs and fails rather than silently dropping requested CUDA functionality. See `docs/DeveloperReadme.md` → "libvmaf + nv-codec-headers CUDA compatibility" for details.
-
-### (Resolved) libvmaf uncontrolled memory growth on GCC 15/16
-
-A `libvmaf` binary built with GCC 16 (and, provisionally, GCC 15) previously exhibited uncontrolled memory growth at runtime; GCC 12/13 (Linux) and Clang 17 (macOS) builds of the same `libvmaf` source were unaffected. Root cause: an upstream `libvmaf` bug, not a GCC-16-specific defect — `libvmaf`'s internal thread pool (`libvmaf/src/thread_pool.c`) had no queue-depth cap, so decoded frames could queue up unboundedly faster than feature-extractor worker threads drained them; each queued job pins full decoded picture buffers. This was fixed upstream (Netflix/vmaf commit `8fc71e30`, "fix thread pool queue depth to restore backpressure") after the `v3.2.0` tag, with no tagged release containing it yet. This project now vendors `libvmaf` built directly from that commit (`third_party/sources/vmaf-3.2.0-8fc71e30.tar.gz`, `components.yaml`'s `libvmaf` entry) instead of the `v3.2.0`/`v3.0.0` release tarballs. Verified: real end-to-end VMAF runs (`ffmpeg`/`libvmaf` filter, 4K source, GCC 16) now hold flat, bounded memory (RSS plateaus rather than growing) for the full duration of a run that previously grew ~1.2 GB/s until OOM. See `docs/DeveloperReadme.md` → "Known issue: libvmaf uncontrolled memory growth on GCC 16" for the full investigation and fix writeup.
-
-### `opencl-icd-loader` build fails to compile
-
-Two independent causes on modern GCC toolchains: its bundled test suite always builds (even when not requested) and fails without GL/EGL headers, and the CUDA SDK's own bundled `CL/cl.h` can shadow this project's freshly built OpenCL headers. Both are fixed automatically (disabling the test target and excluding the CUDA include path from this component's build only).
-
-### CUDA not detected
-
-- Ensure CUDA toolkit is installed (not just the driver)
-- Check that `nvcc` is in PATH or at `/usr/local/cuda/bin/nvcc`
-- For native Linux in WSL2, the NVIDIA paravirtualized driver does not provide OpenCL; the cross backend probes Windows instead.
-
-### OpenCL not detected
-
-- Install development packages: `sudo apt install opencl-headers ocl-icd-dev`
-- Ensure vendor ICD exists: `ls /etc/OpenCL/vendors/*.icd`
-- ROCm installs are supported from non-standard paths (for example `/opt/rocm/include/CL/cl.h`, `/opt/rocm/lib*/libOpenCL.so*`)
-- CUDA SDK installs are also scanned for OpenCL headers (for example `/usr/local/cuda/include/CL/cl.h`)
-- For native Linux in WSL2, OpenCL is not available through the NVIDIA paravirtualized driver; Windows cross builds use Windows OpenCL evidence.
-- On native Linux with NVIDIA: `sudo apt install nvidia-opencl-icd-<driver-version>`
-
-### Missing Python dependencies
+Alternatively, supply an existing YAML profile containing
+`ffmpeg_version: "9.0"` and `target_backend: linux-cross-mingw`:
 
 ```bash
-./scripts/check_python_env.sh    # Check what's missing
-pip install -e .                  # Install all dependencies
+python scripts/run_build.py --config /path/to/profile.yaml --workspace workspace_windows --dry-run
+python scripts/run_build.py --config /path/to/profile.yaml --workspace workspace_windows
+python scripts/run_build.py --config /path/to/profile.yaml --workspace workspace_windows --resume
 ```
 
-## License
+Set `make_release: true` in the chosen configuration for a release directory.
+The normal route builds the selected dependency graph automatically; separate
+engineering acceptance waves are not required. Dry-run performs target
+preparation and reports selection, but does not build components.
 
-MIT
+### Output and runtime
+
+With the default Windows workspace, `<target>` below is
+`workspace_90_windows/targets/linux-cross-mingw-<identity>`; a custom
+`--workspace` replaces `workspace_90_windows`.
+
+| Path | Contents |
+|---|---|
+| `<target>/bin/ffmpeg.exe`, `<target>/bin/ffprobe.exe` | Built Windows binaries |
+| `<target>/release/` | Bundle and `manifest.json`, when release creation is enabled |
+| `<target>/logs/<component>_<step>.log` | Component logs |
+| `<target>/build_state.json` | Identity-specific progress and resume state |
+| `<target>/prefix/` | Windows target headers, libraries and metadata |
+
+The accepted Windows production bundle contains `ffmpeg.exe`, `ffprobe.exe`
+and the verified LLVM-MinGW `libc++.dll`, `libomp.dll`, `libunwind.dll` and
+`libwinpthread-1.dll`; it does not include `ffplay.exe`. Windows system/UCRT,
+GPU-driver and Vulkan/OpenCL runtimes remain external. The accepted
+GPL/nonfree configuration is internal and **not redistributable**.
+Clean Linux/native FFmpeg 8.1 and 9.0 builds and a clean `9.0-windows` build
+have passed through the normal TUI; the Windows build used production
+`linux-cross-mingw` orchestration. The normal CLI production workflow,
+identity-checked reuse, runtime acceptance, packaging and relocation are also
+accepted. On the recorded Windows target, CUDA/NVENC/NVDEC/CUVID, CUDA filters,
+CUDA libvmaf, Vulkan/libplacebo and OpenCL have consumer-driven runtime
+evidence. Absent, unsupported or out-of-scope hardware is classified under
+the established policy and is not by itself a release blocker. Neural/DNN
+support is planned, not part of 4.0. See the
+[Windows strategy](docs/windows_build_strategy.md) for scope and evidence.
+
+## Native Linux, WSL/Linux and macOS
+
+Create a Python 3.12+ virtual environment, install with
+`python -m pip install -e .`, run `./scripts/check_python_env.sh`, and launch
+`python -m ffmpeg_builder`. Native Linux and macOS support FFmpeg 8.1 and 9.0;
+native WSL builds produce Linux binaries, not Windows executables. The
+[full guide](docs/README.md) covers platform tools, configuration and
+toolchain provisioning. Native output defaults to `workspace_81/` or
+`workspace_90/`.
+
+Intel oneAPI/ICX production work is future work and is not part of 4.0.0
+acceptance. The project source is MIT licensed; FFmpeg and each selected
+dependency have their own licensing terms.

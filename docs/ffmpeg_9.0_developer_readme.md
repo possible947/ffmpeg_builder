@@ -1,7 +1,8 @@
 # FFmpeg 9.0 Integration — Developer Readme
 
 This is the historical FFmpeg 9.0 integration plan and its phase-era baseline.
-For current results, including G4 Windows acceptance, see
+For current results, including G1–G6 and G7 CLI Windows acceptance and the
+TUI production workflow, see
 [`windows_build_strategy.md`](windows_build_strategy.md) and
 [`DeveloperReadme.md`](DeveloperReadme.md).
 
@@ -11,7 +12,7 @@ Add **FFmpeg 9.0** build support to `ffmpeg_builder` while preserving FFmpeg 8.1
 
 ---
 
-## 2) Current repository baseline (what exists today)
+## 2) Historical repository baseline (at the start of this plan)
 
 The current project is centered on FFmpeg 8.1:
 
@@ -264,7 +265,7 @@ Notes for the version-refresh batches (Phase B):
 2. User-facing docs identify `8.1` as the default and `9.0` as an opt-in selection, including FFmpeg 9.0's removed glslang configure flag.
 3. Migration guidance is recorded in the repository changelog: existing configurations retain `8.1`; users opt into 9.0 with `ffmpeg_version: "9.0"`.
 
-## Phase D — Validation (in progress)
+## Phase D — Validation (historical status)
 
 1. Unit tests and targeted static checks pass after the FFmpeg 9 compatibility fixes.
 2. macOS validation completed on 2026-08-31: the default non-GPL FFmpeg 9.0 build completed all 49 selected components (37 source components and 12 system components) with no failures or skips. The generated `ffmpeg`, `ffprobe`, and `ffplay` binaries report FFmpeg 9.0.

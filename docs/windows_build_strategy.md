@@ -1,9 +1,24 @@
 # Windows FFmpeg cross-build strategy
 
 **Status:** G1 **PASS**; G2.1–G2.8 **PASS**; G3 **PASS**; G4 **PASS**;
-G5 **PASS**; G6 **PASS**; G7 CLI **PASS** on the recorded physical target.
-The shared TUI now exposes that workflow as `9.0-windows`. The maintainer's
-final clean interactive PREFERRED build is **pending**.
+G5 **PASS**; G6 **PASS**; G7 CLI **PASS**; final TUI acceptance **PASS** on
+the recorded hosts.
+
+For 4.0.0, clean Linux/native FFmpeg 8.1 and 9.0 builds and a clean Windows FFmpeg
+9.0 build through the normal TUI are accepted. The Windows build used the
+`9.0-windows` variant, resolving internally to FFmpeg 9.0 plus
+`linux-cross-mingw`. The normal CLI workflow is also accepted. Clean
+orchestration, identity-checked reuse, applicable runtime acceptance,
+packaging and relocation passed. Windows FFmpeg 8.1 is not part of the accepted
+contract.
+
+The supported Windows route is Windows host → WSL2 build host →
+LLVM-MinGW/UCRT → Windows FFmpeg target. G1–G7 records below preserve
+stage-specific evidence and historical "not started" results; those statements
+describe their respective acceptance points, not current blockers. G5 scope
+remains consumer-driven: absent, unsupported and out-of-scope hardware
+features are classified and do not by themselves block release. Neural/DNN
+and Intel oneAPI/ICX work are deferred, outside 4.0.0.
 
 ### G5 — accepted, consumer-oriented hardware validation
 
@@ -75,8 +90,9 @@ separate from hardware capability acceptance and is recorded below.
 The production `linux-cross-mingw` route consumes the 45 selected, previously
 accepted target dependencies and interfaces, checks their identity and output
 hashes, and builds FFmpeg 9.0 with LLVM-MinGW/UCRT, native CPU tuning and
-OpenMP. The normal cross route and `python scripts/run_build.py --g4-final`
-require the accepted component waves; they preserve and reuse their state.
+OpenMP. This historical G4 acceptance used accepted component waves; the
+normal production route now builds the selected stack automatically.
+The engineering `--g4-final` path can consume previously accepted wave state.
 The host CUDA 12.4 NVCC/GCC 12.5 pair generates PTX, while the verified host
 Vulkan SDK shader compiler generates SPIR-V. The upstream nv-codec pkg-config
 template and glslang's pinned SPIR-V headers are provisioned from the same
@@ -474,8 +490,8 @@ PATH or invoking `cargo install`.
 The cross dry-run reports G4 Wave-0 roles, host-tool satisfaction,
 conditional components, target inputs, and target-build selection after G1/G2
 authorization and G3 acceptance. It stops before any component build; the
-normal production route continues to final G4 integration against the
-previously accepted component stack.
+normal production route builds the selected stack and continues to final G4
+integration without requiring historical wave state.
 
 **Naming.** The user-facing Windows build route is **WSL-Mingw**: Windows host
 → WSL2 Ubuntu build environment → LLVM-MinGW/UCRT cross toolchain → Windows
@@ -499,7 +515,7 @@ not a portability claim. Status labels are `[VERIFIED <gate>]`,
 
 | Decision | Status and evidence | Implementation consequence | Caveat |
 |---|---|---|---|
-| Variant 1, WSL Linux to Windows with LLVM-MinGW/UCRT, is selected. | [VERIFIED G0-G0A.5, G4] Early PoCs and production FFmpeg 9.0 integration passed on the recorded host. | Use `linux-cross-mingw`; do not rerun feasibility per component. | The configured stack passed G4; the hardware matrix and package remain future work. |
+| Variant 1, WSL Linux to Windows with LLVM-MinGW/UCRT, is selected. | [VERIFIED G0-G0A.5, G4-G7 CLI] Early PoCs and production FFmpeg 9.0 integration passed on the recorded host. | Use `linux-cross-mingw`; do not rerun feasibility per component. | G5 hardware and G6 package acceptance are scoped to the recorded target. |
 | The physical Windows machine running WSL is the target; WSL is the controlled build environment. | [REQUIREMENT] Maintainer decision; [VERIFIED G0] Windows interop executed the PoCs. | Probe Windows target state separately from Linux build-host tools. Optimize for this host, not arbitrary Windows machines. | A material host change can require rebuild and new acceptance. |
 | LLVM-MinGW UCRT is the initial cross toolchain. | [VERIFIED G0-G0A.5] LLVM-MinGW 20261104, Clang/LLD 23.1.5, Windows PE execution and actual UCRT loading. | Pin and validate toolchain identity, target triple, and runtime. | Does not establish compatibility with every library or toolchain revision. |
 | C++ and Rust communicate through a C ABI. | [VERIFIED G0A.1] The mixed C/C++/Rust tests passed in both linking directions and in one executable. | Use fixed-layout C interfaces and caller-owned buffers; contain exceptions and panics. | No arbitrary C++/Rust ABI or cross-boundary unwinding is supported. |
@@ -589,9 +605,9 @@ identity versus diagnostics.
 
 **Variant 1 (selected):** WSL Linux build tools + LLVM-MinGW cross toolchain,
 Windows UCRT target, physical Windows host as runtime target. Its early
-feasibility is established for §2.1. The remaining work is production
-implementation, full-stack integration, hardware-matrix validation, identity
-safety, and packaging—not a repeat of the early ABI/GPU feasibility exercise.
+feasibility is established for §2.1. Production implementation, full-stack
+integration, applicable hardware validation, identity safety and packaging
+have since passed on the recorded target.
 
 **Variant 2 (retained):** native Windows/MSVC. It is not selected. Revisit only
 if a real required dependency exposes an unavoidable MSVC-only ABI/platform
@@ -1203,8 +1219,8 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
   G3 acceptance also covers the host-generator/MIXED pipeline, target Vulkan
   and OpenCL imports, target path-contamination checks, and reached legacy
   branch isolation. At G3 acceptance, TUI and headless routes stopped before
-  the G4 component graph; they now continue to G4 final integration with the
-  previously accepted component stack.
+  the G4 component graph; they now build the selected stack and continue to
+  G4 final integration without requiring historical wave state.
   Live preparation passed with the working store's LLVM-MinGW 20261104,
   Rust 1.99.0 plus Windows target std, and GCC 12.5.0. The fresh Windows probe
   reported TITAN V compute capability 7.0; CUDA 12.4.99 produced validated
@@ -1290,8 +1306,8 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
 - **Legacy and production boundary:** reached MSYS-specific FFmpeg path
   conversion is restricted to the legacy UCRT64 route; `linux-cross-mingw`
   uses no MSYS shell/path semantics. TUI and normal headless builds run
-  identity-scoped G3 acceptance and continue to G4 integration with the
-  previously accepted component stack; cross `--dry-run` performs no builds.
+  identity-scoped G3 acceptance, build the selected stack and continue to G4
+  integration; cross `--dry-run` performs no component builds.
 - **Final acceptance:** selected CUDA/NVCC/GCC/bin2c, Rust/Cargo, C/C++/COFF
   and PE, Autotools, CMake, Meson, target-only pkg-config, Vulkan/OpenCL
   interfaces, target contamination guards, and native regression suite pass.
@@ -1384,6 +1400,12 @@ acceptance techniques; PoC-built files are not reusable production artifacts.
 
 ### G7 — regression, documentation, and full acceptance — CLI PASS
 
+The command-line gate below remains an engineering record. Final maintainer
+acceptance also exercised the normal interactive TUI: clean Linux/native
+FFmpeg 8.1, clean Linux/native FFmpeg 9.0, and clean Windows FFmpeg 9.0 via `9.0-windows` all
+passed without observed build or runtime problems. No timings, component
+counts, or additional hardware results are inferred from this acceptance.
+
 The normal headless production workflow completed these independent FFmpeg
 9.0 acceptance runs in BASE-then-PREFERRED order. Neither clean workspace
 contained historical G4 wave acceptance state.
@@ -1464,9 +1486,9 @@ removed; no Windows FFmpeg 8.1 acceptance or TUI integration was performed.
   production-code fingerprint, clean provenance, components/features and
   built/reused lists. A reuse invocation is not itself a clean full build;
   its corresponding original full-build record must also be retained.
-- **UI boundary at G7 acceptance:** the recorded G7 acceptance was headless
-  CLI only. TUI Start and Resume call the same G7 orchestrator in-process; the
-  interactive physical-target acceptance remains separate.
+- **UI boundary at G7 acceptance:** the G7 gate recorded headless CLI
+  acceptance only; it did not cover the TUI. Final maintainer TUI acceptance
+  is recorded at the start of this document.
 - **Scope / code/docs:** Run the complete configured build and acceptance
   flow; native Linux, native WSL/Linux and macOS regression protection as
   applicable; migration/removal tests for any remaining legacy Windows

@@ -1,3 +1,21 @@
+## 4.0.0
+
+- Accepted clean Linux/native FFmpeg 8.1 and 9.0 builds and a clean Windows FFmpeg
+  9.0 build through the normal TUI. Windows uses `9.0-windows`, internally
+  FFmpeg 9.0 plus `linux-cross-mingw`; Windows FFmpeg 8.1 is not in scope.
+- Delivered the supported Windows route: Windows host → WSL2 build host →
+  LLVM-MinGW/UCRT → Windows FFmpeg target. The normal CLI and TUI production
+  workflows, clean orchestration, identity-checked reuse, runtime acceptance,
+  packaging and relocation are accepted.
+- Accepted Windows consumer-driven runtime paths include CUDA/NVENC/NVDEC/
+  CUVID, CUDA filters and libvmaf, Vulkan/libplacebo and OpenCL. Absent,
+  unsupported and out-of-scope hardware features remain classified, not
+  release blockers under the established policy.
+- The internal GPL/nonfree bundle contains the accepted project/toolchain-owned
+  runtime closure. Windows system/UCRT, GPU-driver and applicable Vulkan,
+  OpenCL and vendor runtimes remain external; the bundle is not redistributable.
+- Neural/DNN support and Intel oneAPI/ICX are deferred, not 4.0.0 features.
+
 ### Corrected — Windows cross TUI presentation
 
 - The in-process production cross route feeds the existing component-state
@@ -24,7 +42,8 @@
   switching backends discards stale host and target data.
 - CLI and TUI default to `workspace_90_windows`, so TUI cleanup removes every
   Windows identity in that root without removing native 9.0. No workspaces
-  are migrated. Final clean interactive PREFERRED acceptance is pending.
+  are migrated. At this development checkpoint, final clean interactive
+  acceptance was pending; it is now recorded in the 4.0.0 entry above.
 
 ### Accepted — post-G7 source/tool/provenance stabilisation
 
@@ -61,7 +80,9 @@
   relocated-package acceptance passed. An identical rerun reused all 46
   components in 350 s; only the release manifest's `generated_at` changed. BASE
   was not rerun.
-- G7 remains accepted; this pass did not exercise the TUI.
+- G7 remains accepted; the recorded regression pass at this checkpoint did
+  not exercise the TUI. Final maintainer TUI acceptance is recorded in the
+  4.0.0 entry above.
 
 ### Accepted — G7 CLI clean production workflow
 
